@@ -294,17 +294,16 @@ function LoginS({ login, setScreen }) {
 }
 
 function RegisterS({ register, setScreen }) {
-  const [name, setName] = useState(""); const [u, setU] = useState(""); const [p, setP] = useState(""); const [p2, setP2] = useState(""); const [err, setErr] = useState("");
+  const [u, setU] = useState(""); const [p, setP] = useState(""); const [p2, setP2] = useState(""); const [err, setErr] = useState("");
   const handle = () => {
-    if (!name || !u || !p) return setErr("Tüm alanları doldurun.");
+    if (!u || !p) return setErr("Tüm alanları doldurun.");
     if (p !== p2) return setErr("Şifreler eşleşmiyor.");
     if (p.length < 6) return setErr("Şifre en az 6 karakter olmalı.");
-    const e = register(name, u.trim(), p);
+    const e = register(u.trim(), u.trim(), p);
     if (e) setErr(e);
   };
   return (
     <AuthWrap title="Katıl" sub="Yeni Ozanlar'a üye ol">
-      <FInp label="Adın Soyadın" value={name} onChange={setName} placeholder="Adın Soyadın" />
       <FInp label="Kullanıcı adı" value={u} onChange={setU} placeholder="kullaniciadi" />
       <FInp label="Şifre" value={p} onChange={setP} placeholder="••••••••" type="password" />
       <FInp label="Şifre tekrar" value={p2} onChange={setP2} placeholder="••••••••" type="password" />
