@@ -27,10 +27,46 @@
     .score-box{text-align:center;background:#0f0a1a;border-radius:10px;padding:6px 10px;min-width:50px}
     iframe{display:block;width:100%;aspect-ratio:16/9;border:none;border-radius:12px}
   </style>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
 </head>
 <body>
 <div id="app"></div>
 <script>
+  // Firebase Ayarları
+const firebaseConfig = {
+  apiKey: "AIzaSyC6sshBjUU7xZf_KgjwW2yWuvE1ZG9oZWY",
+  authDomain: "yeniozanlar-68b49.firebaseapp.com",
+  projectId: "yeniozanlar-68b49",
+  storageBucket: "yeniozanlar-68b49.firebasestorage.app",
+  messagingSenderId: "99003509618",
+  appId: "1:99003509618:web:e4f36d85378f2e554fcbeb"
+};
+
+// Veritabanını başlat
+if (!firebase.apps.length) {
+  firebase.initializeApp(firebaseConfig);
+}
+const db = firebase.firestore();
+  // İnternetteki Firebase veritabanından verileri çeken fonksiyon
+async function verileriYukle() {
+  try {
+    // 1. Kullanıcıları çek
+    const usersSnapshot = await db.collection("users").get();
+    S.users = usersSnapshot.docs.map(doc => doc.data());
+
+    // 2. Şiirleri çek
+    const postsSnapshot = await db.collection("posts").get();
+    // Şiirleri tarihe göre yeniden eskiye sırala
+    const tumPostlar = postsSnapshot.docs.map(doc => doc.data());
+    S.posts = tumPostlar.sort((a, b) => b.date.localeCompare(a.date));
+
+    // Sayfayı yeni verilerle ekrana bas
+    render();
+  } catch (error) {
+    console.error("Veriler yüklenirken hata oluştu:", error);
+  }
+}
 const uid=()=>Math.random().toString(36).slice(2,9);
 const now=()=>new Date().toLocaleString('tr-TR');
 const ytId=url=>{const m=url?.match(/(?:youtu\.be\/|v=|embed\/)([A-Za-z0-9_-]{11})/);return m?m[1]:null};
@@ -80,7 +116,22 @@ function go(screen,extra={}){Object.assign(S,{screen,...extra});render()}
 function save(){lsSet('yo_users',S.users);lsSet('yo_posts',S.posts);lsSet('yo_me',S.me);lsSet('yo_follows',S.follows);lsSet('yo_msgs',S.msgs)}
 
 const A={
-  register(u,p){
+  register(u, p){
+    if(S.users.find(x=>x.username===u))return 'Bu kullanıcı adı alınmış.';
+    const user={id:uid(),name:u,username:u,password:p,bio:'',avatar:u.slice(0,2).toUpperCase(),color:`hsl(${Math.random()*360},70%,65%)`};
+    
+    // Tarayıcıya kaydet
+    S.me=user;
+    lsSet('yo_me', user);
+    
+    // Firebase veritabanına internet üzerinden kaydet
+    db.collection("users").doc(user.id).set(user)
+      .then(() => { verileriYukle(); })
+      .catch(err => console.error("Kayıt hatası:", err));
+      
+    go('feed');
+    return null;
+  },
     if(S.users.find(x=>x.username===u))return'Bu kullanıcı adı alınmış.';
     const user={id:uid(),name:u,username:u,password:p,bio:'',avatar:u.slice(0,2).toUpperCase(),color:`hsl(${Math.random()*360},70%,65%)`};
     S.users=[...S.users,user];S.follows={...S.follows,[user.id]:[]};S.me=user;save();go('feed');return null;
@@ -91,10 +142,14 @@ const A={
     S.me=user;save();go('feed');return null;
   },
   logout(){S.me=null;lsSet('yo_me',null);go('landing')},
-  addPost(pd){
+addPost(pd){
     const r=pd.text&&pd.text.trim().length>10?scorePoem(pd.text):null;
     const np={...pd,id:uid(),authorId:S.me.id,userRatings:{},aiScore:r?r.score:null,aiYorum:r?r.yorum:null,aiGuclu:r?r.gucluYonler:null,aiOneri:r?r.gelistirmeOnerisi:null,comments:[],date:now()};
-    S.posts=[np,...S.posts];save();render();
+    
+    // Şiiri internetteki Firebase veritabanına kaydediyoruz
+    db.collection("posts").doc(np.id).set(np)
+      .then(() => { verileriYukle(); })
+      .catch(err => console.error("Şiir kaydetme hatası:", err));
   },
   ratePost(pid,score){S.posts=S.posts.map(p=>p.id!==pid?p:{...p,userRatings:{...p.userRatings,[S.me.id]:score}});save();render()},
   addComment(pid,text){S.posts=S.posts.map(p=>p.id!==pid?p:{...p,comments:[...p.comments,{id:uid(),authorId:S.me.id,text,date:now()}]});save();render()},
@@ -489,6 +544,8 @@ function render(){
 }
 
 render();
+  // Sayfa ilk açıldığında internetteki verileri Firebase'den çek
+verileriYukle();
 </script>
 </body>
 </html>
