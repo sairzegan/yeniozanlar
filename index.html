@@ -26,8 +26,75 @@
     .inp{width:100%;background:#0f0a1a;border:1px solid #3d1f6e;border-radius:10px;padding:10px 14px;color:#e9d5ff;font-family:'Crimson Text',serif;font-size:1rem}
     .score-box{text-align:center;background:#0f0a1a;border-radius:10px;padding:6px 10px;min-width:50px}
     iframe{display:block;width:100%;aspect-ratio:16/9;border:none;border-radius:12px}
-    .text-del-btn{background:none;border:none;color:#f87171;font-size:0.85rem;cursor:pointer;text-decoration:underline;margin-left:auto;padding:2px 8px;font-weight:bold}
-    .text-del-btn:hover{color:#ef4444}
+    
+    /* Geliştirilmiş ve Kesin Sabitlenmiş Silme Butonları */
+    .absolute-del-post {
+      position: absolute !important;
+      top: 16px !important;
+      right: 16px !important;
+      z-index: 99 !important;
+      background: rgba(239, 68, 68, 0.15);
+      border: 1px solid #ef4444;
+      color: #ef4444;
+      border-radius: 50%;
+      width: 28px;
+      height: 28px;
+      font-size: 14px;
+      font-weight: bold;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .absolute-del-post:hover {
+      background: #ef4444;
+      color: #fff;
+      transform: scale(1.1);
+    }
+    .comment-item {
+      position: relative !important;
+      display: flex;
+      gap: 8px;
+      margin-bottom: 10px;
+      align-items: flex-start;
+      width: 100%;
+    }
+    .absolute-del-comment {
+      position: absolute !important;
+      top: 6px !important;
+      right: 8px !important;
+      z-index: 99 !important;
+      background: transparent;
+      border: none;
+      color: #f87171;
+      font-size: 13px;
+      font-weight: bold;
+      cursor: pointer;
+      padding: 4px;
+    }
+    .absolute-del-comment:hover {
+      color: #ef4444;
+      transform: scale(1.1);
+    }
+    
+    /* Şifre Alanı Tasarımı */
+    .password-wrapper {
+      position: relative;
+      width: 100%;
+    }
+    .password-toggle-btn {
+      position: absolute;
+      right: 12px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: none;
+      border: none;
+      font-size: 1.1rem;
+      cursor: pointer;
+      color: #a78bfa;
+      z-index: 10;
+    }
   </style>
   <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
@@ -95,7 +162,7 @@ async function verileriYukle() {
       if (guncelBen) S.me = guncelBen;
     }
   } catch (error) {
-    console.log("Bağlantı hatası, yerel hafızadan devam ediliyor:", error);
+    console.log("Bağlantı hatası:", error);
   } finally {
     S.loading = false;
     render();
@@ -127,7 +194,7 @@ function scorePoem(text){
   if(punct>=2&&punct<=10)p+=0.5;
   const r=(text.length%19)/19*0.8-0.4;
   p=Math.min(9.8,Math.max(4.0,p+r));p=Math.round(p*10)/10;
-  const guclu=['Kelime seçimleri özgün ve çarpıcı.','Dizenin ritmi akıcı ogal.','İmgeler güçlü ve yaratıcı.','Duygusal derinlik hissediliyor.','Özgün bir ses ve bakış açısı var.','Anlam katmanları zengin.'];
+  const guclu=['Kelime seçimleri özgün ve çarpıcı.','Dizenin ritmi akıcı doğal.','İmgeler güçlü ve yaratıcı.','Duygusal derinlik hissediliyor.','Özgün bir ses ve bakış açısı var.','Anlam katmanları zengin.'];
   const oneri=['Bazı dizeler daha yoğun olabilir.','Şiirin sonu güçlendirilebilir.','Daha fazla imge derinlik katabilir.','Ritim tutarlılığı geliştirilebilir.','İlk dize daha çarpıcı olabilir.'];
   const yorum=[`${lc} dizelik bu şiir ${p>=7.5?'güçlü bir lirik ses taşıyor':'gelişmeye açık'}. Kelime zenginliği ${z>0.7?'yüksek':'orta düzeyde'}.`,`${img>2?'Zengin imgelem dikkat çekiyor':'Sade bir dil tercih edilmiş'}. ${p>=8?'Okuyucuda derin etki bırakıyor.':'Birkaç düzenlemeyle güçlenebilir.'}`,`${len<15?'Kısa ve öz':'Kapsamlı'} bir şiir. ${p>=7?'Bütünlük sağlanmış.':'Yapı geliştirilebilir.'}`];
   const i=text.length%guclu.length,oi=(text.length+lc)%oneri.length,yi=text.length%yorum.length;
@@ -158,7 +225,6 @@ const A = {
   login(u,p){
     const usernameClean = u.trim().toLowerCase();
     
-    // NET ADMIN BYPASS (Firebase yavaşlığı veya engeline takılmadan anında giriş yaptırır)
     if(usernameClean === ADMIN_USERNAME && p === ADMIN_PASSWORD) {
       S.me = adminProfileObj;
       if(!S.users.find(x => x.username === ADMIN_USERNAME)) {
@@ -188,14 +254,14 @@ const A = {
       .catch(err => console.error("Şiir kaydetme hatası:", err));
   },
   deletePost(pid){
-    // İSTEDİĞİNİZ ONAY UYARISI
+    // İSTENİLEN ONAY PENCERESİ
     if(!confirm("Bu içerik kalıcı olarak silinecek. Emin misiniz?")) return;
     
     S.posts = S.posts.filter(p => p.id !== pid);
     save();
     render();
     db.collection("posts").doc(pid).delete()
-      .then(() => { console.log("Şiir veritabanından silindi."); })
+      .then(() => { console.log("Şiir silindi."); })
       .catch(err => console.error("Silme hatası:", err));
   },
   ratePost(pid,score){
@@ -220,9 +286,122 @@ const A = {
     }
   },
   deleteComment(pid, cid){
-    // İSTEDİĞİNİZ ONAY UYARISI
+    // İSTENİLEN ONAY PENCERESİ
     if(!confirm("Bu içerik kalıcı olarak silinecek. Emin misiniz?")) return;
     
     const pIndex = S.posts.findIndex(p => p.id === pid);
     if(pIndex > -1) {
-      const updatedComments = S.posts[pIndex].comments.filter(c => c.id !==
+      const updatedComments = S.posts[pIndex].comments.filter(c => c.id !== cid);
+      S.posts[pIndex].comments = updatedComments;
+      save();
+      render();
+      db.collection("posts").doc(pid).update({ comments: updatedComments }).then(() => verileriYukle());
+    }
+  },
+  toggleFollow(tid){const l=S.follows[S.me.id]||[];const has=l.includes(tid);S.follows={...S.follows,[S.me.id]:has?l.filter(x=>x!==tid):[...l,tid]};save();render()},
+  sendMsg(toId,text){S.msgs=[...S.msgs,{id:uid(),fromId:S.me.id,toId,text,date:now()}];save();render()},
+};
+
+const byId=id=>S.users.find(u=>u.id===id) || (id === "admin_root" ? adminProfileObj : null);
+const isF=tid=>(S.follows[S.me?.id]||[]).includes(tid);
+
+function h(tag,props={},kids=[]){
+  const e=document.createElement(tag);
+  for(const[k,v]of Object.entries(props)){
+    if(k==='style'&&typeof v==='object')Object.assign(e.style,v);
+    else if(k==='class')e.className=v;
+    else if(k.startsWith('on'))e.addEventListener(k.slice(2).toLowerCase(),v);
+    else e.setAttribute(k,v);
+  }
+  for(const c of kids){
+    if(c==null)continue;
+    if(c instanceof Node)e.appendChild(c);
+    else e.appendChild(document.createTextNode(String(c)));
+  }
+  return e;
+}
+
+function av(user,size=40,onClick){
+  if(!user) return h('div',{class:'av',style:{width:size+'px',height:size+'px',background:'#3d1f6e',color:'#fff'}},['?']);
+  const isAdm = user.username === ADMIN_USERNAME;
+  const d=h('div',{class:'av',style:{width:size+'px',height:size+'px',fontSize:(size*.36)+'px',background:isAdm?'linear-gradient(135deg,#f59e0b,#d97706)':`linear-gradient(135deg,${user.color||'#7c3aed'},#a855f7)`,color:'#fff',cursor:onClick?'pointer':'default'}});
+  d.textContent=isAdm?'👑':(user.avatar||user.name?.slice(0,2).toUpperCase()||'?');
+  if(onClick)d.onclick=onClick;
+  return d;
+}
+
+function inp(placeholder,type='text',style={}){
+  return h('input',{placeholder,type,class:'inp',style});
+}
+
+function navBar(){
+  const tabs=[{k:'feed',ic:'🏠',lb:'Akış'},{k:'leaderboard',ic:'🏆',lb:'Sıralama'},{k:'explore',ic:'🔍',lb:'Keşfet'},{k:'messages',ic:'✉️',lb:'Mesaj'},{k:'profile',ic:'👤',lb:'Profil'}];
+  const isAdmin = S.me?.username === ADMIN_USERNAME;
+  return h('div',{},[
+    h('div',{class:'nav-top'},[
+      h('span',{style:{fontFamily:"'Playfair Display',serif",fontSize:'1.15rem',color:isAdmin?'#f59e0b':'#c084fc',cursor:'pointer'},onclick:()=>go('feed')},isAdmin?'👑 Yeni Ozanlar (Admin)' : '🪶 Yeni Ozanlar'),
+      h('div',{style:{display:'flex',gap:'8px',alignItems:'center'}},[
+        av(S.me,30,()=>go('profile',{profileId:S.me?.id})),
+        h('button',{class:'btn',style:{background:'transparent',color:'#a78bfa',fontSize:'.75rem',padding:'4px 10px',border:'1px solid #3d1f6e',borderRadius:'20px'},onclick:()=>A.logout()},'Çıkış')
+      ])
+    ]),
+    h('div',{class:'nav-bottom'},tabs.map(t=>
+      h('button',{class:'btn',style:{background:'none',color:S.screen===t.k?'#c084fc':'#6b5b8a',display:'flex',flexDirection:'column',alignItems:'center',gap:'2px',fontSize:'.62rem',padding:'4px 6px',borderBottom:S.screen===t.k?'2px solid #c084fc':'2px solid transparent'},onclick:()=>go(t.k)},[
+        h('span',{style:{fontSize:'1.2rem'}},t.ic),t.lb
+      ])
+    ))
+  ]);
+}
+
+function postCard(post){
+  const author=byId(post.authorId);
+  const vid=ytId(post.youtube);
+  const avg=calcAvg(post.userRatings,post.aiScore);
+  const ucnt=Object.keys(post.userRatings||{}).length;
+  const myR=post.userRatings?.[S.me?.id]??null;
+  const isOwn = post.authorId === S.me?.id;
+  const isAdmin = S.me?.username === ADMIN_USERNAME;
+
+  const card=h('div',{class:'card fade'});
+
+  // KESİN ÇÖZÜM: SAĞ ÜST KÖŞEYE SABİTLENEN ŞİİR SİLME BUTONU
+  if(isAdmin || isOwn) {
+    const delBtn = h('button', {
+      class: 'absolute-del-post',
+      title: 'Şiiri Sil',
+      onclick: (e) => {
+        e.stopPropagation();
+        A.deletePost(post.id);
+      }
+    }, ['✕']);
+    card.appendChild(delBtn);
+  }
+
+  const hdr=h('div',{style:{display:'flex',alignItems:'center',gap:'10px',marginBottom:'14px',paddingRight: (isAdmin || isOwn) ? '35px' : '0'}},[
+    av(author,42,()=>go('profile',{profileId:author?.id})),
+    h('div',{style:{flex:'1',minWidth:'0'}},[
+      h('p',{style:{fontFamily:"'Playfair Display',serif",fontWeight:'700',color:'#e9d5ff',cursor:'pointer'},onclick:()=>go('profile',{profileId:author?.id})},author?.name||''),
+      h('p',{style:{color:'#6b5b8a',fontSize:'.78rem'}},`@${author?.username||''} · ${post.date}`)
+    ])
+  ]);
+  
+  if(avg!==null) {
+    const sBox = h('div',{class:'score-box',style:{border:`1px solid ${scoreColor(avg)}44`,position:'absolute',right:'16px',top:(isAdmin || isOwn)?'52px':'16px'}},[
+      h('p',{style:{fontSize:'1.15rem',fontWeight:'700',color:scoreColor(avg),fontFamily:"'Playfair Display',serif",lineHeight:'1'}},avg.toFixed(1)),
+      h('p',{style:{fontSize:'.55rem',color:'#6b5b8a'}},'/10')
+    ]);
+    card.appendChild(sBox);
+  }
+  
+  card.appendChild(hdr);
+
+  if(post.title){const t=h('h3',{style:{fontFamily:"'Playfair Display',serif",fontSize:'1.1rem',color:'#e9d5ff',fontStyle:'italic',marginBottom:'10px',paddingBottom:'8px',borderBottom:'1px solid #2d1b52',cursor:'pointer',textDecoration:'underline',textDecorationColor:'#5b21b6'}},`"${post.title}"`);t.onclick=()=>go('postdetail',{postId:post.id});card.appendChild(t);}
+  if(post.text)card.appendChild(h('p',{style:{fontFamily:"'Crimson Text',serif",fontSize:'1.05rem',color:'#ddd6fe',lineHeight:'1.9',whiteSpace:'pre-wrap',marginBottom:'14px'}},post.text));
+  if(post.image)card.appendChild(h('img',{src:post.image,style:{width:'100%',borderRadius:'12px',marginBottom:'14px',maxHeight:'300px',objectFit:'cover'}}));
+  if(vid){const w=h('div',{style:{borderRadius:'12px',overflow:'hidden',marginBottom:'14px'}});w.innerHTML=`<iframe src="https://www.youtube.com/embed/${vid}" allowfullscreen style="width:100%;aspect-ratio:16/9;border:none;border-radius:12px"></iframe>`;card.appendChild(w);}
+
+  if(post.aiScore!==null&&post.aiScore!==undefined){
+    const body=h('div',{style:{background:'#0a0718',border:'1px solid #3d1f6e',borderTop:'none',borderRadius:'0 0 10px 10px',padding:'12px 14px',display:'none'}});
+    if(post.aiYorum)body.appendChild(h('p',{style:{fontFamily:"'Crimson Text',serif",fontSize:'.92rem',color:'#c4b5fd',fontStyle:'italic',lineHeight:'1.7',marginBottom:'10px'}},`"${post.aiYorum}"`));
+    const tags=h('div',{style:{display:'flex',gap:'8px',flexWrap:'wrap'}});
+    if(post.aiGuclu)tags.appendChild(h('span',{style:{background:'#052e16',border:'1px
