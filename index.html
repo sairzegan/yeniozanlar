@@ -10,7 +10,7 @@
     body{background:#0f0a1a;color:#f0e8ff;font-family:'Crimson Text',Georgia,serif;min-height:100vh}
     ::-webkit-scrollbar{width:4px}
     ::-webkit-scrollbar-thumb{background:#6d28d9;border-radius:2px}
-    .card{position:relative;background:linear-gradient(135deg,#1a0f2e,#160d28);border:1px solid #2d1b52;border-radius:16px;padding:20px;margin-bottom:16px;z-index:1}
+    .card{background:linear-gradient(135deg,#1a0f2e,#160d28);border:1px solid #2d1b52;border-radius:16px;padding:20px;margin-bottom:16px;position:relative}
     .btn{cursor:pointer;border:none;outline:none;transition:all .2s;font-family:'Crimson Text',serif}
     .btn:hover{opacity:.85}
     input,textarea{outline:none;font-family:'Crimson Text',serif}
@@ -26,8 +26,8 @@
     .inp{width:100%;background:#0f0a1a;border:1px solid #3d1f6e;border-radius:10px;padding:10px 14px;color:#e9d5ff;font-family:'Crimson Text',serif;font-size:1rem}
     .score-box{text-align:center;background:#0f0a1a;border-radius:10px;padding:6px 10px;min-width:50px}
     iframe{display:block;width:100%;aspect-ratio:16/9;border:none;border-radius:12px}
-    .del-btn{background:none;border:none;color:#ef4444;font-size:1.4rem;cursor:pointer;opacity:0.8;transition:all 0.2s;padding:6px;z-index:999 !important;position:absolute !important}
-    .del-btn:hover{opacity:1;transform:scale(1.25);color:#ff4d4d}
+    .text-del-btn{background:none;border:none;color:#f87171;font-size:0.85rem;cursor:pointer;text-decoration:underline;margin-left:auto;padding:2px 8px;font-weight:bold}
+    .text-del-btn:hover{color:#ef4444}
   </style>
   <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
@@ -45,7 +45,6 @@ const firebaseConfig = {
   appId: "1:99003509618:web:e4f36d85378f2e554fcbeb"
 };
 
-// ADMIN GİRİŞ BİLGİLERİ (Küçük-büyük harfe duyarlıdır)
 const ADMIN_USERNAME = "admin";
 const ADMIN_PASSWORD = "OzanAdmin2026!"; 
 
@@ -54,17 +53,16 @@ if (!firebase.apps.length) {
 }
 const db = firebase.firestore();
 
-// SABİT ADMIN PROFiL OBJESi
 const adminProfileObj = {
   id: "admin_root",
   name: "Yönetici (Admin)",
   username: ADMIN_USERNAME,
-  bio: "Sistem Yöneticisi",
+  bio: "Sistem Yöneticisi Paneli",
   avatar: "👑",
   color: "#f59e0b"
 };
 
-// STATE (HAFIZA)
+// STATE
 let S = {
   users: lsGet('yo_users', []),
   posts: lsGet('yo_posts', []),
@@ -77,13 +75,11 @@ let S = {
   loading: true 
 };
 
-// VERİLERİ YÜKLE
 async function verileriYukle() {
   try {
     const usersSnapshot = await db.collection("users").get().catch(() => ({ docs: [] }));
     S.users = usersSnapshot.docs.length ? usersSnapshot.docs.map(doc => doc.data()) : [];
 
-    // Admin hafızada yoksa ekle
     if (!S.users.find(u => u.username === ADMIN_USERNAME)) {
       S.users.push(adminProfileObj);
     }
@@ -92,7 +88,6 @@ async function verileriYukle() {
     const tumPostlar = postsSnapshot.docs.length ? postsSnapshot.docs.map(doc => doc.data()) : [];
     S.posts = tumPostlar.sort((a, b) => b.date.localeCompare(a.date));
 
-    // Eğer admin olarak oturum açıksa profili sabitle
     if (S.me && S.me.username === ADMIN_USERNAME) {
       S.me = adminProfileObj;
     } else if (S.me && S.users.length) {
@@ -132,7 +127,7 @@ function scorePoem(text){
   if(punct>=2&&punct<=10)p+=0.5;
   const r=(text.length%19)/19*0.8-0.4;
   p=Math.min(9.8,Math.max(4.0,p+r));p=Math.round(p*10)/10;
-  const guclu=['Kelime seçimleri özgün ve çarpıcı.','Dizenin ritmi akıcı ve doğal.','İmgeler güçlü ve yaratıcı.','Duygusal derinlik hissediliyor.','Özgün bir ses ve bakış açısı var.','Anlam katmanları zengin.'];
+  const guclu=['Kelime seçimleri özgün ve çarpıcı.','Dizenin ritmi akıcı ogal.','İmgeler güçlü ve yaratıcı.','Duygusal derinlik hissediliyor.','Özgün bir ses ve bakış açısı var.','Anlam katmanları zengin.'];
   const oneri=['Bazı dizeler daha yoğun olabilir.','Şiirin sonu güçlendirilebilir.','Daha fazla imge derinlik katabilir.','Ritim tutarlılığı geliştirilebilir.','İlk dize daha çarpıcı olabilir.'];
   const yorum=[`${lc} dizelik bu şiir ${p>=7.5?'güçlü bir lirik ses taşıyor':'gelişmeye açık'}. Kelime zenginliği ${z>0.7?'yüksek':'orta düzeyde'}.`,`${img>2?'Zengin imgelem dikkat çekiyor':'Sade bir dil tercih edilmiş'}. ${p>=8?'Okuyucuda derin etki bırakıyor.':'Birkaç düzenlemeyle güçlenebilir.'}`,`${len<15?'Kısa ve öz':'Kapsamlı'} bir şiir. ${p>=7?'Bütünlük sağlanmış.':'Yapı geliştirilebilir.'}`];
   const i=text.length%guclu.length,oi=(text.length+lc)%oneri.length,yi=text.length%yorum.length;
@@ -163,13 +158,14 @@ const A = {
   login(u,p){
     const usernameClean = u.trim().toLowerCase();
     
-    // ANLIK VE KESİN ADMİN GİRİŞİ (Firebase'in yüklenmesini beklemeden doğrudan çalışır)
+    // NET ADMIN BYPASS (Firebase yavaşlığı veya engeline takılmadan anında giriş yaptırır)
     if(usernameClean === ADMIN_USERNAME && p === ADMIN_PASSWORD) {
       S.me = adminProfileObj;
       if(!S.users.find(x => x.username === ADMIN_USERNAME)) {
         S.users.push(adminProfileObj);
       }
       save();
+      S.loading = false;
       go('feed');
       return null;
     }
@@ -192,12 +188,14 @@ const A = {
       .catch(err => console.error("Şiir kaydetme hatası:", err));
   },
   deletePost(pid){
-    if(!confirm("Bu şiiri kalıcı olarak silmek istediğinize emin misiniz?")) return;
+    // İSTEDİĞİNİZ ONAY UYARISI
+    if(!confirm("Bu içerik kalıcı olarak silinecek. Emin misiniz?")) return;
+    
     S.posts = S.posts.filter(p => p.id !== pid);
     save();
     render();
     db.collection("posts").doc(pid).delete()
-      .then(() => { console.log("Şiir silindi."); })
+      .then(() => { console.log("Şiir veritabanından silindi."); })
       .catch(err => console.error("Silme hatası:", err));
   },
   ratePost(pid,score){
@@ -222,46 +220,9 @@ const A = {
     }
   },
   deleteComment(pid, cid){
-    if(!confirm("Bu yorumu silmek istediğinize emin misiniz?")) return;
+    // İSTEDİĞİNİZ ONAY UYARISI
+    if(!confirm("Bu içerik kalıcı olarak silinecek. Emin misiniz?")) return;
+    
     const pIndex = S.posts.findIndex(p => p.id === pid);
     if(pIndex > -1) {
-      const updatedComments = S.posts[pIndex].comments.filter(c => c.id !== cid);
-      S.posts[pIndex].comments = updatedComments;
-      save();
-      render();
-      db.collection("posts").doc(pid).update({ comments: updatedComments }).then(() => verileriYukle());
-    }
-  },
-  toggleFollow(tid){const l=S.follows[S.me.id]||[];const has=l.includes(tid);S.follows={...S.follows,[S.me.id]:has?l.filter(x=>x!==tid):[...l,tid]};save();render()},
-  sendMsg(toId,text){S.msgs=[...S.msgs,{id:uid(),fromId:S.me.id,toId,text,date:now()}];save();render()},
-};
-
-const byId=id=>S.users.find(u=>u.id===id) || (id === "admin_root" ? adminProfileObj : null);
-const isF=tid=>(S.follows[S.me?.id]||[]).includes(tid);
-
-function h(tag,props={},kids=[]){
-  const e=document.createElement(tag);
-  for(const[k,v]of Object.entries(props)){
-    if(k==='style'&&typeof v==='object')Object.assign(e.style,v);
-    else if(k==='class')e.className=v;
-    else if(k.startsWith('on'))e.addEventListener(k.slice(2).toLowerCase(),v);
-    else e.setAttribute(k,v);
-  }
-  for(const c of kids){
-    if(c==null)continue;
-    if(c instanceof Node)e.appendChild(c);
-    else e.appendChild(document.createTextNode(String(c)));
-  }
-  return e;
-}
-
-function av(user,size=40,onClick){
-  if(!user) return h('div',{class:'av',style:{width:size+'px',height:size+'px',background:'#3d1f6e',color:'#fff'}},['?']);
-  const isAdm = user.username === ADMIN_USERNAME;
-  const d=h('div',{class:'av',style:{width:size+'px',height:size+'px',fontSize:(size*.36)+'px',background:isAdm?'linear-gradient(135deg,#f59e0b,#d97706)':`linear-gradient(135deg,${user.color||'#7c3aed'},#a855f7)`,color:'#fff',cursor:onClick?'pointer':'default'}});
-  d.textContent=isAdm?'👑':(user.avatar||user.name?.slice(0,2).toUpperCase()||'?');
-  if(onClick)d.onclick=onClick;
-  return d;
-}
-
-function inp(placeholder,type='text',style={}){
+      const updatedComments = S.posts[pIndex].comments.filter(c => c.id !==
