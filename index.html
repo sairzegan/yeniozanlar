@@ -4,13 +4,13 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Yeni Ozanlar 🪶</title>
-  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;1,400&family=Crimson+Text:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght=0,400;0,700;1,400&family=Crimson+Text:ital,wght=0,400;0,600;1,400&display=swap" rel="stylesheet">
   <style>
     *{box-sizing:border-box;margin:0;padding:0}
     body{background:#0f0a1a;color:#f0e8ff;font-family:'Crimson Text',Georgia,serif;min-height:100vh}
     ::-webkit-scrollbar{width:4px}
     ::-webkit-scrollbar-thumb{background:#6d28d9;border-radius:2px}
-    .card{background:linear-gradient(135deg,#1a0f2e,#160d28);border:1px solid #2d1b52;border-radius:16px;padding:20px;margin-bottom:16px}
+    .card{position:relative;background:linear-gradient(135deg,#1a0f2e,#160d28);border:1px solid #2d1b52;border-radius:16px;padding:20px;margin-bottom:16px}
     .btn{cursor:pointer;border:none;outline:none;transition:all .2s;font-family:'Crimson Text',serif}
     .btn:hover{opacity:.85}
     input,textarea{outline:none;font-family:'Crimson Text',serif}
@@ -26,6 +26,8 @@
     .inp{width:100%;background:#0f0a1a;border:1px solid #3d1f6e;border-radius:10px;padding:10px 14px;color:#e9d5ff;font-family:'Crimson Text',serif;font-size:1rem}
     .score-box{text-align:center;background:#0f0a1a;border-radius:10px;padding:6px 10px;min-width:50px}
     iframe{display:block;width:100%;aspect-ratio:16/9;border:none;border-radius:12px}
+    .del-btn{background:none;border:none;color:#ef4444;font-size:1.1rem;cursor:pointer;opacity:0.4;transition:opacity 0.2s;padding:4px}
+    .del-btn:hover{opacity:1}
   </style>
   <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
@@ -42,6 +44,9 @@ const firebaseConfig = {
   messagingSenderId: "99003509618",
   appId: "1:99003509618:web:e4f36d85378f2e554fcbeb"
 };
+
+// Admin Kullanıcı Adı Tanımı
+const ADMIN_USERNAME = "admin";
 
 // Veritabanını başlat
 if (!firebase.apps.length) {
@@ -62,7 +67,7 @@ let S = {
   loading: true 
 };
 
-// GÜVENLİ VERİ YÜKLEME (Boş veri gelse de çökmez, takılmaz)
+// GÜVENLİ VERİ YÜKLEME
 async function verileriYukle() {
   try {
     const usersSnapshot = await db.collection("users").get().catch(() => ({ docs: [] }));
@@ -79,7 +84,7 @@ async function verileriYukle() {
   } catch (error) {
     console.log("Firebase ilk kurulum aşamasında, yerel hafızadan devam ediliyor.");
   } finally {
-    S.loading = false; // Ne olursa olsun yükleniyor ekranından çıkmasını garanti ediyoruz
+    S.loading = false;
     render();
   }
 }
@@ -119,10 +124,11 @@ function scorePoem(text){
 function go(screen,extra={}){Object.assign(S,{screen,...extra});render()}
 function save(){lsSet('yo_users',S.users);lsSet('yo_posts',S.posts);lsSet('yo_me',S.me);lsSet('yo_follows',S.follows);lsSet('yo_msgs',S.msgs)}
 
-const A={
+const A = {
   register(u, p){
-    if(S.users.find(x=>x.username===u))return 'Bu kullanıcı adı alınmış.';
-    const user={id:uid(),name:u,username:u,password:p,bio:'',avatar:u.slice(0,2).toUpperCase(),color:`hsl(${Math.random()*360},70%,65%)`};
+    const usernameClean = u.trim().toLowerCase();
+    if(S.users.find(x=>x.username===usernameClean))return 'Bu kullanıcı adı alınmış.';
+    const user={id:uid(),name:u.trim(),username:usernameClean,password:p,bio:'',avatar:u.slice(0,2).toUpperCase(),color:`hsl(${Math.random()*360},70%,65%)`};
     
     S.me=user;
     S.users.push(user);
@@ -136,7 +142,8 @@ const A={
     return null;
   },
   login(u,p){
-    const user=S.users.find(x=>x.username===u&&x.password===p);
+    const usernameClean = u.trim().toLowerCase();
+    const user=S.users.find(x=>x.username===usernameClean&&x.password===p);
     if(!user)return'Kullanıcı adı veya şifre hatalı.';
     S.me=user;save();go('feed');return null;
   },
@@ -153,6 +160,16 @@ const A={
       .then(() => { verileriYukle(); })
       .catch(err => console.error("Şiir kaydetme hatası:", err));
   },
+  // KALICI ŞİİR SİLME FONKSİYONU
+  deletePost(pid){
+    if(!confirm("Bu şiiri kalıcı olarak silmek istediğinize emin misiniz?")) return;
+    S.posts = S.posts.filter(p => p.id !== pid);
+    save();
+    render();
+    db.collection("posts").doc(pid).delete()
+      .then(() => { console.log("Şiir Firebase'den silindi."); })
+      .catch(err => console.error("Şiir silinirken hata oluştu:", err));
+  },
   ratePost(pid,score){
     const pIndex = S.posts.findIndex(p=>p.id===pid);
     if(pIndex > -1) {
@@ -168,6 +185,18 @@ const A={
     if(pIndex > -1) {
       const newComment = {id:uid(),authorId:S.me.id,text,date:now()};
       const updatedComments = [...(S.posts[pIndex].comments || []), newComment];
+      S.posts[pIndex].comments = updatedComments;
+      save();
+      render();
+      db.collection("posts").doc(pid).update({ comments: updatedComments }).then(() => verileriYukle());
+    }
+  },
+  // KALICI YORUM SİLME FONKSİYONU
+  deleteComment(pid, cid){
+    if(!confirm("Bu yorumu silmek istediğinize emin misiniz?")) return;
+    const pIndex = S.posts.findIndex(p => p.id === pid);
+    if(pIndex > -1) {
+      const updatedComments = S.posts[pIndex].comments.filter(c => c.id !== cid);
       S.posts[pIndex].comments = updatedComments;
       save();
       render();
@@ -211,9 +240,10 @@ function inp(placeholder,type='text',style={}){
 
 function navBar(){
   const tabs=[{k:'feed',ic:'🏠',lb:'Akış'},{k:'leaderboard',ic:'🏆',lb:'Sıralama'},{k:'explore',ic:'🔍',lb:'Keşfet'},{k:'messages',ic:'✉️',lb:'Mesaj'},{k:'profile',ic:'👤',lb:'Profil'}];
+  const isAdmin = S.me?.username === ADMIN_USERNAME;
   return h('div',{},[
     h('div',{class:'nav-top'},[
-      h('span',{style:{fontFamily:"'Playfair Display',serif",fontSize:'1.15rem',color:'#c084fc',cursor:'pointer'},onclick:()=>go('feed')},'🪶 Yeni Ozanlar'),
+      h('span',{style:{fontFamily:"'Playfair Display',serif",fontSize:'1.15rem',color:isAdmin?'#f59e0b':'#c084fc',cursor:'pointer'},onclick:()=>go('feed')},isAdmin?'👑 Yeni Ozanlar (Admin)':'🪶 Yeni Ozanlar'),
       h('div',{style:{display:'flex',gap:'8px',alignItems:'center'}},[
         av(S.me,30,()=>go('profile',{profileId:S.me?.id})),
         h('button',{class:'btn',style:{background:'transparent',color:'#a78bfa',fontSize:'.75rem',padding:'4px 10px',border:'1px solid #3d1f6e',borderRadius:'20px'},onclick:()=>A.logout()},'Çıkış')
@@ -234,10 +264,22 @@ function postCard(post){
   const ucnt=Object.keys(post.userRatings||{}).length;
   const myR=post.userRatings?.[S.me?.id]??null;
   const isOwn=post.authorId===S.me?.id;
+  const isAdmin = S.me?.username === ADMIN_USERNAME;
 
   const card=h('div',{class:'card fade'});
 
-  const hdr=h('div',{style:{display:'flex',alignItems:'center',gap:'10px',marginBottom:'14px'}},[
+  // ŞİİR SİLME YETKİSİ KONTROLÜ (Admin veya Şiir Sahibi)
+  if(isAdmin || isOwn) {
+    const delBtn = h('button',{
+      class: 'del-btn',
+      style: {position:'absolute', top:'16px', right:'16px', fontSize:'1.2rem'},
+      title: 'Şiiri Sil',
+      onclick: (e) => { e.stopPropagation(); A.deletePost(post.id); }
+    }, ['✕']);
+    card.appendChild(delBtn);
+  }
+
+  const hdr=h('div',{style:{display:'flex',alignItems:'center',gap:'10px',marginBottom:'14px',marginRight: (isAdmin||isOwn)?'24px':'0'}},[
     av(author,42,()=>go('profile',{profileId:author?.id})),
     h('div',{style:{flex:'1'}},[
       h('p',{style:{fontFamily:"'Playfair Display',serif",fontWeight:'700',color:'#e9d5ff',cursor:'pointer'},onclick:()=>go('profile',{profileId:author?.id})},author?.name||''),
@@ -284,138 +326,37 @@ function postCard(post){
   if(avg!==null)card.appendChild(h('p',{style:{fontSize:'.82rem',color:scoreColor(avg),textAlign:'center',marginBottom:'10px'}},scoreBadge(avg)));
 
   let showC=false;
-  const cbtn=h('button',{class:'btn',style:{background:'none',color:'#6b5b8a',fontSize:'.88rem',display:'flex',gap:'6px',paddingTop:'10px',borderTop:'1px solid #2d1b52',width:'100%'}},`💬 ${(post.comments||[]).length} yorum${(post.comments||[]).length===0?' — ilk yorumu sen yaz!':''}`);
+  const cbtn=h('button',{class:'btn',style:{background:'none',color:'#6b5b8a',fontSize:'.88rem',display:'flex',gap:'6px',paddingTop:'10px',borderTop:'1px solid #2d1b52',width:'100%'},onclick:()=>{showC=!showC;cbody.style.display=showC?'block':'none';}},`💬 ${(post.comments||[]).length} yorum${(post.comments||[]).length===0?' — ilk yorumu sen yaz!':''}`);
   const cbody=h('div',{style:{marginTop:'10px',display:'none'}});
+  
   (post.comments||[]).forEach(c=>{
     const ca=byId(c.authorId);
-    cbody.appendChild(h('div',{style:{display:'flex',gap:'8px',marginBottom:'10px'}},[av(ca,28),h('div',{style:{background:'#0f0a1a',borderRadius:'10px',padding:'8px 12px',flex:'1',border:'1px solid #2d1b52'}},[h('span',{style:{fontFamily:"'Playfair Display',serif",fontSize:'.8rem',color:'#c084fc'}},ca?.name||''),h('p',{style:{fontSize:'.9rem',color:'#ddd6fe',marginTop:'2px'}},c.text)])]));
+    const isCommentOwner = c.authorId === S.me?.id;
+    
+    // YORUM SİLME YETKİSİ KONTROLÜ (Admin, Şiir Sahibi veya Yorum Sahibi)
+    const canDeleteComment = isAdmin || isOwn || isCommentOwner;
+
+    const cItem = h('div',{style:{display:'flex',gap:'8px',marginBottom:'10px',alignItems:'flex-start',position:'relative'}},[
+      av(ca,28),
+      h('div',{style:{background:'#0f0a1a',borderRadius:'10px',padding:'8px 12px',flex:'1',border:'1px solid #2d1b52',marginRight: canDeleteComment?'24px':'0'}},[
+        h('span',{style:{fontFamily:"'Playfair Display',serif",fontSize:'.8rem',color:'#c084fc'}},ca?.name||''),
+        h('p',{style:{fontSize:'.9rem',color:'#ddd6fe',marginTop:'2px'}},c.text)
+      ])
+    ]);
+
+    if(canDeleteComment) {
+      const delCBtn = h('button', {
+        class: 'del-btn',
+        style: {position:'absolute', right:'0', top:'6px', fontSize:'0.9rem'},
+        title: 'Yorumu Sil',
+        onclick: () => { A.deleteComment(post.id, c.id); }
+      }, ['✕']);
+      cItem.appendChild(delCBtn);
+    }
+
+    cbody.appendChild(cItem);
   });
+  
   if(!(post.comments||[]).length)cbody.appendChild(h('p',{style:{fontSize:'.82rem',color:'#6b5b8a',fontStyle:'italic',marginBottom:'8px'}},'Ozan seni bekliyor! 🌙'));
   const ci=inp('Düşünceni paylaş...');ci.style.borderRadius='20px';ci.style.flex='1';
-  cbody.appendChild(h('div',{style:{display:'flex',gap:'8px',marginTop:'6px'}},[av(S.me,28),ci,h('button',{class:'pb btn',style:{padding:'6px 14px',fontSize:'.85rem'},onclick:()=>{if(!ci.value.trim())return;A.addComment(post.id,ci.value.trim());ci.value='';}}, '↩')]));
-  cbtn.onclick=()=>{showC=!showC;cbody.style.display=showC?'block':'none';};
-  card.appendChild(cbtn);card.appendChild(cbody);
-  return card;
-}
-
-function composeModal(onClose){
-  let title='',text='',ytUrl='',image=null,showYt=false;
-  const fi=h('input',{type:'file',accept:'image/*',style:{display:'none'}});
-  const prev=h('img',{style:{display:'none',width:'100%',borderRadius:'10px',maxHeight:'200px',objectFit:'cover'}});
-  fi.onchange=e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=ev=>{image=ev.target.result;prev.src=image;prev.style.display='block';};r.readAsDataURL(f);};
-  const yti=inp('YouTube linki yapıştır...');yti.style.display='none';yti.oninput=e=>ytUrl=e.target.value;
-  const ti=inp('Şiirin başlığı...');ti.style.border='1px solid #5b21b6';ti.style.fontFamily="'Playfair Display',serif";ti.oninput=e=>title=e.target.value;
-  const ta=h('textarea',{placeholder:'Şiirini buraya yaz... Yapay zeka anında değerlendirecek! 🤖',class:'inp',rows:'5',style:{resize:'none',lineHeight:'1.8'}});ta.oninput=e=>text=e.target.value;
-  const ytBtn=h('button',{class:'btn',style:{background:'transparent',color:'#a78bfa',padding:'7px 14px',borderRadius:'20px',border:'1px solid #3d1f6e',fontSize:'.83rem'},onclick:()=>{showYt=!showYt;yti.style.display=showYt?'block':'none';ytBtn.style.background=showYt?'#3d1f6e':'transparent';}},'▶ YouTube');
-  const bg=h('div',{class:'modal-bg'});
-  bg.onclick=e=>{if(e.target===bg)onClose();};
-  bg.appendChild(h('div',{class:'modal'},[
-    h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'18px'}},[h('h3',{style:{fontFamily:"'Playfair Display',serif",color:'#e9d5ff',fontSize:'1.15rem'}},'🪶 Yeni Şiir Ekle'),h('button',{class:'btn',style:{background:'none',color:'#6b5b8a',fontSize:'1.4rem'},onclick:onClose},'✕')]),
-    h('div',{style:{display:'flex',gap:'12px'}},[
-      av(S.me,40),
-      h('div',{style:{flex:'1',display:'flex',flexDirection:'column',gap:'10px'}},[
-        ti,ta,prev,yti,fi,
-        h('div',{style:{display:'flex',gap:'8px',flexWrap:'wrap',alignItems:'center'}},[
-          h('button',{class:'btn',style:{background:'transparent',color:'#a78bfa',padding:'7px 14px',borderRadius:'20px',border:'1px solid #3d1f6e',fontSize:'.83rem'},onclick:()=>fi.click()},'🖼️ Resim'),
-          ytBtn,
-          h('button',{class:'pb btn',style:{marginLeft:'auto'},onclick:()=>{if(!text.trim()&&!ytUrl&&!image)return;A.addPost({title,text,youtube:ytUrl||null,image});onClose();}},'Paylaş')
-        ])
-      ])
-    ])
-  ]));
-  return bg;
-}
-
-function Landing(){
-  return h('div',{style:{minHeight:'100vh',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',padding:'40px 20px',background:'radial-gradient(ellipse at 30% 20%,#3b0d6e,#0f0a1a)'}},[
-    h('div',{style:{textAlign:'center',maxWidth:'520px'}},[
-      h('div',{style:{fontSize:'52px'}},'🪶'),
-      h('h1',{style:{fontFamily:"'Playfair Display',serif",fontSize:'clamp(2.4rem,8vw,3.8rem)',fontWeight:'700',background:'linear-gradient(135deg,#e9d5ff,#c084fc,#a855f7)',WebkitBackgroundClip:'text',WebkitTextFillColor:'transparent',lineHeight:'1.15',margin:'12px 0'}},'Yeni Ozanlar'),
-      h('p',{style:{fontFamily:"'Crimson Text',serif",fontSize:'1.1rem',color:'#c4b5fd',fontStyle:'italic',marginBottom:'10px',lineHeight:'1.6'}},'Şiirini paylaş, müziğini duyur, sesini kelimelere dök.'),
-      h('p',{style:{fontFamily:"'Crimson Text',serif",fontSize:'.9rem',color:'#7c6b9a',marginBottom:'36px'}},'🤖 Yapay zeka değerlendiriyor · ⭐ Topluluk puan veriyor · 🏆 Sıralama'),
-      h('div',{style:{display:'flex',gap:'14px',justifyContent:'center',flexWrap:'wrap'}},[
-        h('button',{class:'pb btn',onclick:()=>go('register')},'Kayıt Ol'),
-        h('button',{class:'btn',style:{background:'transparent',color:'#c084fc',padding:'10px 32px',borderRadius:'50px',fontSize:'1rem',border:'1.5px solid #7c3aed'},onclick:()=>go('login')},'Giriş Yap')
-      ])
-    ])
-  ]);
-}
-
-function authPage(title,sub,fields,btnLabel,onSubmit,altText,altAction){
-  const vals={};
-  const errEl=h('p',{style:{color:'#f87171',fontSize:'.85rem',display:'none'}},'');
-  const fieldEls=fields.map(f=>{
-    const wrap=h('div',{style:{display:'flex',flexDirection:'column',gap:'5px'}},[h('label',{style:{color:'#a78bfa',fontSize:'.85rem'}},f.label)]);
-    const i=inp(f.ph,f.type);i.oninput=e=>vals[f.k]=e.target.value;wrap.appendChild(i);return wrap;
-  });
-  return h('div',{style:{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',padding:'20px',background:'radial-gradient(ellipse at 70% 80%,#3b0d6e,#0f0a1a)'}},[
-    h('div',{style:{width:'100%',maxWidth:'400px'}},[
-      h('div',{style:{textAlign:'center',marginBottom:'28px'}},[h('span',{style:{fontSize:'34px'}},'🪶'),h('h2',{style:{fontFamily:"'Playfair Display',serif",fontSize:'1.9rem',color:'#e9d5ff',marginTop:'6px'}},title),h('p',{style:{color:'#a78bfa',fontStyle:'italic'}},sub)]),
-      h('div',{class:'card',style:{display:'flex',flexDirection:'column',gap:'14px'}},[
-        ...fieldEls,errEl,
-        h('button',{class:'pb btn',style:{width:'100%'},onclick:()=>{const e=onSubmit(vals);if(e){errEl.textContent=e;errEl.style.display='block';}}},btnLabel),
-        h('p',{style:{textAlign:'center',color:'#a78bfa',fontSize:'.9rem'}},[altText+' ',h('span',{style:{color:'#c084fc',cursor:'pointer',textDecoration:'underline'},onclick:altAction},(altText.includes('yok')?'Kayıt ol':'Giriş yap'))])
-      ])
-    ])
-  ]);
-}
-
-function Feed(){
-  let modal=null;
-  const wrap=h('div',{},[navBar()]);
-  const page=h('div',{class:'page'});
-  page.appendChild(h('div',{style:{background:'linear-gradient(135deg,#2d1060,#1a0f3e)',border:'1px solid #5b21b6',borderRadius:'14px',padding:'12px 16px',marginBottom:'14px',display:'flex',alignItems:'center',gap:'10px'}},[h('span',{style:{fontSize:'1.3rem'}},'💡'),h('p',{style:{color:'#c4b5fd',fontSize:'.88rem',fontStyle:'italic',lineHeight:'1.5'}},'Şiirleri puanla, yorum yaz — her katkın sıralamayı şekillendirir! ⭐')]));
-  const addBtn=h('button',{class:'btn',style:{width:'100%',marginBottom:'20px',background:'linear-gradient(135deg,#1e0a3e,#2d1060)',border:'2px dashed #7c3aed',borderRadius:'14px',padding:'18px',color:'#c084fc',fontFamily:"'Playfair Display',serif",fontSize:'1.05rem',display:'flex',alignItems:'center',justifyContent:'center',gap:'10px'},onclick:()=>{
-    if(modal)return;modal=composeModal(()=>{modal&&modal.remove();modal=null;});document.body.appendChild(modal);
-  }},[h('span',{style:{fontSize:'1.5rem'}},'🪶'),' + Şiir Ekle']);
-  page.appendChild(addBtn);
-  
-  if (S.posts.length === 0) {
-    page.appendChild(h('p', {style:{textAlign:'center', color:'#6b5b8a', fontStyle:'italic', marginTop:'40px'}}, 'Henüz hiç şiir eklenmemiş. İlk şiiri siz paylaşın! ✨'));
-  } else {
-    S.posts.forEach(p=>page.appendChild(postCard(p)));
-  }
-  
-  wrap.appendChild(page);return wrap;
-}
-
-function Leaderboard(){
-  const scored=S.posts.map(p=>({...p,avg:calcAvg(p.userRatings,p.aiScore)})).filter(p=>p.avg!==null).sort((a,b)=>b.avg-a.avg);
-  const ranked=S.users.map(u=>{const up=S.posts.filter(p=>p.authorId===u.id&&calcAvg(p.userRatings,p.aiScore)!==null);if(!up.length)return null;const avg=up.reduce((s,p)=>s+calcAvg(p.userRatings,p.aiScore),0)/up.length;return{...u,avg:+avg.toFixed(2),cnt:up.length}}).filter(Boolean).sort((a,b)=>b.avg-a.avg);
-  const medals=['🥇','🥈','🥉'];
-  const wrap=h('div',{},[navBar()]);
-  const page=h('div',{class:'page'});
-  page.appendChild(h('h2',{style:{fontFamily:"'Playfair Display',serif",color:'#e9d5ff',marginBottom:'4px',fontSize:'1.4rem'}},'🏆 Sıralama'));
-  page.appendChild(h('p',{style:{color:'#6b5b8a',fontSize:'.85rem',marginBottom:'16px',fontStyle:'italic'}},'Puan ver, yorum yaz!'));
-  const pb=h('button',{class:'btn',style:{flex:'1',padding:'10px',borderRadius:'10px',fontSize:'.88rem',background:'linear-gradient(135deg,#7c3aed,#a855f7)',color:'#fff',border:'none'}},'🪶 En İyi Şiirler');
-  const ub=h('button',{class:'btn',style:{flex:'1',padding:'10px',borderRadius:'10px',fontSize:'.88rem',background:'#1a0f2e',color:'#a78bfa',border:'1px solid #2d1b52'}},'👑 En İyi Ozanlar');
-  page.appendChild(h('div',{style:{display:'flex',gap:'8px',marginBottom:'20px'}},[pb,ub]));
-  const ct=h('div');
-  function showP(){
-    ct.innerHTML='';
-    if(!scored.length){ct.appendChild(h('p',{style:{color:'#6b5b8a',fontStyle:'italic',textAlign:'center',marginTop:'40px'}},'Henüz puanlanmış şiir yok!'));return;}
-    scored.forEach((p,i)=>{
-      const author=byId(p.authorId);
-      const dt=p.title||(p.text?.slice(0,28)+(p.text?.length>28?'…':''))||'İsimsiz';
-      const card=h('div',{class:'card',style:{display:'flex',gap:'12px',alignItems:'center',borderLeft:`3px solid ${i<3?['#fbbf24','#9ca3af','#cd7c2e'][i]:scoreColor(p.avg)}`}});
-      card.appendChild(h('div',{style:{textAlign:'center',minWidth:'42px'}},[h('p',{style:{fontSize:'1.35rem'}},medals[i]||`#${i+1}`),h('p',{style:{fontFamily:"'Playfair Display',serif",fontSize:'1.1rem',fontWeight:'700',color:scoreColor(p.avg)}},p.avg.toFixed(1)),h('p',{style:{fontSize:'.55rem',color:'#6b5b8a'}},'/10')]));
-      const info=h('div',{style:{flex:'1',minWidth:'0'}});
-      const tl=h('p',{style:{fontFamily:"'Playfair Display',serif",fontSize:'1rem',color:'#e9d5ff',fontStyle:'italic',cursor:'pointer',marginBottom:'5px',textDecoration:'underline',textDecorationColor:'#7c3aed'}},`"${dt}"`);
-      tl.onclick=()=>go('postdetail',{postId:p.id});
-      info.appendChild(tl);
-      info.appendChild(h('div',{style:{display:'flex',alignItems:'center',gap:'6px',marginBottom:'4px'}},[av(author,20,()=>go('profile',{profileId:author?.id})),h('span',{style:{fontSize:'.8rem',color:'#a78bfa',cursor:'pointer'},onclick:()=>go('profile',{profileId:author?.id})},author?.name||'')]));
-      info.appendChild(h('div',{style:{display:'flex',gap:'10px'}},[h('span',{style:{fontSize:'.72rem',color:'#6b5b8a'}},`${Object.keys(p.userRatings||{}).length} oy · ${(p.comments||[]).length} yorum`),h('span',{style:{fontSize:'.72rem',color:scoreColor(p.avg)}},scoreBadge(p.avg))]));
-      card.appendChild(info);ct.appendChild(card);
-    });
-  }
-  function showU(){
-    ct.innerHTML='';
-    if(!ranked.length){ct.appendChild(h('p',{style:{color:'#6b5b8a',fontStyle:'italic',textAlign:'center',marginTop:'40px'}},'Henüz sıralama oluşmadı!'));return;}
-    ranked.forEach((u,i)=>{
-      const card=h('div',{class:'card',style:{display:'flex',alignItems:'center',gap:'14px',borderLeft:`3px solid ${i<3?['#fbbf24','#9ca3af','#cd7c2e'][i]:scoreColor(u.avg)}`}});
-      card.appendChild(h('p',{style:{fontSize:'1.35rem',minWidth:'32px'}},medals[i]||`#${i+1}`));
-      card.appendChild(av(u,48,()=>go('profile',{profileId:u.id})));
-      const info=h('div',{style:{flex:'1'}});
-      const n=h('p',{style:{fontFamily:"'Playfair Display',serif",fontWeight:'700',color:'#e9d5ff',cursor:'pointer'},onclick:()=>go('profile',{profileId:u.id})},u.name);
-      info.appendChild(n);info.appendChild(h('p',{style:{color:'#6b5b8a',fontSize:'.8rem'}},`@${u.username} · ${u.cnt} şiir`));
-      card
+  cbody.appendChild(h('div',{style:{display:'flex',gap:'8px',marginTop:'6px'}},
