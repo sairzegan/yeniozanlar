@@ -380,15 +380,22 @@ function Explore(){
 function Profile(){
   const tid=S.profileId||S.me?.id;
   const user=S.users.find(u=>u.id===tid);
-  if(!user)return h('div',{},[navBar()]);
+  const wrap=h('div',{},[navBar()]);
+  const page=h('div',{class:'page'});
+  // geri butonu — kendi profili değilse göster
+  if(S.profileId&&S.profileId!==S.me?.id){
+    page.appendChild(h('button',{class:'btn',style:{background:'none',color:'#a78bfa',marginBottom:'16px',fontSize:'.9rem'},onclick:()=>go('feed')},'← Geri'));
+  }
+  if(!user){
+    page.appendChild(h('p',{style:{color:'#6b5b8a',fontStyle:'italic'}},'Kullanıcı bulunamadı.'));
+    wrap.appendChild(page);return wrap;
+  }
   const ups=S.posts.filter(p=>p.authorId===tid);
   const sp=ups.filter(p=>calcAvg(p.userRatings,p.aiScore)!==null);
   const avg=sp.length?(sp.reduce((s,p)=>s+calcAvg(p.userRatings,p.aiScore),0)/sp.length).toFixed(1):null;
   const fc=Object.values(S.follows).filter(l=>l.includes(tid)).length;
   const fg=(S.follows[tid]||[]).length;
   const isMe=tid===S.me?.id;
-  const wrap=h('div',{},[navBar()]);
-  const page=h('div',{class:'page'});
   const card=h('div',{class:'card fade',style:{textAlign:'center'}});
   card.appendChild(h('div',{style:{display:'flex',justifyContent:'center',marginBottom:'12px'}},[av(user,72)]));
   card.appendChild(h('h2',{style:{fontFamily:"'Playfair Display',serif",fontSize:'1.5rem',color:'#e9d5ff'}},user.name));
@@ -396,22 +403,28 @@ function Profile(){
   if(user.bio)card.appendChild(h('p',{style:{color:'#c4b5fd',fontStyle:'italic',marginBottom:'10px'}},user.bio));
   if(avg)card.appendChild(h('p',{style:{color:scoreColor(+avg),marginBottom:'12px'}},`Ort. Puan: ${avg}/10 ${scoreBadge(+avg)}`));
   const stats=h('div',{style:{display:'flex',justifyContent:'center',gap:'28px',marginBottom:'16px'}});
-  [['Şiir',ups.length],['Takipçi',fc],['Takip',fg]].forEach(([l,v])=>stats.appendChild(h('div',{},[h('p',{style:{fontFamily:"'Playfair Display',serif",fontSize:'1.3rem',color:'#e9d5ff'}},v),h('p',{style:{color:'#6b5b8a',fontSize:'.8rem'}},l)])));
+  [['Şiir',ups.length],['Takipçi',fc],['Takip',fg]].forEach(([l,v])=>stats.appendChild(h('div',{},[h('p',{style:{fontFamily:"'Playfair Display',serif",fontSize:'1.3rem',color:'#e9d5ff'}},String(v)),h('p',{style:{color:'#6b5b8a',fontSize:'.8rem'}},l)])));
   card.appendChild(stats);
-  if(!isMe)card.appendChild(h('button',{class:'pb btn',onclick:()=>{A.toggleFollow(user.id);}},isF(user.id)?'Takibi Bırak':'Takip Et'));
+  if(!isMe){
+    const fb=h('button',{class:'pb btn',onclick:()=>{A.toggleFollow(user.id);}},isF(user.id)?'Takibi Bırak':'Takip Et');
+    card.appendChild(fb);
+  }
   page.appendChild(card);
   page.appendChild(h('h3',{style:{fontFamily:"'Playfair Display',serif",color:'#a78bfa',marginBottom:'12px',fontSize:'1.1rem'}},'Şiirler'));
-  if(!ups.length)page.appendChild(h('p',{style:{color:'#6b5b8a',fontStyle:'italic'}},'Henüz şiir paylaşılmadı.'));
-  ups.forEach(p=>{
-    const a=calcAvg(p.userRatings,p.aiScore);
-    const pc=h('div',{class:'card',style:{display:'flex',gap:'12px',alignItems:'center',cursor:'pointer'},onclick:()=>go('postdetail',{postId:p.id})});
-    const info=h('div',{style:{flex:'1'}});
-    info.appendChild(h('p',{style:{fontFamily:"'Playfair Display',serif",fontSize:'1rem',color:'#e9d5ff',fontStyle:'italic'}},`"${p.title||p.text?.slice(0,30)+(p.text?.length>30?'…':'')||'İsimsiz'}"`));
-    info.appendChild(h('p',{style:{fontSize:'.78rem',color:'#6b5b8a',marginTop:'4px'}},`${p.date} · ${p.comments.length} yorum`));
-    pc.appendChild(info);
-    if(a!==null)pc.appendChild(h('div',{class:'score-box',style:{border:`1px solid ${scoreColor(a)}44`}},[h('p',{style:{fontFamily:"'Playfair Display',serif",fontSize:'1rem',fontWeight:'700',color:scoreColor(a)}},a.toFixed(1)),h('p',{style:{fontSize:'.55rem',color:'#6b5b8a'}},'/10')]));
-    page.appendChild(pc);
-  });
+  if(!ups.length){
+    page.appendChild(h('p',{style:{color:'#6b5b8a',fontStyle:'italic'}},'Henüz şiir paylaşılmadı.'));
+  } else {
+    ups.forEach(p=>{
+      const a=calcAvg(p.userRatings,p.aiScore);
+      const pc=h('div',{class:'card',style:{display:'flex',gap:'12px',alignItems:'center',cursor:'pointer'},onclick:()=>go('postdetail',{postId:p.id})});
+      const info=h('div',{style:{flex:'1'}});
+      info.appendChild(h('p',{style:{fontFamily:"'Playfair Display',serif",fontSize:'1rem',color:'#e9d5ff',fontStyle:'italic'}},`"${p.title||p.text?.slice(0,30)+(p.text?.length>30?'…':'')||'İsimsiz'}"`));
+      info.appendChild(h('p',{style:{fontSize:'.78rem',color:'#6b5b8a',marginTop:'4px'}},`${p.date} · ${p.comments.length} yorum`));
+      pc.appendChild(info);
+      if(a!==null)pc.appendChild(h('div',{class:'score-box',style:{border:`1px solid ${scoreColor(a)}44`}},[h('p',{style:{fontFamily:"'Playfair Display',serif",fontSize:'1rem',fontWeight:'700',color:scoreColor(a)}},a.toFixed(1)),h('p',{style:{fontSize:'.55rem',color:'#6b5b8a'}},'/10')]));
+      page.appendChild(pc);
+    });
+  }
   wrap.appendChild(page);return wrap;
 }
 
