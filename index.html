@@ -533,18 +533,27 @@ function render(){
   const app=document.getElementById('app');
   app.innerHTML='';
   if(!S.me){
-    const screens={landing:Landing,login:()=>authPage('Hoş geldin','Hesabınla giriş yap',[{label:'Kullanıcı adı',type:'text',ph:'kullaniciadi',k:'u'},{label:'Şifre',type:'password',ph:'••••••••',k:'p'}],'Giriş Yap',v=>A.login(v.u||'',v.p||''),'Hesabın yok mu?',()=>go('register')),register:()=>authPage('Katıl',"Yeni Ozanlar'a üye ol",[{label:'Kullanıcı adı',type:'text',ph:'kullaniciadi',k:'u'},{label:'Şifre',type:'password',ph:'••••••••',k:'p'},{label:'Şifre tekrar',type:'password',ph:'••••••••',k:'p2'}],'Hesap Oluştur',v=>{if(!v.u||!v.p)return'Tüm alanları doldurun.';if(v.p!==v.p2)return'Şifreler eşleşmiyor.';if((v.p||'').length<6)return'Şifre en az 6 karakter.';return A.register(v.u.trim(),v.p);},'Zaten üye misin?',()=>go('login'))};
-    const Screen=screens[S.screen]||Landing;
-    app.appendChild(Screen());
-    return;
+    const screens={
+      landing:Landing,
+      login:()=>authPage('Hoş geldin','Hesabınla giriş yap',[{label:'Kullanıcı adı',type:'text',ph:'kullaniciadi',k:'u'},{label:'Şifre',type:'password',ph:'••••••••',k:'p'}],'Giriş Yap',v=>A.login(v.u||'',v.p||''),'Hesabın yok mu?',()=>go('register')),
+      register:()=>authPage('Katıl',"Yeni Ozanlar'a üye ol",[{label:'Kullanıcı adı',type:'text',ph:'kullaniciadi',k:'u'},{label:'Şifre',type:'password',ph:'••••••••',k:'p'},{label:'Şifre tekrar',type:'password',ph:'••••••••',k:'p2'}],'Hesap Oluştur',v=>{if(!v.u||!v.p)return'Tüm alanları doldurun.';if(v.p!==v.p2)return'Şifreler eşleşmiyor.';if((v.p||'').length<6)return'Şifre en az 6 karakter olmalı.';return A.register(v.u||'',v.p||'')},'Zaten üye misin?',()=>go('login'))
+    };
+    app.appendChild((screens[S.screen]||Landing)());
+  } else {
+    const screens={
+      feed:Feed,
+      leaderboard:Leaderboard,
+      explore:Explore,
+      messages:Messages,
+      profile:Profile,
+      postdetail:PostDetail
+    };
+    app.appendChild((screens[S.screen]||Feed)());
   }
-  const screens={feed:Feed,leaderboard:Leaderboard,explore:Explore,profile:Profile,postdetail:PostDetail,messages:Messages};
-  const Screen=screens[S.screen]||Feed;
-  app.appendChild(Screen());
 }
 
+// Uygulama ilk açıldığında hem ekranı çiz hem de internetten verileri çek
 render();
-  // Sayfa ilk açıldığında internetteki verileri Firebase'den çek
 verileriYukle();
 </script>
 </body>
