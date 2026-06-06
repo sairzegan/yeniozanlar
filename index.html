@@ -20,7 +20,7 @@
     @keyframes fi{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
     .nav-bottom{position:fixed;bottom:0;left:0;right:0;z-index:100;background:rgba(15,10,26,.96);backdrop-filter:blur(12px);border-top:1px solid #2d1b52;display:flex;justify-content:space-around;padding:6px 0 10px}
     .nav-top{position:fixed;top:0;left:0;right:0;z-index:100;background:rgba(15,10,26,.96);backdrop-filter:blur(12px);border-bottom:1px solid #2d1b52;display:flex;align-items:center;justify-content:space-between;padding:8px 12px}
-    .page{padding:68px 8px 72px;max-width:680px;margin:0 auto}
+    .page{padding:68px 4px 72px;max-width:100%;margin:0 auto}
     .av{display:inline-flex;align-items:center;justify-content:center;border-radius:50%;font-weight:700;flex-shrink:0}
     .modal-bg{position:fixed;inset:0;z-index:300;background:rgba(0,0,0,.78);backdrop-filter:blur(8px);display:flex;align-items:flex-end;justify-content:center}
     .modal{width:100%;max-width:680px;background:linear-gradient(160deg,#1e0f3a,#160d28);border-radius:22px 22px 0 0;border:1px solid #5b21b6;border-bottom:none;padding:18px 14px 40px}
@@ -182,23 +182,144 @@ function scorePoem(text){
   const lines=text.split('\n').filter(s=>s.trim().length>0);
   const words=text.trim().split(/\s+/);
   const unique=new Set(words.map(k=>k.toLowerCase().replace(/[^a-züğışöçâîû]/gi,''))).size;
-  const len=words.length,lc=lines.length;
-  const img=['gibi','sanki','kadar','değil','andır','tıpkı','adeta','her','hiç'].filter(w=>text.toLowerCase().includes(w)).length;
-  const punct=(text.match(/[,;:!?—–.]/g)||[]).length;
+  const len=words.length, lc=lines.length;
+  const textL=text.toLowerCase();
+
+  // --- Kafiye analizi ---
+  const sonlar=lines.map(l=>{const w=l.trim().split(/\s+/);const son=w[w.length-1]?.toLowerCase().replace(/[^a-züğışöçâîû]/gi,'');return son?.slice(-3)||''});
+  let kafiyeSayisi=0;
+  for(let i=0;i<sonlar.length-1;i++){if(sonlar[i].length>1&&sonlar[i+1].length>1&&sonlar[i]===sonlar[i+1])kafiyeSayisi++;}
+  const kafiyeOrani=kafiyeSayisi/(Math.max(lines.length-1,1));
+
+  // --- Hece ölçüsü (yaklaşık) ---
+  const heceler=words.map(w=>(w.match(/[aeıioöuüAEIİOÖUÜ]/g)||[]).length);
+  const heceOrtalamalari=lines.map(l=>{ const lw=l.trim().split(/\s+/); return lw.reduce((s,w)=>(w.match(/[aeıioöuüAEIİOÖUÜ]/g)||[]).length+s,0); });
+  const heceVaryans=heceOrtalamalari.length>1?Math.sqrt(heceOrtalamalari.reduce((s,h)=>s+(h-heceOrtalamalari.reduce((a,b)=>a+b,0)/heceOrtalamalari.length)**2,0)/heceOrtalamalari.length):0;
+  const heceOlcusu=heceVaryans<2.5;
+
+  // --- Aliterasyon ---
+  const ilkHarfler=words.map(w=>w[0]?.toLowerCase()).filter(Boolean);
+  const harfSayilari={};ilkHarfler.forEach(h=>{harfSayilari[h]=(harfSayilari[h]||0)+1});
+  const aliterasyon=Object.values(harfSayilari).filter(v=>v>=3).length>0;
+
+  // --- İmge ve metafor ---
+  const imgeSozleri=['gibi','sanki','andır','tıpkı','adeta','kadar','neredeyse','sanırsın','söyler','bakar','ağlar','güler','uçar','akar','solar','doğar','yanar','söner','fısıldar','haykırır'];
+  const metaforSozleri=['kalp','gönül','ruh','can','ışık','karanlık','yol','köprü','deniz','dağ','gece','sabah','akşam','bulut','yıldız','ay','güneş','çiçek','yaprak','kök','kanat','ses','nefes','gözyaşı'];
+  const imgeSayisi=imgeSozleri.filter(w=>textL.includes(w)).length;
+  const metaforSayisi=metaforSozleri.filter(w=>textL.includes(w)).length;
+
+  // --- Modern/şiirsel olmayan kelimeler ---
+  const modernSozler=['telefon','internet','bilgisayar','araba','market','para','fatura','hastane','ofis','toplantı','proje','şirket','uygulama','sosyal medya','instagram','whatsapp'];
+  const modernKelime=modernSozler.filter(w=>textL.includes(w)).length;
+
+  // --- Didaktik/düz yazı belirtileri ---
+  const didaktikSozler=['çünkü','dolayısıyla','bu nedenle','sonuç olarak','şöyle ki','aslında','yani','demek ki','özetle'];
+  const didaktik=didaktikSozler.filter(w=>textL.includes(w)).length;
+
+  // --- Tema ve duygu ---
+  const duygular={
+    hüzün:['hüzün','keder','ağlamak','gözyaşı','yalnız','özlem','hasret','kayıp','acı','sızı','solmak','bitmek'],
+    umut:['umut','işık','sabah','doğmak','yeni','güneş','başlamak','yükselmek','açılmak','sevinç'],
+    aşk:['sevgi','aşk','sevmek','yürek','kalp','gözler','dokunmak','beklemek','özlemek','sarılmak'],
+    doğa:['deniz','dağ','orman','nehir','rüzgar','yaprak','toprak','gökyüzü','bulut','yağmur'],
+    varoluş:['ölüm','yaşam','sonsuz','zaman','geçmek','anlam','gerçek','boşluk','karanlık','sessizlik']
+  };
+  let anaDuygu='genel';let maxDuygu=0;
+  for(const[d,kelimeler]of Object.entries(duygular)){const s=kelimeler.filter(k=>textL.includes(k)).length;if(s>maxDuygu){maxDuygu=s;anaDuygu=d;}}
+
+  // --- Puan hesaplama ---
   let p=5.0;
-  if(len>=8&&len<=50)p+=1.2;else if(len>50&&len<=120)p+=0.8;else if(len<8)p-=1.0;
-  if(lc>=3&&lc<=16)p+=0.8;
+  // uzunluk
+  if(len>=8&&len<=60)p+=1.0;else if(len>60&&len<=120)p+=0.6;else if(len<5)p-=1.5;
+  // dize sayısı
+  if(lc>=3&&lc<=20)p+=0.7;
+  // kelime zenginliği
   const z=unique/words.length;
-  if(z>0.75)p+=1.5;else if(z>0.6)p+=0.9;else if(z>0.45)p+=0.4;
-  if(img>=3)p+=0.8;else if(img>=1)p+=0.4;
-  if(punct>=2&&punct<=10)p+=0.5;
-  const r=(text.length%19)/19*0.8-0.4;
-  p=Math.min(9.8,Math.max(4.0,p+r));p=Math.round(p*10)/10;
-  const guclu=['Kelime seçimleri özgün ve çarpıcı.','Dizenin ritmi akıcı doğal.','İmgeler güçlü ve yaratıcı.','Duygusal derinlik hissediliyor.','Özgün bir ses ve bakış açısı var.','Anlam katmanları zengin.'];
-  const oneri=['Bazı dizeler daha yoğun olabilir.','Şiirin sonu güçlendirilebilir.','Daha fazla imge derinlik katabilir.','Ritim tutarlılığı geliştirilebilir.','İlk dize daha çarpıcı olabilir.'];
-  const yorum=[`${lc} dizelik bu şiir ${p>=7.5?'güçlü bir lirik ses taşıyor':'gelişmeye açık'}. Kelime zenginliği ${z>0.7?'yüksek':'orta düzeyde'}.`,`${img>2?'Zengin imgelem dikkat çekiyor':'Sade bir dil tercih edilmiş'}. ${p>=8?'Okuyucuda derin etki bırakıyor.':'Birkaç düzenlemeyle güçlenebilir.'}`,`${len<15?'Kısa ve öz':'Kapsamlı'} bir şiir. ${p>=7?'Bütünlük sağlanmış.':'Yapı geliştirilebilir.'}`];
-  const i=text.length%guclu.length,oi=(text.length+lc)%oneri.length,yi=text.length%yorum.length;
-  return{score:p,yorum:yorum[yi],gucluYonler:guclu[i],gelistirmeOnerisi:oneri[oi]};
+  if(z>0.80)p+=1.8;else if(z>0.65)p+=1.2;else if(z>0.50)p+=0.6;
+  // kafiye
+  if(kafiyeOrani>0.5)p+=0.6;else if(kafiyeOrani>0.2)p+=0.3;
+  // hece ölçüsü tutarlılığı
+  if(heceOlcusu&&lc>=4)p+=0.5;
+  // aliterasyon
+  if(aliterasyon)p+=0.4;
+  // imgeler ve metaforlar
+  if(imgeSayisi>=3)p+=0.8;else if(imgeSayisi>=1)p+=0.4;
+  if(metaforSayisi>=3)p+=0.6;else if(metaforSayisi>=1)p+=0.3;
+  // modern/şiirsel olmayan kelimeler eksi
+  if(modernKelime>0)p-=modernKelime*0.4;
+  // didaktik anlatım eksi
+  if(didaktik>1)p-=(didaktik-1)*0.3;
+  // noktalama
+  const punct=(text.match(/[,;:!?—–.]/g)||[]).length;
+  if(punct>=2&&punct<=12)p+=0.3;
+  // rastgelelik
+  const r=(text.length%17)/17*0.6-0.3;
+  p=Math.min(9.9,Math.max(3.5,p+r));
+  p=Math.round(p*10)/10;
+
+  // --- Detaylı yorum ---
+  const duyguAdi={hüzün:'hüzün ve özlem',umut:'umut ve aydınlık',aşk:'aşk ve sevgi',doğa:'doğa ve varoluş',varoluş:'varoluş ve anlam arayışı',genel:'karma duygular'}[anaDuygu];
+
+  let yorumParcalari=[];
+
+  // Genel izlenim
+  if(p>=8.5) yorumParcalari.push(`Bu şiir, ${lc} dizelik yapısıyla güçlü bir lirik ses taşıyor.`);
+  else if(p>=7) yorumParcalari.push(`${lc} dizelik bu şiir, dikkat çekici bir potansiyel barındırıyor.`);
+  else yorumParcalari.push(`${lc} dizelik bu şiir, geliştirilmeye açık bir ham malzeme sunuyor.`);
+
+  // Ana duygu ve tema
+  yorumParcalari.push(`Ana duygu olarak ${duyguAdi} ön plana çıkıyor${maxDuygu>2?', tema tutarlı biçimde işlenmiş':', tema daha güçlü işlenebilir'}.`);
+
+  // Ses uyumu ve kafiye
+  if(kafiyeOrani>0.4) yorumParcalari.push(`Kafiye düzeni belirgin ve ses uyumu başarılı${aliterasyon?'; aliterasyon da şiire müzikal bir akış katıyor':''}.`);
+  else if(kafiyeOrani>0.1) yorumParcalari.push(`Kısmi kafiyeler var${aliterasyon?', aliterasyon ses zenginliği sağlıyor':'; ses uyumu güçlendirilebilir'}.`);
+  else yorumParcalari.push(`Serbest nazım tercih edilmiş${aliterasyon?'; aliterasyon ritmi destekliyor':'; ses uyumu eksik, aliterasyon veya iç kafiye denenebilir'}.`);
+
+  // Hece ölçüsü
+  if(heceOlcusu&&lc>=4) yorumParcalari.push(`Hece ölçüsü dengeli; dizeler arasında belirgin bir ritim hissediliyor.`);
+  else if(lc>=4) yorumParcalari.push(`Hece sayıları değişken; bu serbest şiir estetiğine uygun olabilir, ancak akış bazen seksiyor.`);
+
+  // İmge ve metafor
+  if(imgeSayisi>=3&&metaforSayisi>=3) yorumParcalari.push(`Şiirsel imgeler ve metaforlar zengin; özgün semboller dikkat çekiyor.`);
+  else if(imgeSayisi>=1||metaforSayisi>=1) yorumParcalari.push(`Bazı imgeler ve ${metaforSayisi>0?'metaforlar':'semboller'} mevcut; daha fazlası şiiri derinleştirir.`);
+  else yorumParcalari.push(`İmge ve metafor kullanımı oldukça az; somut imgeler şiire güç katar.`);
+
+  // Kelime seçimi
+  if(z>0.75&&modernKelime===0) yorumParcalari.push(`Kelime seçimi özgün ve şiirsel; gündelik hayatın sıradanlığından uzak.`);
+  else if(modernKelime>0) yorumParcalari.push(`Bazı modern/günlük kelimeler şiirsel havayı zedeliyor; bu kelimeler daha şiirsel eşdeğerleriyle değiştirilebilir.`);
+  else yorumParcalari.push(`Kelime zenginliği ${z>0.6?'tatmin edici':'orta düzeyde'}; daha özgün sözcükler şiire derinlik katabilir.`);
+
+  // Anlam bütünlüğü ve didaktizm
+  if(didaktik>1) yorumParcalari.push(`Şiir zaman zaman düz yazıya veya didaktik anlatıma kayıyor; duygu gösterilmeli, anlatılmamalı.`);
+  else if(p>=7) yorumParcalari.push(`Kıtalar arasında anlam bütünlüğü sağlanmış; şiir başından sonuna tutarlı bir bütün oluşturuyor.`);
+  else yorumParcalari.push(`Kıtalar arasındaki anlam bağı güçlendirilebilir; okuyucu her dizeyi bir sonrakine bağlayan bir ip aramalı.`);
+
+  const yorum=yorumParcalari.join(' ');
+
+  // Güçlü yönler
+  const gucluSecenekler=[];
+  if(kafiyeOrani>0.3)gucluSecenekler.push('Ses uyumu ve kafiye düzeni başarılı');
+  if(aliterasyon)gucluSecenekler.push('Aliterasyon şiire müzikal bir akış katıyor');
+  if(imgeSayisi>=2)gucluSecenekler.push('İmge kullanımı güçlü ve özgün');
+  if(metaforSayisi>=2)gucluSecenekler.push('Metafor ve semboller yerli yerinde');
+  if(z>0.7)gucluSecenekler.push('Kelime seçimleri özgün ve çarpıcı');
+  if(heceOlcusu)gucluSecenekler.push('Hece ölçüsü tutarlı ve akıcı');
+  if(maxDuygu>=2)gucluSecenekler.push(`${duyguAdi} teması güçlü biçimde işlenmiş`);
+  if(gucluSecenekler.length===0)gucluSecenekler.push('Ham bir duygu yoğunluğu hissediliyor');
+  const guclu=gucluSecenekler[text.length%gucluSecenekler.length];
+
+  // Geliştirme önerileri
+  const oneriSecenekler=[];
+  if(modernKelime>0)oneriSecenekler.push('Modern/günlük kelimeler daha şiirsel eşdeğerleriyle değiştirilebilir');
+  if(kafiyeOrani<0.2&&!heceOlcusu)oneriSecenekler.push('Ses uyumu veya aliterasyon eklenerek ritim güçlendirilebilir');
+  if(imgeSayisi<2)oneriSecenekler.push('Somut imgeler ve metaforlarla şiir derinleştirilebilir');
+  if(didaktik>0)oneriSecenekler.push('Düz anlatım yerine imgelerle duygu gösterilmeli');
+  if(z<0.6)oneriSecenekler.push('Daha özgün ve az kullanılan kelimeler seçilebilir');
+  if(lc<4)oneriSecenekler.push('Şiir biraz daha genişletilerek tema tam işlenebilir');
+  if(oneriSecenekler.length===0)oneriSecenekler.push('Son dize daha çarpıcı ve kalıcı hale getirilebilir');
+  const oneri=oneriSecenekler[(text.length+lc)%oneriSecenekler.length];
+
+  return{score:p, yorum, gucluYonler:guclu, gelistirmeOnerisi:oneri};
 }
 
 function go(screen,extra={}){Object.assign(S,{screen,...extra});render()}
