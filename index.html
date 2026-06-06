@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Yeni Ozanlar 🪶</title>
   <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght=0,400;0,700;1,400&family=Crimson+Text:ital,wght=0,400;0,600;1,400&display=swap" rel="stylesheet">
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
   <style>
     *{box-sizing:border-box;margin:0;padding:0}
     body{background:#0f0a1a;color:#f0e8ff;font-family:'Crimson Text',Georgia,serif;min-height:100vh}
@@ -111,7 +113,11 @@ const firebaseConfig = {
   messagingSenderId: "99003509618",
   appId: "1:99003509618:web:e4f36d85378f2e554fcbeb"
 };
-
+  firebase.initializeApp(firebaseConfig);
+  const db = firebase.firestore();
+</script>
+firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
 const ADMIN_USERNAME = "admin";
 const ADMIN_PASSWORD = "OzanAdmin2026!"; 
 
@@ -396,15 +402,15 @@ const A = {
       db.collection("posts").doc(pid).update({ userRatings: S.posts[pIndex].userRatings }).then(() => verileriYukle());
     }
   },
-  addComment(pid,text){
-    const pIndex = S.posts.findIndex(p=>p.id===pid);
+  addComment(pid, text) {
+    const pIndex = S.posts.findIndex(p => p.id === pid);
     if(pIndex > -1) {
       const newComment = {id:uid(),authorId:S.me.id,text,date:now()};
       const updatedComments = [...(S.posts[pIndex].comments || []), newComment];
       S.posts[pIndex].comments = updatedComments;
       save();
       render();
-      db.collection("posts").doc(pid).update({ comments: updatedComments }).then(() => verileriYukle());
+      db.collection("posts").doc(pid).update({ comments: updatedComments });
     }
   },
   deleteComment(pid, cid){
