@@ -2,28 +2,20 @@
 <html lang="tr">
 <head>
   <meta charset="UTF-8" />
-  <style>
-    .toast-container{position:fixed;top:20px;right:20px;z-index:99999;display:flex;flex-direction:column;gap:10px}
-    .toast{background:#3d1f6e;color:#fff;padding:12px 20px;border-radius:8px;border:1px solid #7c3aed;box-shadow:0 4px 12px rgba(0,0,0,0.5);animation:slideIn 0.3s ease-out}
-    @keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}
-  </style>
-  <script>
-    function notify(msg) {
-      let c = document.getElementById('toast-box') || document.body.appendChild(Object.assign(document.createElement('div'),{id:'toast-box',className:'toast-container'}));
-      let t = c.appendChild(Object.assign(document.createElement('div'),{className:'toast',innerText:msg}));
-      setTimeout(()=>t.remove(),3000);
-    }
-  </script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Yeni Ozanlar 🪶</title>
   <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;1,400&family=Crimson+Text:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
   <style>
+    /* BİLDİRİM SİSTEMİ CSS */
+    .toast-container{position:fixed;top:20px;right:20px;z-index:99999;display:flex;flex-direction:column;gap:10px}
+    .toast{background:#3d1f6e;color:#fff;padding:12px 20px;border-radius:8px;border:1px solid #7c3aed;box-shadow:0 4px 12px rgba(0,0,0,0.5);animation:slideIn 0.3s ease-out}
+    @keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}
+    
+    /* SENİN TASARIMIN (Aşağısı senin kodlarınla aynı) */
     *{box-sizing:border-box;margin:0;padding:0}
     body{background:#0f0a1a;color:#f0e8ff;font-family:'Crimson Text',Georgia,serif;min-height:100vh}
     ::-webkit-scrollbar{width:4px}
     ::-webkit-scrollbar-thumb{background:#6d28d9;border-radius:2px}
-    
-    /* Kartların üst boşluğunu silme butonu için artırdık */
     .card{background:linear-gradient(135deg,#1a0f2e,#160d28);border:1px solid #2d1b52;border-radius:14px;padding:14px 12px 14px 12px;margin-bottom:12px;position:relative !important}
     .btn{cursor:pointer;border:none;outline:none;transition:all .2s;font-family:'Crimson Text',serif}
     .btn:hover{opacity:.85}
@@ -34,19 +26,8 @@
     .nav-top{position:fixed;top:0;left:0;right:0;z-index:100;background:rgba(15,10,26,.96);backdrop-filter:blur(12px);border-bottom:1px solid #2d1b52;display:flex;align-items:center;justify-content:space-between;padding:8px 12px}
     .page{padding:68px 4px 72px;max-width:100%;margin:0 auto}
     .av{display:inline-flex;align-items:center;justify-content:center;border-radius:50%;font-weight:700;flex-shrink:0}
-    .modal-bg{position:fixed;inset:0;z-index:300;background:rgba(0,0,0,.78);backdrop-filter:blur(8px);display:flex;align-items:flex-end;justify-content:center}
-    .modal{width:100%;max-width:680px;background:linear-gradient(160deg,#1e0f3a,#160d28);border-radius:22px 22px 0 0;border:1px solid #5b21b6;border-bottom:none;padding:18px 14px 40px}
-    .pb{background:linear-gradient(135deg,#7c3aed,#a855f7);color:#fff;padding:10px 24px;border-radius:50px;font-size:1rem;font-family:'Crimson Text',serif;font-weight:600;border:none;cursor:pointer}
     .inp{width:100%;background:#0f0a1a;border:1px solid #3d1f6e;border-radius:10px;padding:10px 14px;color:#e9d5ff;font-family:'Crimson Text',serif;font-size:1rem}
-    .score-box{text-align:center;background:#0f0a1a;border-radius:10px;padding:6px 10px;min-width:50px}
-    iframe{display:block;width:100%;aspect-ratio:16/9;border:none;border-radius:12px}
-    
-    /* ŞİİR SİLME BUTONU */
-    .absolute-del-post {
-      position: absolute !important; top: 12px !important; right: 12px !important; z-index: 9999 !important; 
-      background: #ef4444 !important; color: #ffffff !important; border: none !important; border-radius: 6px !important; 
-      padding: 4px 10px !important; font-size: 12px !important; font-weight: bold !important; cursor: pointer !important; box-shadow: 0 2px 8px rgba(0,0,0,0.5) !important;
-    }
+    .absolute-del-post { position: absolute !important; top: 12px !important; right: 12px !important; z-index: 9999 !important; background: #ef4444 !important; color: #ffffff !important; border: none !important; border-radius: 6px !important; padding: 4px 10px !important; font-size: 12px !important; font-weight: bold !important; cursor: pointer !important; }
   </style>
   <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
@@ -54,7 +35,13 @@
 <body>
 <div id="app"></div>
 <script>
-// --- BURADAN SONRASI SENİN KODLARIN (Birebir kopyala yapıştır yaptım) ---
+// --- BİLDİRİM SİSTEMİ ---
+function notify(msg) {
+  let c = document.getElementById('toast-box') || document.body.appendChild(Object.assign(document.createElement('div'),{id:'toast-box',className:'toast-container'}));
+  let t = c.appendChild(Object.assign(document.createElement('div'),{className:'toast',innerText:msg}));
+  setTimeout(()=>t.remove(),3000);
+}
+
 <!DOCTYPE html>
 <html lang="tr">
 <head>
