@@ -921,8 +921,13 @@ function Messages(){
     msgs.scrollTop=msgs.scrollHeight;
     const mi=inp('Mesajını yaz...');mi.style.borderRadius='20px';mi.style.flex='1';
     ct.appendChild(msgs);
-    ct.appendChild(h('div',{style:{display:'flex',gap:'8px',marginTop:'10px'}},[mi,h('button',{class:'pb btn',style:{padding:'10px 18px'},onclick:()=>{if(!mi.value.trim())return;A.sendMsg(chat,mi.value.trim());mi.value='';showChat();}},'↩')]));
-  }
+    ct.appendChild(h('div',{style:{display:'flex',gap:'8px',marginTop:'10px'}},[mi,h('button',{class:'pb btn',style:{padding:'10px 18px'},onclick:()=>{
+      if(!mi.value.trim()) return;
+      const text = mi.value.trim();
+      mi.value='';
+      A.sendMsg(chat, text);
+    }},'↩')]));
+}
   showList();return wrap;
 }
 
