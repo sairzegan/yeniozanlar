@@ -4,6 +4,50 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Yeni Ozanlar 🪶</title>
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;1,400&family=Crimson+Text:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
+  <style>
+    /* BİLDİRİM SİSTEMİ CSS */
+    .toast-container{position:fixed;top:20px;right:20px;z-index:99999;display:flex;flex-direction:column;gap:10px}
+    .toast{background:#3d1f6e;color:#fff;padding:12px 20px;border-radius:8px;border:1px solid #7c3aed;box-shadow:0 4px 12px rgba(0,0,0,0.5);animation:slideIn 0.3s ease-out}
+    @keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}
+    
+    /* SENİN TASARIMIN (Aşağısı senin kodlarınla aynı) */
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{background:#0f0a1a;color:#f0e8ff;font-family:'Crimson Text',Georgia,serif;min-height:100vh}
+    ::-webkit-scrollbar{width:4px}
+    ::-webkit-scrollbar-thumb{background:#6d28d9;border-radius:2px}
+    .card{background:linear-gradient(135deg,#1a0f2e,#160d28);border:1px solid #2d1b52;border-radius:14px;padding:14px 12px 14px 12px;margin-bottom:12px;position:relative !important}
+    .btn{cursor:pointer;border:none;outline:none;transition:all .2s;font-family:'Crimson Text',serif}
+    .btn:hover{opacity:.85}
+    input,textarea{outline:none;font-family:'Crimson Text',serif}
+    .fade{animation:fi .35s ease}
+    @keyframes fi{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+    .nav-bottom{position:fixed;bottom:0;left:0;right:0;z-index:100;background:rgba(15,10,26,.96);backdrop-filter:blur(12px);border-top:1px solid #2d1b52;display:flex;justify-content:space-around;padding:6px 0 10px}
+    .nav-top{position:fixed;top:0;left:0;right:0;z-index:100;background:rgba(15,10,26,.96);backdrop-filter:blur(12px);border-bottom:1px solid #2d1b52;display:flex;align-items:center;justify-content:space-between;padding:8px 12px}
+    .page{padding:68px 4px 72px;max-width:100%;margin:0 auto}
+    .av{display:inline-flex;align-items:center;justify-content:center;border-radius:50%;font-weight:700;flex-shrink:0}
+    .inp{width:100%;background:#0f0a1a;border:1px solid #3d1f6e;border-radius:10px;padding:10px 14px;color:#e9d5ff;font-family:'Crimson Text',serif;font-size:1rem}
+    .absolute-del-post { position: absolute !important; top: 12px !important; right: 12px !important; z-index: 9999 !important; background: #ef4444 !important; color: #ffffff !important; border: none !important; border-radius: 6px !important; padding: 4px 10px !important; font-size: 12px !important; font-weight: bold !important; cursor: pointer !important; }
+  </style>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
+</head>
+<body>
+<div id="app"></div>
+<script>
+// --- BİLDİRİM SİSTEMİ ---
+function notify(msg) {
+  let c = document.getElementById('toast-box') || document.body.appendChild(Object.assign(document.createElement('div'),{id:'toast-box',className:'toast-container'}));
+  let t = c.appendChild(Object.assign(document.createElement('div'),{className:'toast',innerText:msg}));
+  setTimeout(()=>t.remove(),3000);
+}
+
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Yeni Ozanlar 🪶</title>
   <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght=0,400;0,700;1,400&family=Crimson+Text:ital,wght=0,400;0,600;1,400&display=swap" rel="stylesheet">
   <style>
     *{box-sizing:border-box;margin:0;padding:0}
@@ -139,7 +183,6 @@ let S = {
   postId: null,
   follows: lsGet('yo_follows', {}),
   msgs: lsGet('yo_msgs', []),
-  notifs: lsGet('yo_notifs', []),
   loading: true 
 };
 
@@ -155,18 +198,6 @@ async function verileriYukle() {
     const postsSnapshot = await db.collection("posts").get().catch(() => ({ docs: [] }));
     const tumPostlar = postsSnapshot.docs.length ? postsSnapshot.docs.map(doc => doc.data()) : [];
     S.posts = tumPostlar.sort((a, b) => b.date.localeCompare(a.date));
-
-    // Mesajları Firebase'den yükle
-    if(S.me) {
-      const msgsSnapshot = await db.collection("msgs").get().catch(() => ({ docs: [] }));
-      S.msgs = msgsSnapshot.docs.length ? msgsSnapshot.docs.map(doc => doc.data()) : [];
-      lsSet('yo_msgs', S.msgs);
-
-      // Bildirimleri Firebase'den yükle
-      const notifsSnapshot = await db.collection("notifs").where("toId","==",S.me.id).get().catch(() => ({ docs: [] }));
-      S.notifs = notifsSnapshot.docs.length ? notifsSnapshot.docs.map(doc => doc.data()).sort((a,b)=>b.date.localeCompare(a.date)) : [];
-      lsSet('yo_notifs', S.notifs);
-    }
 
     if (S.me && S.me.username === ADMIN_USERNAME) {
       S.me = adminProfileObj;
@@ -406,10 +437,6 @@ const A = {
       S.posts[pIndex].userRatings[S.me.id] = score;
       save();
       render();
-      // Bildirim gönder
-      const post=S.posts[pIndex];
-      const postTitle=post.title||post.text?.slice(0,20)||'şiirinize';
-      A.addNotif(post.authorId, `@${S.me.username}, "${postTitle}" başlıklı şiirinize ${score}/10 puan verdi.`);
       db.collection("posts").doc(pid).update({ userRatings: S.posts[pIndex].userRatings }).then(() => verileriYukle());
     }
   },
@@ -421,10 +448,6 @@ const A = {
       S.posts[pIndex].comments = updatedComments;
       save();
       render();
-      // Bildirim gönder
-      const post=S.posts[pIndex];
-      const postTitle=post.title||post.text?.slice(0,20)||'şiirinize';
-      A.addNotif(post.authorId, `@${S.me.username}, "${postTitle}" başlıklı şiirinize yorum yaptı.`);
       db.collection("posts").doc(pid).update({ comments: updatedComments }).then(() => verileriYukle());
     }
   },
@@ -441,20 +464,7 @@ const A = {
     }
   },
   toggleFollow(tid){const l=S.follows[S.me.id]||[];const has=l.includes(tid);S.follows={...S.follows,[S.me.id]:has?l.filter(x=>x!==tid):[...l,tid]};save();render()},
-  sendMsg(toId,text){
-    const msg={id:uid(),fromId:S.me.id,toId,text,date:now()};
-    S.msgs=[...S.msgs,msg];
-    save();render();
-    db.collection("msgs").doc(msg.id).set(msg).catch(err=>console.error("Mesaj hatası:",err));
-  },
-  addNotif(toId,text){
-    if(toId===S.me?.id)return;
-    const notif={id:uid(),toId,text,date:now(),read:false};
-    if(!S.notifs)S.notifs=[];
-    S.notifs.push(notif);
-    lsSet('yo_notifs',S.notifs);
-    db.collection("notifs").doc(notif.id).set(notif).catch(e=>console.error(e));
-  },
+  sendMsg(toId,text){S.msgs=[...S.msgs,{id:uid(),fromId:S.me.id,toId,text,date:now()}];save();render()},
 };
 
 const byId=id=>S.users.find(u=>u.id===id) || (id === "admin_root" ? adminProfileObj : null);
@@ -490,15 +500,7 @@ function inp(placeholder,type='text',style={}){
 }
 
 function navBar(){
-  const unreadCount=(S.notifs||[]).filter(n=>!n.read).length;
-  const tabs=[
-    {k:'feed',ic:'🏠',lb:'Akış'},
-    {k:'leaderboard',ic:'🏆',lb:'Sıralama'},
-    {k:'explore',ic:'🔍',lb:'Keşfet'},
-    {k:'messages',ic:'✉️',lb:'Mesaj'},
-    {k:'notifs',ic:'🔔',lb:'Bildirim',badge:unreadCount},
-    {k:'profile',ic:'👤',lb:'Profil'}
-  ];
+  const tabs=[{k:'feed',ic:'🏠',lb:'Akış'},{k:'leaderboard',ic:'🏆',lb:'Sıralama'},{k:'explore',ic:'🔍',lb:'Keşfet'},{k:'messages',ic:'✉️',lb:'Mesaj'},{k:'profile',ic:'👤',lb:'Profil'}];
   const isAdmin = S.me?.username === ADMIN_USERNAME;
   return h('div',{},[
     h('div',{class:'nav-top'},[
@@ -508,14 +510,11 @@ function navBar(){
         h('button',{class:'btn',style:{background:'transparent',color:'#a78bfa',fontSize:'.75rem',padding:'4px 10px',border:'1px solid #3d1f6e',borderRadius:'20px'},onclick:()=>A.logout()},'Çıkış')
       ])
     ]),
-    h('div',{class:'nav-bottom'},tabs.map(t=>{
-      const btn=h('button',{class:'btn',style:{background:'none',color:S.screen===t.k?'#c084fc':'#6b5b8a',display:'flex',flexDirection:'column',alignItems:'center',gap:'2px',fontSize:'.62rem',padding:'4px 6px',borderBottom:S.screen===t.k?'2px solid #c084fc':'2px solid transparent',position:'relative'},onclick:()=>go(t.k)});
-      const icWrap=h('span',{style:{position:'relative',display:'inline-block'}});
-      icWrap.appendChild(h('span',{style:{fontSize:'1.2rem'}},t.ic));
-      if(t.badge>0){const badge=h('span',{style:{position:'absolute',top:'-4px',right:'-6px',background:'#e879f9',color:'#fff',borderRadius:'50%',width:'16px',height:'16px',fontSize:'.55rem',display:'flex',alignItems:'center',justifyContent:'center',fontWeight:'700'}},String(t.badge>9?'9+':t.badge));icWrap.appendChild(badge);}
-      btn.appendChild(icWrap);btn.appendChild(document.createTextNode(t.lb));
-      return btn;
-    }))
+    h('div',{class:'nav-bottom'},tabs.map(t=>
+      h('button',{class:'btn',style:{background:'none',color:S.screen===t.k?'#c084fc':'#6b5b8a',display:'flex',flexDirection:'column',alignItems:'center',gap:'2px',fontSize:'.62rem',padding:'4px 6px',borderBottom:S.screen===t.k?'2px solid #c084fc':'2px solid transparent'},onclick:()=>go(t.k)},[
+        h('span',{style:{fontSize:'1.2rem'}},t.ic),t.lb
+      ])
+    ))
   ]);
 }
 
@@ -595,12 +594,7 @@ function postCard(post, forceExpand=false){
   // AI
   if(post.aiScore!==null&&post.aiScore!==undefined){
     const body=h('div',{style:{background:'#0a0718',border:'1px solid #3d1f6e',borderTop:'none',borderRadius:'0 0 10px 10px',padding:'12px 14px',display:'none'}});
-    if(post.aiYorum){
-      const sentences=post.aiYorum.split('. ').filter(s=>s.trim());
-      sentences.forEach(s=>{
-        body.appendChild(h('p',{style:{fontFamily:"'Crimson Text',serif",fontSize:'.9rem',color:'#c4b5fd',lineHeight:'1.6',marginBottom:'6px',paddingLeft:'8px',borderLeft:'2px solid #5b21b633'}},s.trim()+(s.endsWith('.')?'':'.')));
-      });
-    }
+    if(post.aiYorum)body.appendChild(h('p',{style:{fontFamily:"'Crimson Text',serif",fontSize:'.92rem',color:'#c4b5fd',fontStyle:'italic',lineHeight:'1.7',marginBottom:'10px'}},`"${post.aiYorum}"`));
     const tags=h('div',{style:{display:'flex',gap:'8px',flexWrap:'wrap'}});
     if(post.aiGuclu)tags.appendChild(h('span',{style:{background:'#052e16',border:'1px solid #166534',borderRadius:'20px',padding:'3px 10px',fontSize:'.76rem',color:'#34d399'}},`💪 ${post.aiGuclu}`));
     if(post.aiOneri)tags.appendChild(h('span',{style:{background:'#1e1b4b',border:'1px solid #4338ca',borderRadius:'20px',padding:'3px 10px',fontSize:'.76rem',color:'#a5b4fc'}},`💡 ${post.aiOneri}`));
@@ -970,38 +964,7 @@ function Messages(){
   showList();return wrap;
 }
 
-function Notifs(){
-  // Bildirimleri okundu olarak işaretle
-  const unread=(S.notifs||[]).filter(n=>!n.read);
-  if(unread.length>0){
-    unread.forEach(n=>{
-      n.read=true;
-      db.collection("notifs").doc(n.id).update({read:true}).catch(()=>{});
-    });
-    lsSet('yo_notifs',S.notifs);
-  }
-  const wrap=h('div',{},[navBar()]);
-  const page=h('div',{class:'page'});
-  page.appendChild(h('h2',{style:{fontFamily:"'Playfair Display',serif",color:'#e9d5ff',marginBottom:'16px',fontSize:'1.4rem'}},'🔔 Bildirimler'));
-  const notifs=S.notifs||[];
-  if(!notifs.length){
-    page.appendChild(h('p',{style:{color:'#6b5b8a',fontStyle:'italic',textAlign:'center',marginTop:'40px'}},'Henüz bildirim yok. Şiirlerine yorum ve puan geldikçe burada görünecek! 🌙'));
-  } else {
-    notifs.forEach(n=>{
-      const card=h('div',{class:'card',style:{display:'flex',gap:'12px',alignItems:'flex-start',background:n.read?'linear-gradient(135deg,#1a0f2e,#160d28)':'linear-gradient(135deg,#2d1060,#1e0f3a)',border:n.read?'1px solid #2d1b52':'1px solid #7c3aed'}});
-      card.appendChild(h('span',{style:{fontSize:'1.5rem',flexShrink:'0'}},n.text.includes('yorum')? '💬':'⭐'));
-      const info=h('div',{style:{flex:'1'}});
-      info.appendChild(h('p',{style:{color:'#e9d5ff',fontSize:'.92rem',lineHeight:'1.5',fontFamily:"'Crimson Text',serif"}},n.text));
-      info.appendChild(h('p',{style:{color:'#6b5b8a',fontSize:'.75rem',marginTop:'4px'}},n.date));
-      card.appendChild(info);
-      if(!n.read)card.appendChild(h('span',{style:{width:'8px',height:'8px',borderRadius:'50%',background:'#c084fc',flexShrink:'0',marginTop:'4px'}}));
-      page.appendChild(card);
-    });
-  }
-  wrap.appendChild(page);return wrap;
-}
-
-
+function render(){
   const app=document.getElementById('app');
   app.innerHTML='';
   
@@ -1023,7 +986,7 @@ function Notifs(){
     app.appendChild(Screen());
     return;
   }
-  const screens={feed:Feed,leaderboard:Leaderboard,explore:Explore,profile:Profile,postdetail:PostDetail,messages:Messages,notifs:Notifs};
+  const screens={feed:Feed,leaderboard:Leaderboard,explore:Explore,profile:Profile,postdetail:PostDetail,messages:Messages};
   const Screen=screens[S.screen]||Feed;
   app.appendChild(Screen());
 }
