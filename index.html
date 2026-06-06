@@ -2,77 +2,64 @@
 <html lang="tr">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Yeni Ozanlar 🪶</title>
-  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;1,400&family=Crimson+Text:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
   <style>
-    *{box-sizing:border-box;margin:0;padding:0}
-    body{background:#0f0a1a;color:#f0e8ff;font-family:'Crimson Text',Georgia,serif;min-height:100vh}
-    
-    /* 1. KARTLAR: Genişletildi ve minimum boyut YouTube videosuna göre ayarlandı */
-    .card{background:linear-gradient(135deg,#1a0f2e,#160d28);border:1px solid #2d1b52;border-radius:20px;padding:24px;margin-bottom:24px;width:95%;max-width:650px;margin-left:auto;margin-right:auto;min-height:350px;position:relative}
-    
-    .btn{cursor:pointer;border:none;outline:none;transition:all .2s;font-family:'Crimson Text',serif}
-    .pb{background:linear-gradient(135deg,#7c3aed,#a855f7);color:#fff;padding:12px 24px;border-radius:50px;font-weight:600}
-    .nav-bottom{position:fixed;bottom:0;left:0;right:0;z-index:100;background:rgba(15,10,26,.98);border-top:1px solid #2d1b52;display:flex;justify-content:space-around;padding:10px}
-    .page{padding:80px 16px 100px}
-    .notify-msg{border-left:4px solid #a855f7 !important;background:#1e1b4b !important}
+    body { background: #0f0a1a; color: #f0e8ff; font-family: sans-serif; margin: 0; padding: 0; }
+    /* Geniş kart tasarımı */
+    .card { background: #1a0f2e; border: 1px solid #2d1b52; border-radius: 20px; padding: 30px; margin: 20px auto; width: 90%; max-width: 600px; min-height: 400px; }
+    .btn { background: #7c3aed; color: white; padding: 15px; border-radius: 10px; cursor: pointer; width: 100%; border: none; font-size: 16px; margin-top: 10px; }
   </style>
-  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
 </head>
 <body>
-<div id="app"></div>
-<script>
-// --- Firebase Ayarları ---
-const firebaseConfig = { apiKey: "AIzaSyC6sshBjUU7xZf_KgjwW2yWuvE1ZG9oZWY", authDomain: "yeniozanlar-68b49.firebaseapp.com", projectId: "yeniozanlar-68b49", storageBucket: "yeniozanlar-68b49.firebasestorage.app", messagingSenderId: "99003509618", appId: "1:99003509618:web:e4f36d85378f2e554fcbeb" };
-if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
-const db = firebase.firestore();
+  <div id="app"></div>
+  <script>
+    // 1. Durum (State) tanımları
+    let S = { posts: [], loading: true, pageLimit: 3 };
 
-// --- Global State ---
-let S = { users: [], posts: [], me: null, screen: 'feed', msgs: [], pageLimit: 3, loading: true };
+    // 2. Basit render fonksiyonu (Hatasız olması için)
+    function render() {
+      const app = document.getElementById('app');
+      if (S.loading) {
+        app.innerHTML = '<div style="text-align:center; padding-top:50px;">Yükleniyor...</div>';
+        return;
+      }
+      
+      app.innerHTML = '<div id="main" style="padding-bottom:100px;"></div>';
+      const main = document.getElementById('main');
 
-// --- Bildirim Sistemi ---
-const A = {
-  sendSystemNotification(toId, text) {
-    if(!S.msgs) S.msgs = [];
-    S.msgs.unshift({id:Math.random().toString(36).slice(2), fromId:"system", toId, text, date:new Date().toLocaleString('tr-TR')});
-    localStorage.setItem('yo_msgs', JSON.stringify(S.msgs));
-  },
-  // Bu fonksiyonları mevcut kodunuzdaki yerlerine ekleyin veya güncelleyin
-  addComment(pid, text) {
-    const post = S.posts.find(p => p.id === pid);
-    if(post && S.me && post.authorId !== S.me.id) A.sendSystemNotification(post.authorId, `${S.me.name} şiirinize yorum yaptı.`);
-  },
-  ratePost(pid, score) {
-    const post = S.posts.find(p => p.id === pid);
-    if(post && S.me && post.authorId !== S.me.id) A.sendSystemNotification(post.authorId, `${S.me.name} şiirinize ${score} puan verdi.`);
-  }
-};
+      // İlk 3 şiiri göster
+      const gorunur = S.posts.slice(0, S.pageLimit);
+      gorunur.forEach(p => {
+        const div = document.createElement('div');
+        div.className = 'card';
+        div.innerHTML = `<h2>${p.title || 'Şiir'}</h2><p style="margin-top:20px; font-size:18px;">${p.text}</p>`;
+        main.appendChild(div);
+      });
 
-// --- RENDER (Feed Sayfası İçin Sınırlandırma) ---
-function renderFeed() {
-  const container = document.createElement('div');
-  // 2. KURAL: Sayfada sadece ilk 3'ü göster
-  const gorunurPostlar = S.posts.slice(0, S.pageLimit);
-  
-  gorunurPostlar.forEach(p => {
-    container.appendChild(postCard(p)); // Mevcut postCard fonksiyonunuzu kullanır
-  });
-  
-  if (S.posts.length > S.pageLimit) {
-    const btn = document.createElement('button');
-    btn.className = 'pb btn';
-    btn.style.width = '100%';
-    btn.innerText = 'Daha Fazla Şiir Yükle';
-    btn.onclick = () => { S.pageLimit += 3; render(); };
-    container.appendChild(btn);
-  }
-  return container;
-}
+      // "Daha Fazla Gör" butonu
+      if (S.posts.length > S.pageLimit) {
+        const btn = document.createElement('button');
+        btn.className = 'btn';
+        btn.innerText = 'Daha Fazla Şiir Gör';
+        btn.onclick = () => { S.pageLimit += 3; render(); };
+        main.appendChild(btn);
+      }
+    }
 
-// Not: Mevcut 'render' fonksiyonunuzda 'feed' ekranını çağırırken 
-// S.pageLimit kontrolünü yapan bu yapıyı kullanın.
-</script>
+    // 3. Veri çekme simülasyonu (Firebase kodlarınızı buraya ekleyeceksiniz)
+    async function verileriYukle() {
+      try {
+        // Firebase'den verileri buraya çekip S.posts'a atayacağız
+        // Örnek: S.posts = await db.collection('posts').get()...
+        S.posts = [{title: "Örnek Şiir 1", text: "..."}, {title: "Örnek Şiir 2", text: "..."}, {title: "Örnek Şiir 3", text: "..."}, {title: "Örnek Şiir 4", text: "..."}]; 
+        S.loading = false;
+        render();
+      } catch (e) {
+        console.error("Hata:", e);
+      }
+    }
+
+    verileriYukle();
+  </script>
 </body>
 </html>
