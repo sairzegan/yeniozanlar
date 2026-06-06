@@ -160,6 +160,14 @@ async function verileriYukle() {
     const postsSnapshot = await db.collection("posts").get().catch(() => ({ docs: [] }));
     const tumPostlar = postsSnapshot.docs.length ? postsSnapshot.docs.map(doc => doc.data()) : [];
     S.posts = tumPostlar.sort((a, b) => b.date.localeCompare(a.date));
+  const msgsSnapshot = await db.collection("messages").get().catch(() => ({ docs: [] }));
+    S.msgs = msgsSnapshot.docs.length ? msgsSnapshot.docs.map(doc => doc.data()) : [];
+
+    render(); 
+  } catch (err) {
+    console.error("Veri yükleme hatası:", err);
+  }
+}
 
     if (S.me && S.me.username === ADMIN_USERNAME) {
       S.me = adminProfileObj;
