@@ -12,18 +12,18 @@
     ::-webkit-scrollbar-thumb{background:#6d28d9;border-radius:2px}
     
     /* Kartların üst boşluğunu silme butonu için artırdık */
-    .card{background:linear-gradient(135deg,#1a0f2e,#160d28);border:1px solid #2d1b52;border-radius:16px;padding:24px 20px 20px 20px;margin-bottom:16px;position:relative !important}
+    .card{background:linear-gradient(135deg,#1a0f2e,#160d28);border:1px solid #2d1b52;border-radius:14px;padding:14px 12px 14px 12px;margin-bottom:12px;position:relative !important}
     .btn{cursor:pointer;border:none;outline:none;transition:all .2s;font-family:'Crimson Text',serif}
     .btn:hover{opacity:.85}
     input,textarea{outline:none;font-family:'Crimson Text',serif}
     .fade{animation:fi .35s ease}
     @keyframes fi{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
-    .nav-bottom{position:fixed;bottom:0;left:0;right:0;z-index:100;background:rgba(15,10,26,.96);backdrop-filter:blur(12px);border-top:1px solid #2d1b52;display:flex;justify-content:space-around;padding:8px 0 12px}
-    .nav-top{position:fixed;top:0;left:0;right:0;z-index:100;background:rgba(15,10,26,.96);backdrop-filter:blur(12px);border-bottom:1px solid #2d1b52;display:flex;align-items:center;justify-content:space-between;padding:10px 16px}
-    .page{padding:80px 16px 80px;max-width:560px;margin:0 auto}
+    .nav-bottom{position:fixed;bottom:0;left:0;right:0;z-index:100;background:rgba(15,10,26,.96);backdrop-filter:blur(12px);border-top:1px solid #2d1b52;display:flex;justify-content:space-around;padding:6px 0 10px}
+    .nav-top{position:fixed;top:0;left:0;right:0;z-index:100;background:rgba(15,10,26,.96);backdrop-filter:blur(12px);border-bottom:1px solid #2d1b52;display:flex;align-items:center;justify-content:space-between;padding:8px 12px}
+    .page{padding:68px 8px 72px;max-width:680px;margin:0 auto}
     .av{display:inline-flex;align-items:center;justify-content:center;border-radius:50%;font-weight:700;flex-shrink:0}
     .modal-bg{position:fixed;inset:0;z-index:300;background:rgba(0,0,0,.78);backdrop-filter:blur(8px);display:flex;align-items:flex-end;justify-content:center}
-    .modal{width:100%;max-width:560px;background:linear-gradient(160deg,#1e0f3a,#160d28);border-radius:22px 22px 0 0;border:1px solid #5b21b6;border-bottom:none;padding:22px 20px 44px}
+    .modal{width:100%;max-width:680px;background:linear-gradient(160deg,#1e0f3a,#160d28);border-radius:22px 22px 0 0;border:1px solid #5b21b6;border-bottom:none;padding:18px 14px 40px}
     .pb{background:linear-gradient(135deg,#7c3aed,#a855f7);color:#fff;padding:10px 24px;border-radius:50px;font-size:1rem;font-family:'Crimson Text',serif;font-weight:600;border:none;cursor:pointer}
     .inp{width:100%;background:#0f0a1a;border:1px solid #3d1f6e;border-radius:10px;padding:10px 14px;color:#e9d5ff;font-family:'Crimson Text',serif;font-size:1rem}
     .score-box{text-align:center;background:#0f0a1a;border-radius:10px;padding:6px 10px;min-width:50px}
@@ -478,9 +478,10 @@ function postCard(post, forceExpand=false){
     cbody.appendChild(cItem);
   });
   if(!(post.comments||[]).length) cbody.appendChild(h('p',{style:{fontSize:'.82rem',color:'#6b5b8a',fontStyle:'italic',marginBottom:'8px'}},'Ozan seni bekliyor! 🌙'));
-  const ci=h('input',{type:'text',placeholder:'Düşünceni paylaş...',class:'inp',style:{borderRadius:'20px',flex:'1'}});
+  const ci=h('textarea',{placeholder:'Düşünceni paylaş... Şiir hakkındaki düşüncelerini, hissettirdiklerini yaz.',class:'inp',rows:'3',style:{borderRadius:'14px',flex:'1',resize:'none',lineHeight:'1.6',fontSize:'.95rem'}});
   ci.onclick=e=>e.stopPropagation();
-  cbody.appendChild(h('div',{style:{display:'flex',gap:'8px',marginTop:'6px'}},[av(S.me,28),ci,h('button',{class:'pb btn',style:{padding:'6px 14px',fontSize:'.85rem'},onclick:(e)=>{e.stopPropagation();if(!ci.value.trim())return;A.addComment(post.id,ci.value.trim());ci.value='';}}, '↩')]));
+  ci.addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key==='Enter'){e.stopPropagation();if(!ci.value.trim())return;A.addComment(post.id,ci.value.trim());ci.value='';}});
+  cbody.appendChild(h('div',{style:{display:'flex',gap:'8px',marginTop:'6px',alignItems:'flex-end'}},[av(S.me,28),ci,h('button',{class:'pb btn',style:{padding:'8px 14px',fontSize:'.85rem',flexShrink:'0'},onclick:(e)=>{e.stopPropagation();if(!ci.value.trim())return;A.addComment(post.id,ci.value.trim());ci.value='';}}, '↩')]));
   full.appendChild(cbtn);full.appendChild(cbody);
 
   // kapat butonu
