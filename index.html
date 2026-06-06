@@ -933,7 +933,8 @@ function Messages(){
     ct.innerHTML='';
     ct.appendChild(h('button',{class:'btn',style:{background:'none',color:'#a78bfa',marginBottom:'12px'},onclick:()=>{chat=null;showList();}},'← Geri'));
     const msgs=h('div',{style:{height:'52vh',overflowY:'auto',display:'flex',flexDirection:'column',gap:'10px',paddingBottom:'8px'}});
-    S.msgs.filter(m=>(m.fromId===S.me?.id&&m.toId===chat)||(m.fromId===chat&&m.toId===S.me?.id)).forEach(m=>{
+  // Filtreyi tamamen kaldırdık, bakalım mesajlar gelecek mi?
+    S.msgs.forEach(m=>{
       const mine=m.fromId===S.me?.id;
       msgs.appendChild(h('div',{style:{display:'flex',justifyContent:mine?'flex-end':'flex-start'}},[h('div',{style:{maxWidth:'70%',background:mine?'linear-gradient(135deg,#7c3aed,#a855f7)':'#1a0f2e',borderRadius:mine?'16px 16px 4px 16px':'16px 16px 16px 4px',padding:'10px 14px',border:mine?'none':'1px solid #2d1b52'}},[h('p',{style:{color:'#f0e8ff',fontSize:'.95rem'}},m.text),h('p',{style:{color:mine?'#ddd6fe':'#6b5b8a',fontSize:'.7rem',marginTop:'4px',textAlign:mine?'right':'left'}},m.date)])]));
     });
