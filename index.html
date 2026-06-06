@@ -951,3 +951,55 @@ verileriYukle();
 </script>
 </body>
 </html>
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Yeni Ozanlar 🪶</title>
+  <style>
+    /* Bildirim Stili */
+    .toast-container { position: fixed; top: 20px; right: 20px; z-index: 9999; display: flex; flex-direction: column; gap: 10px; }
+    .toast { background: #2d1b52; color: #fff; padding: 12px 20px; border-radius: 8px; border: 1px solid #7c3aed; box-shadow: 0 4px 12px rgba(0,0,0,0.5); animation: slideIn 0.3s ease-out; }
+    @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+    
+    /* Mevcut Tasarımın */
+    body{background:#0f0a1a;color:#f0e8ff;font-family:sans-serif;margin:0;padding:20px;}
+    .btn{cursor:pointer;background:#7c3aed;color:#fff;padding:10px;border-radius:8px;border:none;margin-top:10px;}
+  </style>
+</head>
+<body>
+
+<div id="app"></div>
+
+<script>
+// --- BİLDİRİM FONKSİYONU ---
+function notify(msg) {
+  let container = document.getElementById('toast-box');
+  if (!container) {
+    container = document.createElement('div');
+    container.id = 'toast-box';
+    container.className = 'toast-container';
+    document.body.appendChild(container);
+  }
+  const toast = document.createElement('div');
+  toast.className = 'toast';
+  toast.innerText = msg;
+  container.appendChild(toast);
+  setTimeout(() => { toast.remove(); }, 3000);
+}
+
+// --- SENİN ANA MANTIĞIN ---
+function renderApp() {
+  const app = document.getElementById('app');
+  app.innerHTML = `
+    <h1>Yeni Ozanlar Meclisi</h1>
+    <button class="btn" onclick="notify('Bildirim test edildi! 🪶')">Bildirim Test Et</button>
+    <button class="btn" onclick="notify('Şiirin başarıyla paylaşıldı!')">Paylaşım Test Et</button>
+  `;
+}
+
+renderApp();
+</script>
+</body>
+</html>
