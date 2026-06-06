@@ -410,14 +410,15 @@ const A = {
       db.collection("posts").doc(pid).update({ userRatings: S.posts[pIndex].userRatings }).then(() => verileriYukle());
     }
   },
-    sendMsg(toId, text){
+  sendMsg(toId, text){
     const newMsg = {id:uid(), fromId:S.me.id, toId, text, date:now()};
-    S.msgs.push(newMsg);
-    save();
-    render();
     
+    // S.msgs.push(newMsg) yerine doğrudan veritabanına gönderip 
+    // sonra verileriYukle() ile güncel listeyi çekmek en garantisidir.
     db.collection("messages").add(newMsg)
-      .then(() => { verileriYukle(); })
+      .then(() => { 
+        verileriYukle(); 
+      })
       .catch(err => console.error("Mesaj hatası:", err));
   },
   addComment(pid, text) {
