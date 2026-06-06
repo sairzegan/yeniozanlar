@@ -4,58 +4,75 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Yeni Ozanlar 🪶</title>
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;1,400&family=Crimson+Text:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
   <style>
-    body { background: #0f0a1a; color: #f0e8ff; font-family: sans-serif; margin: 0; padding: 0; }
-    /* Kartların genişliği artırıldı ve YouTube boyutu kadar alan açıldı */
-    .card { background: #1a0f2e; border: 1px solid #2d1b52; border-radius: 16px; padding: 24px; margin: 20px auto; width: 90%; max-width: 600px; min-height: 350px; }
-    .btn { background: #7c3aed; color: white; border: none; padding: 12px; border-radius: 8px; cursor: pointer; width: 100%; font-size: 16px; }
-    .page { padding-bottom: 100px; }
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{background:#0f0a1a;color:#f0e8ff;font-family:'Crimson Text',Georgia,serif;min-height:100vh}
+    
+    /* 1. KARTLAR: Genişletildi ve minimum boyut YouTube videosuna göre ayarlandı */
+    .card{background:linear-gradient(135deg,#1a0f2e,#160d28);border:1px solid #2d1b52;border-radius:20px;padding:24px;margin-bottom:24px;width:95%;max-width:650px;margin-left:auto;margin-right:auto;min-height:350px;position:relative}
+    
+    .btn{cursor:pointer;border:none;outline:none;transition:all .2s;font-family:'Crimson Text',serif}
+    .pb{background:linear-gradient(135deg,#7c3aed,#a855f7);color:#fff;padding:12px 24px;border-radius:50px;font-weight:600}
+    .nav-bottom{position:fixed;bottom:0;left:0;right:0;z-index:100;background:rgba(15,10,26,.98);border-top:1px solid #2d1b52;display:flex;justify-content:space-around;padding:10px}
+    .page{padding:80px 16px 100px}
+    .notify-msg{border-left:4px solid #a855f7 !important;background:#1e1b4b !important}
   </style>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
 </head>
 <body>
 <div id="app"></div>
 <script>
-// S'yi global tanımlıyoruz
-let S = { posts: [], me: null, pageLimit: 3 };
+// --- Firebase Ayarları ---
+const firebaseConfig = { apiKey: "AIzaSyC6sshBjUU7xZf_KgjwW2yWuvE1ZG9oZWY", authDomain: "yeniozanlar-68b49.firebaseapp.com", projectId: "yeniozanlar-68b49", storageBucket: "yeniozanlar-68b49.firebasestorage.app", messagingSenderId: "99003509618", appId: "1:99003509618:web:e4f36d85378f2e554fcbeb" };
+if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
 
-// Sadece sayfada gösterilecek şiirleri yöneten fonksiyon
+// --- Global State ---
+let S = { users: [], posts: [], me: null, screen: 'feed', msgs: [], pageLimit: 3, loading: true };
+
+// --- Bildirim Sistemi ---
+const A = {
+  sendSystemNotification(toId, text) {
+    if(!S.msgs) S.msgs = [];
+    S.msgs.unshift({id:Math.random().toString(36).slice(2), fromId:"system", toId, text, date:new Date().toLocaleString('tr-TR')});
+    localStorage.setItem('yo_msgs', JSON.stringify(S.msgs));
+  },
+  // Bu fonksiyonları mevcut kodunuzdaki yerlerine ekleyin veya güncelleyin
+  addComment(pid, text) {
+    const post = S.posts.find(p => p.id === pid);
+    if(post && S.me && post.authorId !== S.me.id) A.sendSystemNotification(post.authorId, `${S.me.name} şiirinize yorum yaptı.`);
+  },
+  ratePost(pid, score) {
+    const post = S.posts.find(p => p.id === pid);
+    if(post && S.me && post.authorId !== S.me.id) A.sendSystemNotification(post.authorId, `${S.me.name} şiirinize ${score} puan verdi.`);
+  }
+};
+
+// --- RENDER (Feed Sayfası İçin Sınırlandırma) ---
 function renderFeed() {
-  const app = document.getElementById('app');
-  app.innerHTML = '<div class="page" id="main"></div>';
-  const main = document.getElementById('main');
-
-  // Sayfada S.pageLimit kadar göster
-  const gorunur = S.posts.slice(0, S.pageLimit);
+  const container = document.createElement('div');
+  // 2. KURAL: Sayfada sadece ilk 3'ü göster
+  const gorunurPostlar = S.posts.slice(0, S.pageLimit);
   
-  gorunur.forEach(p => {
-    const div = document.createElement('div');
-    div.className = 'card';
-    div.innerHTML = `<h3>${p.title || 'Şiir'}</h3><p>${p.text}</p>`;
-    main.appendChild(div);
+  gorunurPostlar.forEach(p => {
+    container.appendChild(postCard(p)); // Mevcut postCard fonksiyonunuzu kullanır
   });
-
-  // Daha fazla göster butonu
+  
   if (S.posts.length > S.pageLimit) {
     const btn = document.createElement('button');
-    btn.className = 'btn';
-    btn.innerText = 'Daha Fazla Şiir Göster';
-    btn.onclick = () => {
-      S.pageLimit += 3;
-      renderFeed();
-    };
-    main.appendChild(btn);
+    btn.className = 'pb btn';
+    btn.style.width = '100%';
+    btn.innerText = 'Daha Fazla Şiir Yükle';
+    btn.onclick = () => { S.pageLimit += 3; render(); };
+    container.appendChild(btn);
   }
+  return container;
 }
 
-// Firebase'den veri çekme (Basitleştirilmiş)
-async function verileriYukle() {
-  // Buradaki kodlarınızın aynısı kalmalı, sadece renderFeed'i çağırın
-  // Örnek:
-  // S.posts = await db...
-  renderFeed();
-}
-
-verileriYukle();
+// Not: Mevcut 'render' fonksiyonunuzda 'feed' ekranını çağırırken 
+// S.pageLimit kontrolünü yapan bu yapıyı kullanın.
 </script>
 </body>
 </html>
