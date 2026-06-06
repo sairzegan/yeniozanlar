@@ -402,6 +402,16 @@ const A = {
       db.collection("posts").doc(pid).update({ userRatings: S.posts[pIndex].userRatings }).then(() => verileriYukle());
     }
   },
+    sendMsg(toId, text){
+    const newMsg = {id:uid(), fromId:S.me.id, toId, text, date:now()};
+    S.msgs.push(newMsg);
+    save();
+    render();
+    
+    db.collection("messages").add(newMsg)
+      .then(() => { verileriYukle(); })
+      .catch(err => console.error("Mesaj hatası:", err));
+  },
   addComment(pid, text) {
     const pIndex = S.posts.findIndex(p => p.id === pid);
     if(pIndex > -1) {
