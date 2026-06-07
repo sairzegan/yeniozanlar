@@ -154,7 +154,8 @@ async function verileriYukle() {
 
     const postsSnapshot = await db.collection("posts").get().catch(() => ({ docs: [] }));
     const tumPostlar = postsSnapshot.docs.length ? postsSnapshot.docs.map(doc => doc.data()) : [];
-    S.posts = tumPostlar.sort((a, b) => (b.ts||0) - (a.ts||0));
+    const parseDate=d=>{if(!d)return 0;try{const p=d.split(' ');const dmy=p[0].split('.');const hms=p[1]?.split(':');return new Date(dmy[2],dmy[1]-1,dmy[0],hms?.[0]||0,hms?.[1]||0,hms?.[2]||0).getTime();}catch{return 0;}};
+    S.posts = tumPostlar.sort((a,b)=>(b.ts||parseDate(b.date))-(a.ts||parseDate(a.date)));
 
     // Mesajları Firebase'den yükle
     if(S.me) {
@@ -409,7 +410,7 @@ const A = {
       // Bildirim gönder
       const post=S.posts[pIndex];
       const postTitle=post.title||post.text?.slice(0,20)||'şiirinize';
-      A.addNotif(post.authorId, `@${S.me.username}, "${postTitle}" başlıklı şiirinize ${score}/10 puan verdi.`);
+      A.addNotif(post.authorId, `${S.me.name||S.me.username} sizin "${postTitle}" başlıklı şiirinize ${score}/10 puan verdi.`);
       db.collection("posts").doc(pid).update({ userRatings: S.posts[pIndex].userRatings }).then(() => verileriYukle());
     }
   },
@@ -424,7 +425,7 @@ const A = {
       // Bildirim gönder
       const post=S.posts[pIndex];
       const postTitle=post.title||post.text?.slice(0,20)||'şiirinize';
-      A.addNotif(post.authorId, `@${S.me.username}, "${postTitle}" başlıklı şiirinize yorum yaptı.`);
+      A.addNotif(post.authorId, `${S.me.name||S.me.username} sizin "${postTitle}" başlıklı şiirinize yorum yaptı.`);
       db.collection("posts").doc(pid).update({ comments: updatedComments }).then(() => verileriYukle());
     }
   },
@@ -541,9 +542,9 @@ function postCard(post, forceExpand=false){
   const preview=h('div',{style:{cursor:'pointer'}});
   // görsel varsa üstte
   if(post.image){
-    preview.appendChild(h('img',{src:post.image,style:{width:'100%',borderRadius:'10px',marginBottom:'10px',height:'160px',objectFit:'cover'}}));
+    preview.appendChild(h('img',{src:post.image,style:{width:'100%',borderRadius:'10px',marginBottom:'10px',height:'220px',objectFit:'cover'}}));
   } else if(vid){
-    const yt=h('div',{style:{width:'100%',height:'160px',borderRadius:'10px',marginBottom:'10px',overflow:'hidden',position:'relative',background:'#000'}});
+    const yt=h('div',{style:{width:'100%',height:'220px',borderRadius:'10px',marginBottom:'10px',overflow:'hidden',position:'relative',background:'#000'}});
     yt.innerHTML=`<img src="https://img.youtube.com/vi/${vid}/mqdefault.jpg" style="width:100%;height:100%;object-fit:cover;opacity:.8"><div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center"><span style="font-size:2.5rem">▶️</span></div>`;
     preview.appendChild(yt);
   }
@@ -650,7 +651,7 @@ function postCard(post, forceExpand=false){
   if(!(post.comments||[]).length) cbody.appendChild(h('p',{style:{fontSize:'.82rem',color:'#6b5b8a',fontStyle:'italic',marginBottom:'8px'}},'Ozan seni bekliyor! 🌙'));
   const ci=h('textarea',{placeholder:'Düşünceni paylaş... Şiir hakkındaki düşüncelerini, hissettirdiklerini yaz.',class:'inp',rows:'3',style:{borderRadius:'14px',flex:'1',resize:'none',lineHeight:'1.6',fontSize:'.95rem'}});
   ci.onclick=e=>e.stopPropagation();
-  ci.addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key==='Enter'){e.stopPropagation();if(!ci.value.trim())return;A.addComment(post.id,ci.value.trim());ci.value='';}});
+  ci.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();e.stopPropagation();if(!ci.value.trim())return;A.addComment(post.id,ci.value.trim());ci.value='';}})
   cbody.appendChild(h('div',{style:{display:'flex',gap:'8px',marginTop:'6px',alignItems:'flex-end'}},[av(S.me,28),ci,h('button',{class:'pb btn',style:{padding:'8px 14px',fontSize:'.85rem',flexShrink:'0'},onclick:(e)=>{e.stopPropagation();if(!ci.value.trim())return;A.addComment(post.id,ci.value.trim());ci.value='';}}, '↩')]));
   full.appendChild(cbtn);full.appendChild(cbody);
 
@@ -1038,8 +1039,10 @@ function Messages(){
     });
     msgs.scrollTop=msgs.scrollHeight;
     const mi=inp('Mesajını yaz...');mi.style.borderRadius='20px';mi.style.flex='1';
+    const sendMsg=()=>{if(!mi.value.trim())return;A.sendMsg(chat,mi.value.trim());mi.value='';showChat();};
+    mi.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMsg();}});
     ct.appendChild(msgs);
-    ct.appendChild(h('div',{style:{display:'flex',gap:'8px',marginTop:'10px'}},[mi,h('button',{class:'pb btn',style:{padding:'10px 18px'},onclick:()=>{if(!mi.value.trim())return;A.sendMsg(chat,mi.value.trim());mi.value='';showChat();}},'↩')]));
+    ct.appendChild(h('div',{style:{display:'flex',gap:'8px',marginTop:'10px'}},[mi,h('button',{class:'pb btn',style:{padding:'10px 18px'},onclick:sendMsg},'↩')]));
   }
 
   msgsBtn.onclick=()=>{activeTab='msgs';msgsBtn.style.background='linear-gradient(135deg,#7c3aed,#a855f7)';msgsBtn.style.color='#fff';msgsBtn.style.border='none';notifBtn.style.background='#1a0f2e';notifBtn.style.color='#a78bfa';notifBtn.style.border='1px solid #2d1b52';showMsgs();};
