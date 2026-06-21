@@ -7,7 +7,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght=0,400;0,700;1,400&family=Crimson+Text:ital,wght=0,400;0,600;1,400&display=swap" rel="stylesheet">
   <style>
     *{box-sizing:border-box;margin:0;padding:0}
-    html{font-size:20px}
+    html{font-size:22px}
     body{background:#0f0a1a;color:#f0e8ff;font-family:'Crimson Text',Georgia,serif;min-height:100vh;font-size:1.1rem}
     ::-webkit-scrollbar{width:4px}
     ::-webkit-scrollbar-thumb{background:#6d28d9;border-radius:2px}
@@ -203,9 +203,11 @@ function scorePoem(text){
   const kliseImgeler=['ayna metafor','sevgili gül','aşk ateş','özlem yağmur','hüzün gece','ağlayan göz','kırık kalp','sarı yaprak','solmuş çiçek'];
   const kliseSayisi=[...kliseMetaforlar,...kliseImgeler].filter(k=>tL.includes(k.split(' ')[0])&&tL.includes(k.split(' ').pop())).length;
 
-  // ŞİİRSEL sembol kelimeler (artı puan)
-  const sembolKelimeler=['labirent','kıyamet','sessizlik','yokluk','sonsuzluk','uçurum','köprü','barikat','kafes','zincir','perde','kök','tohum','kül','yankı','ayna','gölge','iz','yankı'];
-  const sembolSayisi=sembolKelimeler.filter(w=>tL.includes(w)).length;
+  // ŞİİRSEL sembol kelimeler (artı puan) — tam kelime eşleşmesi
+  const sembolKelimeler=['labirent','kıyamet','sessizlik','yokluk','sonsuzluk','uçurum','köprü','barikat','kafes','zincir','perde','kök','tohum','kül','yankı','gölge','iz','boşluk','sonsuz','yalnızlık'];
+  const tumKelimeler=words.map(w=>w.toLowerCase().replace(/[^a-züğışöçâîû]/gi,''));
+  const sembolBulunanlar=sembolKelimeler.filter(s=>tumKelimeler.includes(s));
+  const sembolSayisi=sembolBulunanlar.length;
 
   // Özgün metafor tespiti (basit: sık kullanılmayan kelime + eylem)
   const ozgunKelimeler=words.filter(w=>{const k=w.toLowerCase();return k.length>5&&!kliseMetaforlar.join(' ').includes(k)&&!['gibi','sanki','benim','senim','onun','bana','sana','olan','eden','için','bile','dahi'].includes(k);});
@@ -215,9 +217,15 @@ function scorePoem(text){
   const modernSozler=['telefon','internet','bilgisayar','araba','market','para','fatura','hastane','ofis','toplantı','proje','şirket','uygulama','instagram','whatsapp','sosyal medya','mesaj','wifi'];
   const modernKelime=modernSozler.filter(w=>tL.includes(w));
 
-  // Günlük konuşma dili
-  const gunlukDil=['tamam','evet','hayır','artık','işte','şimdi','hadi','sanırım','bilmiyorum','neyse','yani','aslında'];
-  const gunlukSayisi=gunlukDil.filter(w=>tL.includes(w)).length;
+  // Günlük konuşma dili — tam kelime eşleşmesi
+  const gunlukDilListesi=['tamam','evet','hayır','artık','işte','şimdi','hadi','sanırım','bilmiyorum','neyse','yani','aslında','noolur','olur','olmaz','bak','dur','hey','ya','aa','off','vay','oof','yok','var','ne','kim','nasıl','neden','niçin','niye','gel','git','bak','al','ver','iste','sor'];
+  const gunlukBulunanlar=gunlukDilListesi.filter(w=>tumKelimeler.includes(w));
+  const gunlukSayisi=gunlukBulunanlar.length;
+
+  // Şiirsel kelime sayısı — az ise eksi puan
+  const siirselKelimeler=['yalnız','özlem','hasret','hüzün','seher','gurbet','figan','ah','vah','dem','bade','gül','bülbül','mehtap','şebnem','servi','deryA','ummAn','yürek','gönül','ruh','can','nur','ziya','naz','şevk','aşk','sevda','lebriz','nihan','ayan','nihAn'];
+  const siirselBulunanlar=siirselKelimeler.filter(s=>tumKelimeler.some(k=>k.startsWith(s.toLowerCase().replace(/[^a-züğışöçâîû]/gi,''))));
+  const siirselSayisi=siirselBulunanlar.length;
 
   // Didaktik/açıklayıcı cümleler
   const didaktik=['çünkü','dolayısıyla','bu nedenle','sonuç olarak','şöyle ki','demek ki','özetle','şunu söyleyeyim','anlayacağın'];
@@ -264,9 +272,19 @@ function scorePoem(text){
   /* ── PUAN HESAPLAMA ──────────────────────────────────── */
   let p=4.5;
 
-  // Uzunluk ve yapı
-  if(len>=8&&len<=60)p+=0.8;else if(len>60&&len<=120)p+=0.4;else if(len<5){p-=2.5;}else if(len<8){p-=1.2;}else if(len>150)p-=0.3;
-  if(lc>=4&&lc<=20)p+=0.6;else if(lc===3)p-=0.3;else if(lc<3){p-=1.0;}
+  // Uzunluk ve yapı — çok kısa şiire sert ceza
+  if(len>=12&&len<=60)p+=0.8;
+  else if(len>60&&len<=120)p+=0.4;
+  else if(len<4){p-=3.5;}  // 1-2 kelime: çok sert ceza
+  else if(len<6){p-=2.5;}  // 3-5 kelime
+  else if(len<10){p-=1.5;} // 6-9 kelime
+  else if(len<12){p-=0.5;}
+  else if(len>150)p-=0.3;
+
+  if(lc>=4&&lc<=20)p+=0.6;
+  else if(lc===3)p-=0.4;
+  else if(lc===2){p-=1.2;}
+  else if(lc<2){p-=2.0;}
 
   // Kelime zenginliği
   if(zenginlik>0.85)p+=1.5;else if(zenginlik>0.70)p+=0.9;else if(zenginlik>0.55)p+=0.3;else p-=0.4;
@@ -301,8 +319,14 @@ function scorePoem(text){
 
   // Dil cezaları
   p-=modernKelime.length*0.5;
-  if(gunlukSayisi>2)p-=(gunlukSayisi-2)*0.3;
+  if(gunlukSayisi>=5)p-=2.0;      // çok günlük dil
+  else if(gunlukSayisi>=3)p-=1.2;
+  else if(gunlukSayisi>=2)p-=0.6;
+  else if(gunlukSayisi>=1)p-=0.2;
   if(didaktikSayisi>0)p-=didaktikSayisi*0.5;
+  // Şiirsel dil bonusu
+  if(siirselSayisi>=3)p+=0.8;
+  else if(siirselSayisi>=1)p+=0.3;
 
   // Tekrar ceza
   if(tekrarSayisi>1)p-=(tekrarSayisi-1)*0.25;
@@ -353,8 +377,8 @@ function scorePoem(text){
   if(ozgunMetaforVar){
     parcalar.push(`Şiirde çarpıcı ve özgün bir metafor kullanımı göze çarpıyor — bu, şiiri sıradanlıktan kurtaran en güçlü unsur.`);
   }
-  if(sembolSayisi>0){
-    parcalar.push(`"${sembolKelimeler.filter(w=>tL.includes(w))[0]}" gibi sembolik bir kullanım şiire anlam katmanı ekliyor.`);
+  if(sembolSayisi>0&&sembolBulunanlar.length>0){
+    parcalar.push(`"${sembolBulunanlar[0]}" gibi sembolik bir kullanım şiire anlam katmanı ekliyor.`);
   }
 
   // 4. Ses araçları
@@ -390,13 +414,19 @@ function scorePoem(text){
   if(modernKelime.length>0){
     parcalar.push(`"${modernKelime.slice(0,2).join('", "')}" gibi gündelik/modern kelimeler şiirsel atmosferi kırıyor.`);
   }
+  if(gunlukSayisi>=3){
+    parcalar.push(`"${gunlukBulunanlar.slice(0,3).join('", "')}" gibi konuşma dili kelimeleri şiiri sıradan bir metne dönüştürüyor; şiirsel dil gerektiriyor.`);
+  } else if(gunlukSayisi>=1){
+    parcalar.push(`"${gunlukBulunanlar[0]}" gibi günlük konuşma ifadeleri şiirsel tonu zayıflatıyor.`);
+  }
   if(didaktikSayisi>0){
     parcalar.push(`Bazı dizeler açıklayıcı/didaktik bir anlatıma kayıyor; şiirde "göster, anlatma" ilkesi esas olmalı.`);
-  } else if(gunlukSayisi<=1&&modernKelime.length===0){
-    parcalar.push(`Dil şiirsel ve özenli; gündelik konuşmadan uzak, şiire has bir söyleyiş var.`);
   }
-
-  // 7. Kelime zenginliği ve tekrar
+  if(gunlukSayisi===0&&modernKelime.length===0&&siirselSayisi>=1){
+    parcalar.push(`Dil şiirsel ve özenli; gündelik konuşmadan uzak, şiire has bir söyleyiş var.`);
+  } else if(gunlukSayisi===0&&modernKelime.length===0){
+    parcalar.push(`Kelime tercihleri konuşma dilinden uzak; şiirsel bir özen hissediliyor.`);
+  }
   if(tekrarSayisi>1){
     parcalar.push(`Bazı kelimeler fazla tekrar ediyor; bu tekrar bilinçli bir stil tercihi değilse şiiri yataylaştırıyor.`);
   } else if(zenginlik>0.75){
