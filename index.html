@@ -1190,27 +1190,18 @@ function Notifs(){
   wrap.appendChild(page);return wrap;
 }
 
-function render() {
-  const app = document.getElementById('app');
-  app.innerHTML = ''; // Temizle
+function render(){
+  const app=document.getElementById('app');
+  app.innerHTML='';
   
-  // 1. Yükleme kontrolü
   if (S.loading) {
-     // ... yükleme ekranı kodları ...
-     return; // Yükleniyorsa burada dur
+    app.appendChild(h('div',{style:{minHeight:'100vh',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',background:'#0f0a1a'}},[
+      h('div',{style:{fontSize:'32px'}},'🪶'),
+      h('p',{style:{color:'#a78bfa',marginTop:'12px',fontStyle:'italic',fontSize:'1rem'}},'Ozanlar Meclisi Yükleniyor...')
+    ]));
+    return;
   }
 
-  // 2. Yükleme bittiyse buraya devam etmeli:
-  if(!S.me){
-    const screens = { /* ... login/register ... */ };
-    const Screen = screens[S.screen] || Landing;
-    app.appendChild(Screen());
-  } else {
-    const screens = { feed:Feed, leaderboard:Leaderboard, /* ... */ };
-    const Screen = screens[S.screen] || Feed;
-    app.appendChild(Screen());
-  }
-}
   if(!S.me){
     const screens={
       landing:Landing,
