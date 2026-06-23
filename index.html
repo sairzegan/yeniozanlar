@@ -132,348 +132,291 @@ const scoreColor=s=>{if(!s)return'#6b5b8a';if(s>=8.5)return'#fbbf24';if(s>=7)ret
 const scoreBadge=s=>{if(!s)return'';if(s>=9)return'🏆 Başyapıt';if(s>=8)return'⭐ Muhteşem';if(s>=7)return'✨ Güzel';if(s>=5)return'👍 İyi';return'📝 Gelişiyor'};
 
 
+
 function scorePoem(text){
-  if(!text||text.trim().length<5)return null;
-  const lines=text.split('\n').filter(s=>s.trim().length>0);
-  const words=text.trim().split(/\s+/);
-  const tL=text.toLowerCase();
-  const lc=lines.length, len=words.length;
+  if(!text||text.trim().length<3)return null;
 
-  // Benzersiz kelime oranı
-  const uniqW=new Set(words.map(k=>k.toLowerCase().replace(/[^a-züğışöçâîûÂÎÛ]/gi,''))).size;
-  const zenginlik=uniqW/Math.max(words.length,1);
+  const satirlar = text.split('\n').filter(s=>s.trim().length>0);
+  const tumKelimeler = text.trim().split(/\s+/).map(w=>w.toLowerCase().replace(/[^a-züğışöçâîû]/gi,''));
+  const benzersiz = new Set(tumKelimeler).size;
+  const lc = satirlar.length;
+  const len = tumKelimeler.length;
+  const tL = text.toLowerCase();
+  const hash = text.split('').reduce((a,c)=>((a<<5)-a)+c.charCodeAt(0),0)>>>0;
+  const rnd = n => hash % n;
 
-  // Hash — çeşitlilik için
-  const hash=text.split('').reduce((a,c)=>((a<<5)-a)+c.charCodeAt(0),0)>>>0;
-  const rnd=n=>hash%n;
+  const varMi = w => tumKelimeler.includes(w.toLowerCase().replace(/[^a-züğışöçâîû]/gi,''));
+  const birVarMi = arr => arr.filter(w=>varMi(w));
 
-  /* ── KAFIYE ANALİZİ ──────────────────────────────────── */
-  const sonSes=lines.map(l=>{
+  // Uzunluk
+  const cokKisa = len < 8 || lc < 3;
+
+  // Günlük dil
+  const gunlukListe = ['gel','git','bak','al','ver','dur','kalk','otur','yat','tamam','evet','hayir','neyse','yani','aslinda','iste','simdi','hadi','saniyorum','bilmiyorum','noolur','olur','olmaz','ya','aa','off','vay','oof','hey','ee','hmm','peki','madem','belki','galiba','bence','sence','boyle','soyle','oyle','nasil','neden','nicin','niye','seviyorum','seviyordum','sevmiyorum','istiyorum','istemiyorum','yapiyorum','gidiyorum','geliyorum','bakiyorum'];
+  const gunlukBulunan = tumKelimeler.filter((w,i,a)=>gunlukListe.includes(w)&&a.indexOf(w)===i);
+
+  // Didaktik
+  const didaktikListe = ['çünkü','dolayısıyla','bu nedenle','sonuç olarak','şöyle ki','demek ki','özetle','yani demek','anlayacağın','biliyorsunuz','bilirsiniz','şunu belirteyim','kısaca','özetlersek','sonuçta'];
+  const didaktikBulunan = didaktikListe.filter(d=>tL.includes(d));
+
+  // Klişe çiftler — her iki kelime de şiirde var mı?
+  const kliseCiftler = [
+    ['sac','ruzgar'],['goz','yildiz'],['yanak','gul'],['dudak','mercan'],
+    ['ask','ates'],['yurek','yan'],['kalp','kir'],['goz','deniz'],
+    ['bulbul','gul'],['mevsim','don'],['yaprak','dok'],['zaman','gec'],
+    ['sevgi','isik'],['gece','yalniz'],['ozlem','derin'],['huzun','deniz']
+  ];
+  const kliseBulunan = kliseCiftler.filter(cift=>cift.every(k=>tumKelimeler.some(w=>w.includes(k))));
+  const kliseTekListe = ['yanıyorum','yanarım','yandım','kırık kalp','kırık yürek','hasret kaldım','aşkından yandım','sensiz olmaz','seni bekliyorum'];
+  const kliseTekBulunan = kliseTekListe.filter(k=>tL.includes(k));
+
+  // Şiirsel kelimeler
+  const siirselListe = ['hüzün','keder','figan','gurbet','özlem','hasret','gönül','yürek','ruh','nur','mehtap','şebnem','seher','canan','yar','efkar','hicran','viran','şevk','neşe','baht','talih','felek','ahu','naz','niyaz','derin','sonsuz','yokluk','sessizlik'];
+  const siirselBulunan = birVarMi(siirselListe);
+
+  // Aliterasyon — satır bazlı tam kontrol
+  const aliterasyonSatirlar = satirlar.map(s=>{
+    const ws = s.trim().split(/\s+/).map(w=>w.toLowerCase().replace(/[^a-züğışöçâîû]/gi,'')[0]).filter(Boolean);
+    const hs={};ws.forEach(h=>{hs[h]=(hs[h]||0)+1});
+    const guclu=Object.entries(hs).filter(([,v])=>v>=3);
+    return guclu.length>0?{satir:s.trim(),harf:guclu[0][0]}:null;
+  }).filter(Boolean);
+  const aliterasyonVar = aliterasyonSatirlar.length>0;
+
+  // Asonans
+  const tumUnlular = tL.match(/[aeıioöuü]/g)||[];
+  const unluHS={};tumUnlular.forEach(u=>{unluHS[u]=(unluHS[u]||0)+1});
+  const domUnlu = Object.entries(unluHS).sort((a,b)=>b[1]-a[1])[0];
+  const asonansVar = domUnlu&&domUnlu[1]/tumUnlular.length>0.40&&tumUnlular.length>10;
+
+  // Kafiye
+  const satirSonlari = satirlar.map(l=>{
     const w=l.trim().split(/\s+/);
     return w[w.length-1]?.toLowerCase().replace(/[^a-züğışöçâîû]/gi,'')?.slice(-3)||'';
   });
-  let kafSayisi=0, ciftKafiye=0;
-  for(let i=0;i<sonSes.length-1;i++){
-    if(sonSes[i].length>1&&sonSes[i]===sonSes[i+1]){kafSayisi++;ciftKafiye++;}
-    else if(sonSes[i].length>1&&i+2<sonSes.length&&sonSes[i]===sonSes[i+2])kafSayisi++;
+  let kafiyeSayisi=0;
+  for(let i=0;i<satirSonlari.length-1;i++){
+    if(satirSonlari[i].length>1&&satirSonlari[i]===satirSonlari[i+1])kafiyeSayisi++;
+    else if(satirSonlari[i].length>1&&i+2<satirSonlari.length&&satirSonlari[i]===satirSonlari[i+2])kafiyeSayisi+=0.5;
   }
-  const kafOrani=kafSayisi/Math.max(lc-1,1);
-
-  // Zorlamalı kafiye (aynı ek 3+ kez)
-  const zorlamaEkler=['miş','mış','muş','müş','lar','ler','dan','den','den','tan','ten','nak','nek','mak','mek'];
-  const zorlamaKafiye=zorlamaEkler.filter(ek=>sonSes.filter(s=>s.endsWith(ek)).length>=Math.max(lc*0.4,2)).length>0;
-
-  // Kıta yapısı (4'lü gruplar)
-  const kitaSayisi=Math.floor(lc/4);
-  let kitaKafiyeDuzeni=false;
-  if(kitaSayisi>=2){
-    const son4=lines.map(l=>l.trim().split(/\s+/).pop()?.toLowerCase().replace(/[^a-züğışöçâîû]/gi,'')?.slice(-3)||'');
-    let duzHalk=0;
-    for(let i=0;i+3<son4.length;i+=4){if(son4[i+3]===son4[i+7]||son4[i+1]===son4[i+5])duzHalk++;}
-    kitaKafiyeDuzeni=duzHalk>0;
-  }
-
-  /* ── HECE ÖLÇÜSÜ ─────────────────────────────────────── */
-  const heceArr=lines.map(l=>l.trim().split(/\s+/).reduce((s,w)=>(w.match(/[aeıioöuüAEIİOÖUÜ]/g)||[]).length+s,0));
-  const heceMean=heceArr.reduce((a,b)=>a+b,0)/Math.max(heceArr.length,1);
-  const heceVar=heceArr.length>1?Math.sqrt(heceArr.reduce((s,h)=>s+(h-heceMean)**2,0)/heceArr.length):5;
-  const heceOlcusu=heceVar<2.2;
-  const serbestSiir=!heceOlcusu;
-
-  /* ── ALİTERASYON & ASONANS ───────────────────────────── */
-  const ilkHarf=words.map(w=>w[0]?.toLowerCase()).filter(Boolean);
-  const ilkHS={};ilkHarf.forEach(h=>{ilkHS[h]=(ilkHS[h]||0)+1});
-  const aliterasyon=Object.values(ilkHS).filter(v=>v>=3).length>0;
-  const aliterasyonHarf=Object.entries(ilkHS).filter(([,v])=>v>=3).map(([k])=>k).join(', ');
-
-  // Asonans (iç ünlü tekrarları)
-  const unlular=tL.match(/[aeıioöuü]/g)||[];
-  const unluHS={};unlular.forEach(u=>{unluHS[u]=(unluHS[u]||0)+1});
-  const asonans=Object.values(unluHS).some(v=>v/unlular.length>0.35);
-  const asonansUnlu=Object.entries(unluHS).sort((a,b)=>b[1]-a[1])[0]?.[0]||'';
-
-  /* ── İMGE & METAFOR ──────────────────────────────────── */
-  const benzetmeImleri=['gibi','sanki','andır','tıpkı','adeta','sanırsın','misali'];
-  const eylemMetafor=['söyler','bakar','ağlar','uçar','akar','solar','doğar','yanar','fısıldar','haykırır','titrer','büküldü','eridi','aktı','esti','sardı','yıkadı','çekti','bağladı'];
-  const benzetmeSayisi=benzetmeImleri.filter(w=>tL.includes(w)).length;
-  const eylemMetSayisi=eylemMetafor.filter(w=>tL.includes(w)).length;
-
-  // KLİŞE metafor/imge havuzu
-  const kliseMetaforlar=['gözlerin yıldız','saçların ipek','dudakların gül','kalbin ayna','aşk bir ateş','yürek yanar','gönül kuş','kalp kırık','sevda ateş','gözler deniz','yüz ay gibi','gül yüzlü','bülbül gibi öt','aşkın ateş','mevsim döner'];
-  const kliseImgeler=['ayna metafor','sevgili gül','aşk ateş','özlem yağmur','hüzün gece','ağlayan göz','kırık kalp','sarı yaprak','solmuş çiçek'];
-  const kliseSayisi=[...kliseMetaforlar,...kliseImgeler].filter(k=>tL.includes(k.split(' ')[0])&&tL.includes(k.split(' ').pop())).length;
-
-  // ŞİİRSEL sembol kelimeler (artı puan) — tam kelime eşleşmesi
-  const sembolKelimeler=['labirent','kıyamet','sessizlik','yokluk','sonsuzluk','uçurum','köprü','barikat','kafes','zincir','perde','kök','tohum','kül','yankı','gölge','iz','boşluk','sonsuz','yalnızlık'];
-  const tumKelimeler=words.map(w=>w.toLowerCase().replace(/[^a-züğışöçâîû]/gi,''));
-  const sembolBulunanlar=sembolKelimeler.filter(s=>tumKelimeler.includes(s));
-  const sembolSayisi=sembolBulunanlar.length;
-
-  // Özgün metafor tespiti (basit: sık kullanılmayan kelime + eylem)
-  const ozgunKelimeler=words.filter(w=>{const k=w.toLowerCase();return k.length>5&&!kliseMetaforlar.join(' ').includes(k)&&!['gibi','sanki','benim','senim','onun','bana','sana','olan','eden','için','bile','dahi'].includes(k);});
-  const ozgunMetaforVar=ozgunKelimeler.length>3&&eylemMetSayisi>0;
-
-  /* ── DİL ANALİZİ ─────────────────────────────────────── */
-  const modernSozler=['telefon','internet','bilgisayar','araba','market','para','fatura','hastane','ofis','toplantı','proje','şirket','uygulama','instagram','whatsapp','sosyal medya','mesaj','wifi'];
-  const modernKelime=modernSozler.filter(w=>tL.includes(w));
-
-  // Günlük konuşma dili — tam kelime eşleşmesi
-  const gunlukDilListesi=['tamam','evet','hayır','artık','işte','şimdi','hadi','sanırım','bilmiyorum','neyse','yani','aslında','noolur','olur','olmaz','bak','dur','hey','ya','aa','off','vay','oof','yok','var','ne','kim','nasıl','neden','niçin','niye','gel','git','bak','al','ver','iste','sor'];
-  const gunlukBulunanlar=gunlukDilListesi.filter(w=>tumKelimeler.includes(w));
-  const gunlukSayisi=gunlukBulunanlar.length;
-
-  // Şiirsel kelime sayısı — az ise eksi puan
-  const siirselKelimeler=['yalnız','özlem','hasret','hüzün','seher','gurbet','figan','ah','vah','dem','bade','gül','bülbül','mehtap','şebnem','servi','deryA','ummAn','yürek','gönül','ruh','can','nur','ziya','naz','şevk','aşk','sevda','lebriz','nihan','ayan','nihAn'];
-  const siirselBulunanlar=siirselKelimeler.filter(s=>tumKelimeler.some(k=>k.startsWith(s.toLowerCase().replace(/[^a-züğışöçâîû]/gi,''))));
-  const siirselSayisi=siirselBulunanlar.length;
-
-  // Didaktik/açıklayıcı cümleler
-  const didaktik=['çünkü','dolayısıyla','bu nedenle','sonuç olarak','şöyle ki','demek ki','özetle','şunu söyleyeyim','anlayacağın'];
-  const didaktikSayisi=didaktik.filter(w=>tL.includes(w)).length;
-
-  // Eski/arkaik Türkçe kelimeler (artı puan — uyumluysa)
-  const eskiKelimeler=['bade','dil','gönül','canan','yar','efkar','hicran','dert','gariplik','gurbet','nigah','bakış','viran','zülüf','kadem','servi','mehtap','şebnem','damen','peyam','yare','çeşm','leb'];
-  const eskiKelimeBul=eskiKelimeler.filter(w=>tL.includes(w));
-  const eskiKelimeSayisi=eskiKelimeBul.length;
-
-  // Eski kelime uyumu: kafiye düzeniyle birlikte kullanılmışsa uyumlu
-  const eskiKelimeUyumlu=eskiKelimeSayisi>0&&(kafOrani>0.2||kitaKafiyeDuzeni);
-
-  // Tekrar eden kelimeler
-  const kelSay={};words.forEach(w=>{const k=w.toLowerCase().replace(/[^a-züğışöçâîû]/gi,'');if(k.length>3)kelSay[k]=(kelSay[k]||0)+1});
-  const tekrarSayisi=Object.values(kelSay).filter(v=>v>=3).length;
-
-  // İmla/anlatım bozukluğu (basit: çok kısa veya anlamsız satırlar)
-  const cokKisaLine=lines.filter(l=>l.trim().split(/\s+/).length<2).length;
-
-  /* ── ANA DUYGU / TEMA ────────────────────────────────── */
-  const temalar={
-    hüzün:{kelimeler:['hüzün','keder','ağlamak','gözyaşı','yalnız','özlem','hasret','acı','solmak','yas','matem','figan'],label:'hüzün ve keder'},
-    umut:{kelimeler:['umut','ışık','sabah','doğmak','yeni','güneş','başlamak','sevinç','bahar','açılmak','yeşermek'],label:'umut ve yenilenme'},
-    aşk:{kelimeler:['sevgi','aşk','yürek','gözler','beklemek','özlemek','sevgili','canan','yar','sevda'],label:'aşk ve özlem'},
-    doğa:{kelimeler:['deniz','dağ','orman','nehir','rüzgar','yaprak','toprak','bulut','yağmur','kar','çiçek','ağaç'],label:'doğa ve evren'},
-    varoluş:{kelimeler:['ölüm','yaşam','sonsuz','zaman','anlam','gerçek','boşluk','sessizlik','yokluk','hiçlik','ölümlü'],label:'varoluş ve anlam arayışı'},
-    özgürlük:{kelimeler:['özgür','kanat','uçmak','zindan','kafes','kurtulmak','sınır','engel','yol','gitmek'],label:'özgürlük ve başkaldırı'},
-  };
-  let anaTema='genel', maxTema=0;
-  for(const[t,{kelimeler}]of Object.entries(temalar)){
-    const s=kelimeler.filter(k=>tL.includes(k)).length;
-    if(s>maxTema){maxTema=s;anaTema=t;}
-  }
-  const temaLabel=temalar[anaTema]?.label||'karma duygular';
-  const temaOrnekKelimeler=(temalar[anaTema]?.kelimeler||[]).filter(k=>tL.includes(k)).slice(0,3);
-
-  // Şiirden imge örnekleri bul
-  const imgeOrnekleri=[];
-  lines.forEach(l=>{
-    if(benzetmeImleri.some(b=>l.toLowerCase().includes(b))&&l.length>15)imgeOrnekleri.push(l.trim());
-  });
-
-  /* ── PUAN HESAPLAMA ──────────────────────────────────── */
-  let p=4.5;
-
-  // Uzunluk ve yapı — çok kısa şiire sert ceza
-  if(len>=12&&len<=60)p+=0.8;
-  else if(len>60&&len<=120)p+=0.4;
-  else if(len<4){p-=3.5;}  // 1-2 kelime: çok sert ceza
-  else if(len<6){p-=2.5;}  // 3-5 kelime
-  else if(len<10){p-=1.5;} // 6-9 kelime
-  else if(len<12){p-=0.5;}
-  else if(len>150)p-=0.3;
-
-  if(lc>=4&&lc<=20)p+=0.6;
-  else if(lc===3)p-=0.4;
-  else if(lc===2){p-=1.2;}
-  else if(lc<2){p-=2.0;}
-
-  // Kelime zenginliği
-  if(zenginlik>0.85)p+=1.5;else if(zenginlik>0.70)p+=0.9;else if(zenginlik>0.55)p+=0.3;else p-=0.4;
-
-  // Kafiye puanı
-  if(kafOrani>0.5&&!zorlamaKafiye)p+=0.8;
-  else if(kafOrani>0.25&&!zorlamaKafiye)p+=0.4;
-  if(zorlamaKafiye)p-=1.0;
-  if(kitaKafiyeDuzeni&&!zorlamaKafiye)p+=0.3;
+  const kafiyeOrani=kafiyeSayisi/Math.max(lc-1,1);
+  const zorlamaEkler=['miş','mış','muş','müş','ler','lar','dan','den','tan','ten','mak','mek'];
+  const zorlamaKafiye=zorlamaEkler.filter(ek=>satirSonlari.filter(s=>s.endsWith(ek)).length>=Math.ceil(lc*0.5)).length>0;
 
   // Hece
-  if(heceOlcusu&&lc>=4)p+=0.6;
+  const heceArr=satirlar.map(l=>l.trim().split(/\s+/).reduce((s,w)=>(w.match(/[aeıioöuüAEIİOÖUÜ]/g)||[]).length+s,0));
+  const heceMean=heceArr.reduce((a,b)=>a+b,0)/Math.max(heceArr.length,1);
+  const heceVar=heceArr.length>1?Math.sqrt(heceArr.reduce((s,h)=>s+(h-heceMean)**2,0)/heceArr.length):5;
+  const heceOlcusu=heceVar<2.0&&lc>=4;
 
-  // Ses araçları
-  if(aliterasyon)p+=0.4;
-  if(asonans)p+=0.3;
+  // İmge — şiirden alıntı
+  const benzetmeImleri=['gibi','sanki','andır','tıpkı','adeta','misali'];
+  const benzetmeSatirlari=satirlar.filter(s=>benzetmeImleri.some(b=>s.toLowerCase().includes(b)));
+  const benzetmeVar=benzetmeSatirlari.length>0;
 
-  // İmge/metafor
-  if(benzetmeSayisi>=2)p+=0.5;else if(benzetmeSayisi>=1)p+=0.2;
-  if(eylemMetSayisi>=3)p+=0.6;else if(eylemMetSayisi>=1)p+=0.2;
-  if(sembolSayisi>=2)p+=0.5;else if(sembolSayisi>=1)p+=0.2;
+  const insanFiilleri=['söyler','bakar','ağlar','güler','uçar','koşar','fısıldar','haykırır','titrer','sarılır','bekler','özler'];
+  const dogaKelime=['güneş','ay','yıldız','deniz','dağ','rüzgar','yaprak','bulut','ağaç','nehir','kar','çiçek'];
+  const kisilesMeSatirlari=satirlar.filter(s=>{const sL=s.toLowerCase();return dogaKelime.some(d=>sL.includes(d))&&insanFiilleri.some(f=>sL.includes(f));});
+  const kisilesMeVar=kisilesMeSatirlari.length>0;
 
-  // Özgün metafor bonus
-  if(ozgunMetaforVar)p+=0.6;
+  // Sembol — SADECE şiirde bulunanlar
+  const sembolListe=['labirent','kafes','zincir','perde','kök','tohum','kül','yankı','gölge','iz','boşluk','uçurum','köprü','sis','çıkmaz','zindan','kanat'];
+  const sembolBulunan=sembolListe.filter(w=>varMi(w));
 
-  // Klişe ceza
-  p-=kliseSayisi*0.5;
+  const ozgunMetaforIhtimali=benzetmeVar&&!['gözlerin yıldız','saçların rüzgar','yüzün ay','kalbin ateş'].some(m=>tL.includes(m));
 
-  // Eski kelimeler
-  if(eskiKelimeSayisi>0&&eskiKelimeUyumlu)p+=Math.min(eskiKelimeSayisi*0.2,0.6);
-  else if(eskiKelimeSayisi>0&&!eskiKelimeUyumlu)p-=0.3;
+  // Tema
+  const temalar={
+    hüzün:{kelimeler:['hüzün','keder','ağlamak','gözyaşı','yalnız','acı','solmak'],label:'hüzün ve keder'},
+    umut:{kelimeler:['umut','ışık','sabah','doğmak','güneş','bahar'],label:'umut ve yenilenme'},
+    aşk:{kelimeler:['sevgi','aşk','sevda','yürek','canan','yar','beklemek','özlemek'],label:'aşk ve özlem'},
+    doğa:{kelimeler:['deniz','dağ','orman','nehir','rüzgar','yaprak','toprak','bulut'],label:'doğa ve evren'},
+    varoluş:{kelimeler:['ölüm','yaşam','sonsuz','zaman','anlam','boşluk','hiçlik'],label:'varoluş ve anlam'},
+    özgürlük:{kelimeler:['özgür','kanat','uçmak','zindan','kafes','kurtulmak'],label:'özgürlük ve başkaldırı'},
+  };
+  let anaTema='genel',maxTema=0;
+  for(const[t,{kelimeler}]of Object.entries(temalar)){const s=kelimeler.filter(k=>varMi(k)).length;if(s>maxTema){maxTema=s;anaTema=t;}}
+  const temaLabel=temalar[anaTema]?.label||'karma duygular';
+  const temaKelimelerBulunan=(temalar[anaTema]?.kelimeler||[]).filter(k=>varMi(k)).slice(0,3);
 
-  // Dil cezaları
-  p-=modernKelime.length*0.5;
-  if(gunlukSayisi>=5)p-=2.0;      // çok günlük dil
-  else if(gunlukSayisi>=3)p-=1.2;
-  else if(gunlukSayisi>=2)p-=0.6;
-  else if(gunlukSayisi>=1)p-=0.2;
-  if(didaktikSayisi>0)p-=didaktikSayisi*0.5;
-  // Şiirsel dil bonusu
-  if(siirselSayisi>=3)p+=0.8;
-  else if(siirselSayisi>=1)p+=0.3;
-
-  // Tekrar ceza
-  if(tekrarSayisi>1)p-=(tekrarSayisi-1)*0.25;
-
-  // Çok kısa satır
-  if(cokKisaLine>1)p-=(cokKisaLine-1)*0.2;
-
-  // Noktalama
+  const kelSay={};tumKelimeler.forEach(w=>{if(w.length>3)kelSay[w]=(kelSay[w]||0)+1});
+  const tekrarSayisi=Object.values(kelSay).filter(v=>v>=3).length;
+  const zenginlik=benzersiz/Math.max(len,1);
   const punct=(text.match(/[,;:!?—–.]/g)||[]).length;
-  if(punct>=2&&punct<=12)p+=0.3;else if(punct===0&&lc>4)p-=0.2;
 
-  // Çeşitlilik sapmacası
-  const sapma=((hash%11)-5)*0.08;
-  p=Math.min(9.6,Math.max(2.5,p+sapma));
+  // ── PUAN ───────────────────────────────────────────────────────────────
+  let p=5.0;
+
+  // Uzunluk
+  if(len<4)p-=3.5;
+  else if(len<8)p-=2.0;
+  else if(len<12)p-=1.0;
+  else if(len<=60)p+=0.7;
+  else if(len<=120)p+=0.3;
+
+  // Dize
+  if(lc<2)p-=2.0;
+  else if(lc===2)p-=1.0;
+  else if(lc===3)p-=0.4;
+  else if(lc>=4&&lc<=20)p+=0.5;
+
+  // Zenginlik
+  if(zenginlik>0.85)p+=1.5;
+  else if(zenginlik>0.70)p+=0.8;
+  else if(zenginlik>0.55)p+=0.2;
+  else p-=0.5;
+
+  // Günlük dil — sert ceza
+  const gd=gunlukBulunan.length;
+  if(gd>=6)p-=2.5;else if(gd>=4)p-=1.8;else if(gd>=2)p-=1.0;else if(gd>=1)p-=0.4;
+
+  // Didaktik
+  const dd=didaktikBulunan.length;
+  if(dd>=2)p-=1.5;else if(dd>=1)p-=0.7;
+
+  // Klişe
+  p-=kliseBulunan.length*0.6;
+  p-=kliseTekBulunan.length*0.5;
+
+  // Şiirsel dil
+  if(siirselBulunan.length>=3)p+=0.8;
+  else if(siirselBulunan.length>=1)p+=0.3;
+
+  // Kafiye
+  if(kafiyeOrani>0.5&&!zorlamaKafiye)p+=0.8;
+  else if(kafiyeOrani>0.25&&!zorlamaKafiye)p+=0.4;
+  if(zorlamaKafiye)p-=0.9;
+
+  if(heceOlcusu)p+=0.6;
+  if(aliterasyonVar)p+=0.4;
+  if(asonansVar)p+=0.3;
+  if(benzetmeVar)p+=0.4;
+  if(kisilesMeVar)p+=0.5;
+  if(sembolBulunan.length>0)p+=0.3;
+  if(ozgunMetaforIhtimali)p+=0.4;
+  if(tekrarSayisi>1)p-=(tekrarSayisi-1)*0.25;
+  if(punct>=2&&punct<=12)p+=0.2;
+
+  const sapma=((hash%9)-4)*0.07;
+  p=Math.min(9.6,Math.max(2.0,p+sapma));
   p=Math.round(p*10)/10;
 
-  /* ── YORUM ÜRETİMİ ───────────────────────────────────── */
-  let parcalar=[];
+  // ── YORUM ──────────────────────────────────────────────────────────────
+  const parcalar=[];
 
-  // 1. Genel izlenim ve şiirden ne anlaşıldı
-  if(len<6||lc<3){
-    parcalar.push(`Şiir çok kısa; birkaç kelime veya dize bir şiir için yeterli bir zemin oluşturmuyor. Tema ancak yüzeysel işlenebilmiş.`);
-  } else {
-    const genelIzlenimler=[
-      `Bu şiirde ${temaLabel} temasını işleyen lirik bir ses öne çıkıyor.`,
-      `Şiir, ${temaLabel} ekseninde kurulmuş içe dönük bir anlatım sunuyor.`,
-      `Okuyucu şiirde ${temaLabel} duygusunu yoğun biçimde hissediyor.`,
-      `Şiir, ${temaLabel} üzerine kurulu kişisel bir iç sesi yansıtıyor.`,
-    ];
-    parcalar.push(genelIzlenimler[rnd(genelIzlenimler.length)]);
+  if(cokKisa){
+    parcalar.push(`Şiir oldukça kısa; ${lc} dize ve ${len} kelimeyle tema yalnızca yüzeyde kalıyor.`);
   }
 
-  // 2. Ana konu ve tema
-  if(temaOrnekKelimeler.length>0){
-    parcalar.push(`Ana tema olan "${temaLabel}", şiirde ${temaOrnekKelimeler.map(k=>`"${k}"`).join(', ')} gibi kelimelerle somutlaşıyor.`);
+  if(!cokKisa){
+    const izl=[`${lc} dizelik bu şiirde ${temaLabel} işleniyor.`,`Şiir, ${temaLabel} ekseninde kurulmuş.`,`${temaLabel} teması ${lc} dize boyunca işlenmiş.`];
+    parcalar.push(izl[rnd(izl.length)]);
   }
 
-  // 3. İmge ve metafor örnekleri
-  if(imgeOrnekleri.length>0){
-    parcalar.push(`Şiirde dikkat çeken imge: "${imgeOrnekleri[0].slice(0,60)}${imgeOrnekleri[0].length>60?'…':''}" — bu benzetme temayı görselleştiriyor.`);
-  }
-  if(eylemMetSayisi>=2){
-    parcalar.push(`Doğaya veya nesnelere insan özelliği yükleyen kişileştirme figürleri şiire derinlik katıyor.`);
-  }
-  if(kliseSayisi>0){
-    parcalar.push(`Ancak bazı imgeler çok sık kullanılmış klişelere yakın; özgün söyleyiş bu şablonların dışına çıkmalı.`);
-  }
-  if(ozgunMetaforVar){
-    parcalar.push(`Şiirde çarpıcı ve özgün bir metafor kullanımı göze çarpıyor — bu, şiiri sıradanlıktan kurtaran en güçlü unsur.`);
-  }
-  if(sembolSayisi>0&&sembolBulunanlar.length>0){
-    parcalar.push(`"${sembolBulunanlar[0]}" gibi sembolik bir kullanım şiire anlam katmanı ekliyor.`);
+  if(temaKelimelerBulunan.length>0){
+    parcalar.push(`Temayı destekleyen kelimeler: "${temaKelimelerBulunan.join('", "')}" — şiirin duygusal odağını oluşturuyor.`);
   }
 
-  // 4. Ses araçları
-  if(heceOlcusu&&lc>=4){
-    parcalar.push(`Hece ölçüsüyle yazılmış; dizeler arasındaki hece dengesi (ort. ~${Math.round(heceMean)} hece) tutarlı ve ritim belirgin.`);
-  } else {
-    parcalar.push(`Serbest nazım tercih edilmiş; ${aliterasyon?`"${aliterasyonHarf}" harflerindeki aliterasyon ses dokusunu güçlendiriyor`:'ses araçlarından yeterince yararlanılmamış'}.`);
+  if(benzetmeSatirlari.length>0){
+    const orn=benzetmeSatirlari[0].trim().slice(0,70)+(benzetmeSatirlari[0].trim().length>70?'…':'');
+    parcalar.push(`Benzetme: "${orn}" — bu imge temayı somutlaştırıyor.`);
   }
-  if(asonans){
-    parcalar.push(`"${asonansUnlu}" ünlüsünün yoğun kullanımıyla asonans yaratılmış; bu iç ses uyumu şiire akıcılık kazandırıyor.`);
+  if(kisilesMeSatirlari.length>0&&!benzetmeVar){
+    const orn=kisilesMeSatirlari[0].trim().slice(0,70)+(kisilesMeSatirlari[0].trim().length>70?'…':'');
+    parcalar.push(`Kişileştirme: "${orn}" — doğaya insan özelliği yüklenerek derinlik kazanılmış.`);
+  }
+  if(sembolBulunan.length>0){
+    parcalar.push(`"${sembolBulunan[0]}" sembolik anlam taşıyarak şiire katman ekliyor.`);
+  }
+  if(ozgunMetaforIhtimali&&!kliseBulunan.length){
+    parcalar.push(`Benzetmeler klişeden uzak; özgün bir imgelem dili kurulmaya çalışılmış.`);
+  }
+  if(kliseBulunan.length>0){
+    parcalar.push(`"${kliseBulunan[0].join('-')}" imgesi şiirlerde çok kullanılmış klişe; özgün söyleyiş bu şablonların dışına çıkmalı.`);
+  }
+  if(kliseTekBulunan.length>0){
+    parcalar.push(`"${kliseTekBulunan[0]}" çok yıpranmış bir ifade; yerine özgün bir söyleyiş bulunmalı.`);
   }
 
-  // 5. Kafiye
+  if(heceOlcusu){
+    parcalar.push(`Hece ölçüsüyle yazılmış; yaklaşık ${Math.round(heceMean)} heceli dengeli ritim var.`);
+  } else if(!cokKisa){
+    parcalar.push(`Serbest nazım tercih edilmiş.`);
+  }
+
+  if(aliterasyonVar){
+    const orn=aliterasyonSatirlar[0];
+    parcalar.push(`"${orn.satir.slice(0,50)}" dizesinde "${orn.harf}" sesiyle belirgin aliterasyon; ritim güçlenmiş.`);
+  }
+  if(asonansVar){
+    parcalar.push(`"${domUnlu[0]}" ünlüsünün yoğunluğu şiire asonans katıyor.`);
+  }
+
   if(zorlamaKafiye){
-    parcalar.push(`Kafiye düzeni zorlamalı; aynı ekin tekrarı ses zenginliği yerine tekdüzelik oluşturuyor, şiirselliği zedeliyor.`);
-  } else if(kafOrani>0.4){
-    parcalar.push(`Kafiye düzeni sağlam ve doğal akışa uygun${kitaKafiyeDuzeni?'; halk edebiyatı geleneğine yakın kıta yapısı başarıyla uygulanmış':''}.`);
-  } else if(kafOrani>0.1){
-    parcalar.push(`Kısmi kafiyeler var; bu serbest bir tercih olabilir, ancak ses uyumu daha tutarlı olabilirdi.`);
-  }
-  if(kitaKafiyeDuzeni&&!zorlamaKafiye){
-    parcalar.push(`Kıta sonlarındaki kafiye düzeni halk şiiri geleneğine uygun; bu uyum şiire sözlü edebiyat dokusu katıyor.`);
+    parcalar.push(`Kafiye düzeni zorlamalı; monotonluk yaratıyor.`);
+  } else if(kafiyeOrani>0.4){
+    parcalar.push(`Kafiye düzeni tutarlı ve doğal.`);
+  } else if(kafiyeOrani>0.1&&!heceOlcusu){
+    parcalar.push(`Kısmi kafiyeler var; ses uyumu daha tutarlı olabilirdi.`);
   }
 
-  // 6. Dil analizi
-  if(eskiKelimeSayisi>0){
-    if(eskiKelimeUyumlu){
-      parcalar.push(`"${eskiKelimeBul.slice(0,2).join('", "')}" gibi arkaik kelimeler şiirin havasıyla bütünleşiyor; divan edebiyatı etkisi hissediliyor.`);
-    } else {
-      parcalar.push(`"${eskiKelimeBul.slice(0,2).join('", "')}" gibi eski kelimeler şiirin modern tonuyla çelişiyor; bu kopukluk dil bütünlüğünü zedeliyor.`);
-    }
+  if(gd>=4){
+    const ornekler=gunlukBulunan.slice(0,3).join(', ');
+    parcalar.push(`Şiir büyük ölçüde günlük konuşma diline dayanıyor (${ornekler}); şiirsel dil çok farklı bir ses gerektirir.`);
+  } else if(gd>=2){
+    parcalar.push(`"${gunlukBulunan.slice(0,2).join('", "')}" gibi konuşma dili kelimeleri şiirsel tonu kırıyor.`);
+  } else if(gd===1){
+    parcalar.push(`"${gunlukBulunan[0]}" ifadesi şiirin tonundan uzaklaşıyor.`);
+  } else if(siirselBulunan.length>=2){
+    parcalar.push(`Dil şiirsel; günlük konuşmadan uzak bir söyleyiş var.`);
   }
-  if(modernKelime.length>0){
-    parcalar.push(`"${modernKelime.slice(0,2).join('", "')}" gibi gündelik/modern kelimeler şiirsel atmosferi kırıyor.`);
+
+  if(dd>=1){
+    parcalar.push(`"${didaktikBulunan[0]}" gibi açıklayıcı ifadeler şiiri düz yazıya yaklaştırıyor; duygu gösterilmeli, açıklanmamalı.`);
   }
-  if(gunlukSayisi>=3){
-    parcalar.push(`"${gunlukBulunanlar.slice(0,3).join('", "')}" gibi konuşma dili kelimeleri şiiri sıradan bir metne dönüştürüyor; şiirsel dil gerektiriyor.`);
-  } else if(gunlukSayisi>=1){
-    parcalar.push(`"${gunlukBulunanlar[0]}" gibi günlük konuşma ifadeleri şiirsel tonu zayıflatıyor.`);
-  }
-  if(didaktikSayisi>0){
-    parcalar.push(`Bazı dizeler açıklayıcı/didaktik bir anlatıma kayıyor; şiirde "göster, anlatma" ilkesi esas olmalı.`);
-  }
-  if(gunlukSayisi===0&&modernKelime.length===0&&siirselSayisi>=1){
-    parcalar.push(`Dil şiirsel ve özenli; gündelik konuşmadan uzak, şiire has bir söyleyiş var.`);
-  } else if(gunlukSayisi===0&&modernKelime.length===0){
-    parcalar.push(`Kelime tercihleri konuşma dilinden uzak; şiirsel bir özen hissediliyor.`);
-  }
+
   if(tekrarSayisi>1){
-    parcalar.push(`Bazı kelimeler fazla tekrar ediyor; bu tekrar bilinçli bir stil tercihi değilse şiiri yataylaştırıyor.`);
-  } else if(zenginlik>0.75){
-    parcalar.push(`Kelime zenginliği yüksek; söz dağarcığı özgün ve taze.`);
+    parcalar.push(`Bazı kelimeler fazla tekrar ediyor; sinonimler kullanılarak dil zenginleştirilebilir.`);
+  } else if(zenginlik>0.78&&!cokKisa){
+    parcalar.push(`Kelime seçimleri zengin ve taze.`);
   }
 
-  // 8. Genel değerlendirme kapanış
-  if(p>=8){
-    parcalar.push(`Bütünlüklü ve olgun bir şiir; biçim ve içerik birbirini destekliyor.`);
-  } else if(p>=6){
-    parcalar.push(`Potansiyelini tam açan bir şiir değil henüz; birkaç kritik düzenlemeyle çok daha güçlü olabilir.`);
-  } else {
-    parcalar.push(`Şiir ham malzeme sunuyor; daha özenli bir işçilikle büyük dönüşüm mümkün.`);
-  }
+  if(p>=8.0)parcalar.push(`Bütünlüklü ve olgun bir şiir.`);
+  else if(p>=6.0)parcalar.push(`Potansiyelini tam açmamış; kritik düzenlemelerle güçlenebilir.`);
+  else if(p>=4.0)parcalar.push(`Ham malzeme sunuyor; özenli işçilikle dönüşüm mümkün.`);
+  else parcalar.push(`Bu metin henüz şiir tanımına girmiyor; dil, imge ve ses araçları üzerine ciddi çalışma gerekiyor.`);
 
   const yorum=parcalar.join(' ');
 
-  /* ── GÜÇLÜ YÖN ───────────────────────────────────────── */
+  // Güçlü yön
   const gucluH=[];
-  if(kafOrani>0.3&&!zorlamaKafiye)gucluH.push('Kafiye düzeni doğal ve ses uyumu başarılı');
-  if(aliterasyon)gucluH.push(`"${aliterasyonHarf}" harflerindeki aliterasyon müzikal akış sağlıyor`);
-  if(asonans)gucluH.push(`"${asonansUnlu}" ünlüsünün tekrarıyla asonans yaratılmış`);
+  if(kafiyeOrani>0.35&&!zorlamaKafiye)gucluH.push('Kafiye düzeni doğal ve ses uyumu başarılı');
+  if(aliterasyonVar)gucluH.push(`"${aliterasyonSatirlar[0].harf}" sesindeki aliterasyon müzikal akış sağlıyor`);
+  if(asonansVar)gucluH.push(`"${domUnlu[0]}" ünlüsüyle asonans yaratılmış`);
   if(heceOlcusu)gucluH.push('Hece ölçüsü dengeli ve ritim tutarlı');
-  if(ozgunMetaforVar)gucluH.push('Özgün ve taze bir metafor kullanımı var');
-  if(sembolSayisi>=1)gucluH.push('Sembolik kelime kullanımı anlam derinleştiriyor');
-  if(benzetmeSayisi>=2)gucluH.push('Benzetmeler şiiri görselleştiriyor');
-  if(zenginlik>0.75)gucluH.push('Kelime seçimleri taze ve özgün');
-  if(eskiKelimeUyumlu)gucluH.push('Arkaik kelimeler şiirin havasıyla bütünleşiyor');
-  if(kitaKafiyeDuzeni&&!zorlamaKafiye)gucluH.push('Kıta yapısı halk şiiri geleneğine uygun');
-  if(gucluH.length===0)gucluH.push('Ham bir duygu yoğunluğu taşıyor; bu zemin üzerine inşa edilebilir');
+  if(ozgunMetaforIhtimali&&!kliseBulunan.length)gucluH.push('Özgün ve klişeden uzak imge kullanımı var');
+  if(sembolBulunan.length>0)gucluH.push(`"${sembolBulunan[0]}" sembolik anlam katıyor`);
+  if(kisilesMeVar)gucluH.push('Kişileştirme figürleri şiire derinlik katıyor');
+  if(zenginlik>0.78)gucluH.push('Kelime seçimleri taze ve özgün');
+  if(siirselBulunan.length>=2)gucluH.push('Şiirsel dil özenle kullanılmış');
+  if(gucluH.length===0)gucluH.push('Ham bir duygu yoğunluğu taşıyor');
   const guclu=gucluH[rnd(gucluH.length)];
 
-  /* ── GELİŞTİRME ÖNERİSİ ─────────────────────────────── */
+  // Öneri
   const oneriH=[];
+  if(cokKisa)oneriH.push('Şiir en az 6-8 dizeye genişletilerek tema derinlemesine işlenmeli');
   if(zorlamaKafiye)oneriH.push('Zorlamalı kafiyelerden vazgeçilip doğal ses uyumu aranmalı');
-  if(kliseSayisi>0)oneriH.push('Klişe imge ve metaforlar çıkarılıp özgün söyleyiş bulunmalı');
-  if(modernKelime.length>0)oneriH.push(`"${modernKelime[0]}" gibi günlük kelimeler şiirsel karşılıklarıyla değiştirilmeli`);
-  if(didaktikSayisi>0)oneriH.push('"Göster, anlatma" ilkesiyle duygu doğrudan imgelerle verilmeli');
-  if(benzetmeSayisi===0&&eylemMetSayisi===0)oneriH.push('Somut imgeler ve metaforlar eklenerek şiir görselleştirilmeli');
-  if(zenginlik<0.6)oneriH.push('Kelime dağarcığı genişletilmeli, tekrarlar azaltılmalı');
-  if(lc<4)oneriH.push('Şiir çok kısa; en az 4-6 dize ile tema tam ve derinlikli işlenebilir');
-  if(!aliterasyon&&kafOrani<0.2)oneriH.push('Aliterasyon veya iç kafiyeyle ses dokusu zenginleştirilebilir');
+  if(kliseBulunan.length>0||kliseTekBulunan.length>0)oneriH.push('Klişe imge ve ifadeler yerine özgün söyleyiş bulunmalı');
+  if(gd>=2)oneriH.push('Konuşma dili kelimeleri şiirsel karşılıklarıyla değiştirilmeli');
+  if(dd>=1)oneriH.push('"Göster, anlatma" ilkesiyle duygu imgelerle verilmeli');
+  if(!benzetmeVar&&!kisilesMeVar)oneriH.push('Somut imgeler ve metaforlar eklenerek şiir görselleştirilmeli');
+  if(zenginlik<0.60)oneriH.push('Kelime tekrarları azaltılıp söz dağarcığı genişletilmeli');
+  if(!aliterasyonVar&&kafiyeOrani<0.2)oneriH.push('Aliterasyon veya iç kafiyeyle ses dokusu zenginleştirilebilir');
   if(tekrarSayisi>1)oneriH.push('Tekrarlayan kelimeler yerine sinonimler kullanılmalı');
-  if(oneriH.length===0)oneriH.push('Son dize daha kalıcı ve çarpıcı bir kapanışla güçlendirilebilir');
+  if(oneriH.length===0)oneriH.push('Son dize daha çarpıcı bir kapanışla güçlendirilebilir');
   const oneri=oneriH[rnd(oneriH.length)];
 
-  return{score:p, yorum, gucluYonler:guclu, gelistirmeOnerisi:oneri};
+  return{score:p,yorum,gucluYonler:guclu,gelistirmeOnerisi:oneri};
 }
 function go(screen,extra={}){Object.assign(S,{screen,...extra});render()}
 
