@@ -156,7 +156,7 @@ async function scorePoem(text){
         "anthropic-dangerous-direct-browser-access":"true"
       },
       body:JSON.stringify({
-        model:"claude-opus-4-5",
+        model:"claude-sonnet-4-5",
         max_tokens:1024,
         messages:[{
           role:"user",
@@ -1058,7 +1058,10 @@ function Explore(){
 
 function Profile(){
   const tid=S.profileId||S.me?.id;
-  const user=byId(tid);
+  // Admin için özel lookup
+  let user = S.users.find(u=>u.id===tid);
+  if(!user && tid==='admin_root') user=adminProfileObj;
+  if(!user && S.me?.username===ADMIN_USERNAME) user=adminProfileObj;
   const wrap=h('div',{},[navBar()]);
   const page=h('div',{class:'page'});
   if(S.profileId && S.profileId !== S.me?.id){
