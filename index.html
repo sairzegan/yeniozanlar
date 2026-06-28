@@ -7,7 +7,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght=0,400;0,700;1,400&family=Crimson+Text:ital,wght=0,400;0,600;1,400&display=swap" rel="stylesheet">
   <style>
     *{box-sizing:border-box;margin:0;padding:0}
-    html{font-size:22px}
+    html{font-size:24px}
     body{background:#0f0a1a;color:#f0e8ff;font-family:'Crimson Text',Georgia,serif;min-height:100vh;font-size:1.1rem}
     ::-webkit-scrollbar{width:4px}
     ::-webkit-scrollbar-thumb{background:#6d28d9;border-radius:2px}
@@ -127,7 +127,18 @@ const now=()=>new Date().toLocaleString('tr-TR');
 const ytId=url=>{const m=url?.match(/(?:youtu\.be\/|v=|embed\/)([A-Za-z0-9_-]{11})/);return m?m[1]:null};
 function lsGet(k,d){try{const v=localStorage.getItem(k);return v?JSON.parse(v):d}catch{return d}}
 function lsSet(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch{}}
-const calcAvg=(r,ai)=>{const v=Object.values(r||{});const u=v.length?v.reduce((a,b)=>a+b,0)/v.length:null;if(u===null&&(ai===null||ai===undefined))return null;if(u===null)return+parseFloat(ai).toFixed(2);if(ai===null||ai===undefined)return+u.toFixed(2);return+(u*.6+ai*.4).toFixed(2)};
+// Bot kullanıcı ID'leri
+const BOT_IDS = ['bot_duyu_yorum','bot_katli_yorum','bot_ari_yorum'];
+
+// Aritmetik ortalama: kullanıcı puanları + bot puanları (AI = 3 bot gibi)
+const calcAvg=(r,ai,botPuanlar)=>{
+  const tumPuanlar = Object.values(r||{});
+  // Bot puanları userRatings içinde zaten var, sadece yoksa AI'dan türet
+  if(tumPuanlar.length===0 && (ai===null||ai===undefined)) return null;
+  if(tumPuanlar.length===0) return +parseFloat(ai).toFixed(2);
+  const ort = tumPuanlar.reduce((a,b)=>a+b,0)/tumPuanlar.length;
+  return +ort.toFixed(2);
+};
 const scoreColor=s=>{if(!s)return'#6b5b8a';if(s>=8.5)return'#fbbf24';if(s>=7)return'#34d399';if(s>=5)return'#c084fc';return'#f87171'};
 const scoreBadge=s=>{if(!s)return'';if(s>=9)return'🏆 Başyapıt';if(s>=8)return'⭐ Muhteşem';if(s>=7)return'✨ Güzel';if(s>=5)return'👍 İyi';return'📝 Gelişiyor'};
 
@@ -486,43 +497,194 @@ const A = {
     S.me=user;save();go('feed');return null;
   },
   logout(){S.me=null;lsSet('yo_me',null);go('landing')},
-  addPost(pd){
+};
+
+// ── BOT PUANLAMALARI (A dışında tanımlanır) ──────────────────────────────────
+function botDuyuPuan(text){
+  if(!text||text.trim().length<5)return null;
+  const tL=text.toLowerCase();
+  const tumK=text.trim().split(/\s+/).map(w=>w.toLowerCase().replace(/[^a-züğışöçâîû]/gi,''));
+  const varMi=w=>tumK.includes(w.toLowerCase().replace(/[^a-züğışöçâîû]/gi,''));
+
+  const duygusalK=['hüzün','keder','özlem','hasret','aşk','sevda','ağlamak','yalnız','gurbet','acı','figan','ah','vah','sızı','yürek','gönül','can','ruh','sessizlik','yokluk','sonsuz','ölüm','yaşam','umut','sevinç','neşe','bahar','ışık'];
+  const bulunan=duygusalK.filter(k=>varMi(k));
+  const yogunluk=bulunan.length;
+
+  // Duygu yoğunluğuna göre puan
+  let p=4.0;
+  if(yogunluk>=6)p=8.5+(Math.random()*0.8);
+  else if(yogunluk>=4)p=7.0+(Math.random()*1.0);
+  else if(yogunluk>=2)p=5.5+(Math.random()*1.0);
+  else if(yogunluk===1)p=4.5+(Math.random()*0.8);
+  else p=3.0+(Math.random()*1.0);
+
+  // Uzunluk etkisi
+  const lc=text.split('\n').filter(s=>s.trim().length>0).length;
+  if(lc<3)p-=1.5;
+  else if(lc>=6)p+=0.3;
+
+  p=Math.min(9.5,Math.max(2.0,p));
+  p=Math.round(p*10)/10;
+
+  const yorumlar=[
+    `Şiirde ${yogunluk>3?'güçlü':'zayıf'} bir duygusal yoğunluk hissediliyor. ${bulunan.length>0?bulunan.slice(0,2).join(', ')+' gibi kelimeler duygu atmosferini oluşturuyor.':'Duygu sözcükleri oldukça sınırlı kalmış.'}`,
+    `Duygusal etki ${p>=7?'yüksek':'sınırlı'}. ${bulunan.length>0?'Şiirde geçen '+bulunan[0]+' gibi imgeler okuyucuya duyguyu iletebiliyor.':'Duygu doğrudan aktarılamamış; şiirsel imgelerle pekiştirilmeli.'}`,
+    `${lc<3?'Çok kısa bir metin; duygu yeterince geliştirilmemiş.':yogunluk>=4?'Duygu katmanları belirgin ve okuyucuya ulaşıyor.':'Duygu potansiyeli var ama henüz tam ifade bulamamış.'}`,
+  ];
+  const hash=text.length%yorumlar.length;
+  return {puan:p, yorum:yorumlar[hash], kullanici:'bot_duyu_yorum', ad:'duyu-yorum'};
+}
+
+// Bot 2: katlı-yorum — ses uyumu ve kafiye analizi
+function botKatliPuan(text){
+  if(!text||text.trim().length<5)return null;
+  const satirlar=text.split('\n').filter(s=>s.trim().length>0);
+  const lc=satirlar.length;
+
+  // Kafiye
+  const sonlar=satirlar.map(l=>{const w=l.trim().split(/\s+/);return w[w.length-1]?.toLowerCase().replace(/[^a-züğışöçâîû]/gi,'')?.slice(-3)||''});
+  let kafiyeSayisi=0;
+  for(let i=0;i<sonlar.length-1;i++){if(sonlar[i].length>1&&sonlar[i]===sonlar[i+1])kafiyeSayisi++;else if(sonlar[i].length>1&&i+2<sonlar.length&&sonlar[i]===sonlar[i+2])kafiyeSayisi+=0.5;}
+  const kafiyeOrani=kafiyeSayisi/Math.max(lc-1,1);
+
+  // Zorlamalı kafiye
+  const zorlamaEkler=['miş','mış','muş','müş','ler','lar','dan','den','mak','mek'];
+  const zorlamaKafiye=zorlamaEkler.filter(ek=>sonlar.filter(s=>s.endsWith(ek)).length>=Math.ceil(lc*0.5)).length>0;
+
+  // Hece ölçüsü
+  const heceArr=satirlar.map(l=>l.trim().split(/\s+/).reduce((s,w)=>(w.match(/[aeıioöuüAEIİOÖUÜ]/g)||[]).length+s,0));
+  const heceMean=heceArr.reduce((a,b)=>a+b,0)/Math.max(heceArr.length,1);
+  const heceVar=heceArr.length>1?Math.sqrt(heceArr.reduce((s,h)=>s+(h-heceMean)**2,0)/heceArr.length):5;
+  const heceOlcusu=heceVar<2.0&&lc>=4;
+
+  // Aliterasyon
+  const tumK=text.trim().split(/\s+/).map(w=>w[0]?.toLowerCase()).filter(Boolean);
+  const hs={};tumK.forEach(h=>{hs[h]=(hs[h]||0)+1});
+  const aliterasyon=Object.values(hs).filter(v=>v>=3).length>0;
+
+  let p=4.0;
+  if(heceOlcusu)p+=2.0;
+  if(kafiyeOrani>0.5&&!zorlamaKafiye)p+=1.5;
+  else if(kafiyeOrani>0.25&&!zorlamaKafiye)p+=0.8;
+  if(zorlamaKafiye)p-=1.2;
+  if(aliterasyon)p+=0.6;
+  if(lc<3)p-=1.5;
+
+  p=Math.min(9.5,Math.max(2.0,p));
+  p=Math.round(p*10)/10;
+
+  let yorum='';
+  if(heceOlcusu)yorum=`Hece ölçüsü tutarlı (ort. ${Math.round(heceMean)} hece/dize); ${kafiyeOrani>0.4&&!zorlamaKafiye?'kafiye düzeni de başarılı.':'ancak kafiye daha güçlendirilebilir.'}`;
+  else if(zorlamaKafiye)yorum=`Ses uyumu zorlamalı kafiyeye dayanıyor; aynı ek tekrarı monotonluk yaratıyor. Daha doğal bir ses arayışı gerekiyor.`;
+  else if(kafiyeOrani>0.3)yorum=`Serbest nazımda kafiye denemeleri var; ${aliterasyon?'aliterasyon da ritmi destekliyor.':'aliterasyon eklenirse ses dokusu zenginleşir.'}`;
+  else yorum=`Ses araçları (kafiye, hece ölçüsü, aliterasyon) yeterince kullanılmamış; şiir ritmik açıdan zayıf kalıyor.`;
+
+  return {puan:p, yorum, kullanici:'bot_katli_yorum', ad:'katlı-yorum'};
+}
+
+// Bot 3: arı-yorum — imge, metafor, uzunluk, emek analizi
+function botAriPuan(text){
+  if(!text||text.trim().length<5)return null;
+  const tumK=text.trim().split(/\s+/).map(w=>w.toLowerCase().replace(/[^a-züğışöçâîû]/gi,''));
+  const satirlar=text.split('\n').filter(s=>s.trim().length>0);
+  const lc=satirlar.length;
+  const len=tumK.length;
+  const tL=text.toLowerCase();
+  const benzersiz=new Set(tumK).size;
+  const zenginlik=benzersiz/Math.max(len,1);
+
+  const benzetmeImleri=['gibi','sanki','andır','tıpkı','adeta','misali'];
+  const benzetmeVar=benzetmeImleri.some(b=>tL.includes(b));
+  const insanFiilleri=['söyler','bakar','ağlar','fısıldar','haykırır','titrer','bekler'];
+  const dogaK=['güneş','ay','deniz','dağ','rüzgar','yaprak','bulut','nehir'];
+  const kisilesMeVar=satirlar.some(s=>{const sL=s.toLowerCase();return dogaK.some(d=>sL.includes(d))&&insanFiilleri.some(f=>sL.includes(f));});
+  const sembolListe=['kafes','zincir','perde','kül','yankı','gölge','uçurum','köprü','sis'];
+  const sembolVar=sembolListe.some(w=>tumK.includes(w));
+  const kliseMetaforlar=['gözlerin yıldız','saçların rüzgar','aşkından yandım','kalp kırık'];
+  const kliseVar=kliseMetaforlar.some(k=>tL.includes(k));
+
+  let p=4.0;
+  // Uzunluk/emek
+  if(len>=30&&len<=80)p+=1.5;
+  else if(len>=15)p+=0.8;
+  else if(len<8)p-=2.0;
+  else if(len<15)p-=1.0;
+  if(lc>=6)p+=0.5;
+  else if(lc<3)p-=1.2;
+
+  // İmge/metafor
+  if(benzetmeVar)p+=0.8;
+  if(kisilesMeVar)p+=0.9;
+  if(sembolVar)p+=0.6;
+  if(kliseVar)p-=0.8;
+  if(zenginlik>0.75)p+=0.7;
+  else if(zenginlik<0.5)p-=0.5;
+
+  p=Math.min(9.5,Math.max(2.0,p));
+  p=Math.round(p*10)/10;
+
+  let yorum='';
+  const imgeSayisi=(benzetmeVar?1:0)+(kisilesMeVar?1:0)+(sembolVar?1:0);
+  if(imgeSayisi>=2&&!kliseVar)yorum=`Şiirde özgün imgeler ve metaforlar dikkat çekiyor. ${len>=20?'Emek verilmiş bir yapı; uzunluk ve kelime çeşitliliği bunu destekliyor.':'Ancak şiir daha geniş bir yapıya kavuşturulabilir.'}`;
+  else if(kliseVar)yorum=`Şiirde klişeleşmiş metaforlar kullanılmış; özgün imgeler şiiri daha güçlü kılar. ${len<15?'Ayrıca şiir oldukça kısa; daha fazla emek ve genişleme gerekiyor.':''}`;
+  else if(len<10)yorum=`Şiir çok kısa; imge ve metafor için yeterli alan oluşmamış. Daha uzun ve işlenmiş bir yapı hedeflenmeli.`;
+  else yorum=`${imgeSayisi===0?'İmge ve metafor kullanımı oldukça sınırlı; şiirsel araçlar geliştirilmeli.':'Bazı imgeler mevcut fakat daha özgün söyleyişler şiiri güçlendirirdi.'} Kelime zenginliği ${zenginlik>0.65?'tatmin edici':'artırılabilir'}.`;
+
+  return {puan:p, yorum, kullanici:'bot_ari_yorum', ad:'arı-yorum'};
+}
+
+// ── AKSİYONLAR (devam) ───────────────────────────────────────────────────────
+A.addPost = function(pd){
     const r=pd.text&&pd.text.trim().length>10?scorePoem(pd.text):null;
-    const np={...pd,id:uid(),authorId:S.me.id,ts:Date.now(),userRatings:{},aiScore:r?r.score:null,aiYorum:r?r.yorum:null,aiGuclu:r?r.gucluYonler:null,aiOneri:r?r.gelistirmeOnerisi:null,comments:[],date:now()};
-    
+
+    // Bot puanları hesapla
+    const botRatings={};
+    const botYorumlar={};
+    if(pd.text&&pd.text.trim().length>10){
+      const b1=botDuyuPuan(pd.text);
+      const b2=botKatliPuan(pd.text);
+      const b3=botAriPuan(pd.text);
+      if(b1){botRatings[b1.kullanici]=b1.puan;botYorumlar[b1.kullanici]={yorum:b1.yorum,ad:b1.ad};}
+      if(b2){botRatings[b2.kullanici]=b2.puan;botYorumlar[b2.kullanici]={yorum:b2.yorum,ad:b2.ad};}
+      if(b3){botRatings[b3.kullanici]=b3.puan;botYorumlar[b3.kullanici]={yorum:b3.yorum,ad:b3.ad};}
+      // Yapay zekanın puanı da aritmetik ortalamaya katılıyor
+      if(r&&r.score) botRatings['bot_ai_yorum']=r.score;
+    }
+
+    const np={...pd,id:uid(),authorId:S.me.id,ts:Date.now(),
+      userRatings:botRatings,
+      botYorumlar:botYorumlar,
+      aiScore:r?r.score:null,aiYorum:r?r.yorum:null,
+      aiGuclu:r?r.gucluYonler:null,aiOneri:r?r.gelistirmeOnerisi:null,
+      comments:[],date:now()};
+
     S.posts.unshift(np);
     save();
     render();
-
     db.collection("posts").doc(np.id).set(np)
-      .then(() => { verileriYukle(); })
-      .catch(err => console.error("Şiir kaydetme hatası:", err));
-  },
-  deletePost(pid){
+      .then(()=>{ verileriYukle(); })
+      .catch(err=>console.error("Şiir kaydetme hatası:",err));
+};
+A.deletePost = function(pid){
     if(!confirm("Bu şiir kalıcı olarak silinecek. Emin misiniz?")) return;
-    
     S.posts = S.posts.filter(p => p.id !== pid);
-    save();
-    render();
-    db.collection("posts").doc(pid).delete()
-      .then(() => { console.log("Şiir silindi."); })
-      .catch(err => console.error("Silme hatası:", err));
-  },
-  ratePost(pid,score){
+    save();render();
+    db.collection("posts").doc(pid).delete().catch(err=>console.error("Silme hatası:",err));
+};
+A.ratePost = function(pid,score){
     const pIndex = S.posts.findIndex(p=>p.id===pid);
     if(pIndex > -1) {
       if(!S.posts[pIndex].userRatings) S.posts[pIndex].userRatings = {};
       S.posts[pIndex].userRatings[S.me.id] = score;
       save();
       refreshCard(pid);
-      // Bildirim gönder
       const post=S.posts[pIndex];
       const postTitle=post.title||post.text?.slice(0,20)||'şiirinize';
       A.addNotif(post.authorId, `${S.me.name||S.me.username} sizin "${postTitle}" başlıklı şiirinize ${score}/10 puan verdi.`);
       db.collection("posts").doc(pid).update({ userRatings: S.posts[pIndex].userRatings });
     }
-  },
-  addComment(pid,text){
+};
+A.addComment = function(pid,text){
     const pIndex = S.posts.findIndex(p=>p.id===pid);
     if(pIndex > -1) {
       const newComment = {id:uid(),authorId:S.me.id,text,date:now()};
@@ -530,40 +692,35 @@ const A = {
       S.posts[pIndex].comments = updatedComments;
       save();
       refreshCard(pid);
-      // Bildirim gönder
       const post=S.posts[pIndex];
       const postTitle=post.title||post.text?.slice(0,20)||'şiirinize';
       A.addNotif(post.authorId, `${S.me.name||S.me.username} sizin "${postTitle}" başlıklı şiirinize yorum yaptı.`);
       db.collection("posts").doc(pid).update({ comments: updatedComments });
     }
-  },
-  deleteComment(pid, cid){
+};
+A.deleteComment = function(pid,cid){
     if(!confirm("Bu yorum kalıcı olarak silinecek. Emin misiniz?")) return;
-    
-    const pIndex = S.posts.findIndex(p => p.id === pid);
+    const pIndex = S.posts.findIndex(p=>p.id===pid);
     if(pIndex > -1) {
-      const updatedComments = S.posts[pIndex].comments.filter(c => c.id !== cid);
+      const updatedComments = S.posts[pIndex].comments.filter(c=>c.id!==cid);
       S.posts[pIndex].comments = updatedComments;
-      save();
-      render();
-      db.collection("posts").doc(pid).update({ comments: updatedComments }).then(() => verileriYukle());
+      save();render();
+      db.collection("posts").doc(pid).update({ comments: updatedComments });
     }
-  },
-  toggleFollow(tid){const l=S.follows[S.me.id]||[];const has=l.includes(tid);S.follows={...S.follows,[S.me.id]:has?l.filter(x=>x!==tid):[...l,tid]};save();render()},
-  sendMsg(toId,text){
+};
+A.toggleFollow = function(tid){const l=S.follows[S.me.id]||[];const has=l.includes(tid);S.follows={...S.follows,[S.me.id]:has?l.filter(x=>x!==tid):[...l,tid]};save();render();};
+A.sendMsg = function(toId,text){
     const msg={id:uid(),fromId:S.me.id,toId,text,date:now()};
-    S.msgs=[...S.msgs,msg];
-    save();render();
+    S.msgs=[...S.msgs,msg];save();render();
     db.collection("msgs").doc(msg.id).set(msg).catch(err=>console.error("Mesaj hatası:",err));
-  },
-  addNotif(toId,text){
+};
+A.addNotif = function(toId,text){
     if(toId===S.me?.id)return;
     const notif={id:uid(),toId,text,date:now(),read:false};
     if(!S.notifs)S.notifs=[];
     S.notifs.push(notif);
     lsSet('yo_notifs',S.notifs);
     db.collection("notifs").doc(notif.id).set(notif).catch(e=>console.error(e));
-  },
 };
 
 const byId=id=>S.users.find(u=>u.id===id) || (id === "admin_root" ? adminProfileObj : null);
@@ -719,7 +876,27 @@ function postCard(post, forceExpand=false){
     full.appendChild(h('div',{style:{marginBottom:'12px'}},[aibtn,body]));
   }
 
-  // puanlama
+  // Bot yorumları göster
+  if(post.botYorumlar && Object.keys(post.botYorumlar).length>0){
+    const botWrap=h('div',{style:{marginBottom:'12px'}});
+    Object.entries(post.botYorumlar).forEach(([bid,{yorum,ad}])=>{
+      const puan=post.userRatings?.[bid];
+      const renk=bid==='bot_duyu_yorum'?'#e879f9':bid==='bot_katli_yorum'?'#60a5fa':'#34d399';
+      const ikon=bid==='bot_duyu_yorum'?'💜':bid==='bot_katli_yorum'?'🎵':'🌺';
+      let acik=false;
+      const body=h('div',{style:{background:'#0a0718',border:`1px solid ${renk}44`,borderTop:'none',borderRadius:'0 0 10px 10px',padding:'10px 14px',display:'none'}});
+      body.appendChild(h('p',{style:{fontFamily:"'Crimson Text',serif",fontSize:'.88rem',color:'#c4b5fd',lineHeight:'1.6'}},yorum));
+      const arr=h('span',{},'▼');
+      const btn=h('button',{class:'btn',style:{background:`linear-gradient(135deg,#0f0a1a,#1a0f2e)`,border:`1px solid ${renk}66`,borderRadius:'10px',padding:'8px 12px',color:renk,fontSize:'.82rem',display:'flex',alignItems:'center',gap:'8px',width:'100%',marginTop:'4px'},onclick:(e)=>{e.stopPropagation();acik=!acik;body.style.display=acik?'block':'none';arr.textContent=acik?'▲':'▼';}});
+      btn.appendChild(h('span',{},ikon));
+      btn.appendChild(h('span',{style:{flex:'1',textAlign:'left'}},`@${ad}`));
+      if(puan)btn.appendChild(h('span',{style:{fontWeight:'700',color:renk}},`${puan}/10`));
+      btn.appendChild(arr);
+      botWrap.appendChild(btn);
+      botWrap.appendChild(body);
+    });
+    full.appendChild(botWrap);
+  }
   if(!isOwn&&!isAdmin){
     const rw=h('div',{style:{background:'#0f0a1a',border:myR?'1px solid #5b21b6':'1px dashed #3d1f6e',borderRadius:'12px',padding:'12px 14px',marginBottom:'12px'}});
     rw.appendChild(h('p',{style:{fontSize:'.85rem',color:myR?'#c084fc':'#a78bfa',marginBottom:'8px',fontStyle:myR?'normal':'italic'}},myR?`✅ Puanınız: ${myR}/10`:'⭐ Bu şiire puan ver! (1-10)'));
@@ -1012,6 +1189,60 @@ function Profile(){
   if(!isMe && user.username !== ADMIN_USERNAME){
     const fb=h('button',{class:'pb btn',onclick:()=>{A.toggleFollow(user.id);render();}},isF(user.id)?'Takibi Bırak':'Takip Et');
     card.appendChild(fb);
+  }
+
+  // Admin paneli
+  if(S.me?.username===ADMIN_USERNAME){
+    const adminPanel=h('div',{class:'card',style:{marginTop:'16px',border:'1px solid #5b21b6',background:'linear-gradient(135deg,#1e0a3e,#160d28)'}});
+    adminPanel.appendChild(h('h3',{style:{fontFamily:"'Playfair Display',serif",color:'#c084fc',marginBottom:'12px',fontSize:'1rem'}},'⚙️ Admin Paneli'));
+
+    // Tüm şiirleri yeniden değerlendir butonu
+    const durumEl=h('p',{style:{color:'#6b5b8a',fontSize:'.85rem',marginTop:'10px',fontStyle:'italic'}},'');
+    const revalBtn=h('button',{class:'pb btn',style:{width:'100%',background:'linear-gradient(135deg,#5b21b6,#7c3aed)',fontSize:'.9rem'},
+      onclick:async()=>{
+        revalBtn.disabled=true;
+        revalBtn.textContent='⏳ Değerlendiriliyor...';
+        durumEl.textContent='';
+        let sayac=0;
+        const tumPostlar=[...S.posts];
+        for(const post of tumPostlar){
+          if(!post.text||post.text.trim().length<10){sayac++;continue;}
+          const r=scorePoem(post.text);
+          const b1=botDuyuPuan(post.text);
+          const b2=botKatliPuan(post.text);
+          const b3=botAriPuan(post.text);
+          const yeniRatings={...(post.userRatings||{})};
+          // Bot puanlarını güncelle
+          if(b1)yeniRatings[b1.kullanici]=b1.puan;
+          if(b2)yeniRatings[b2.kullanici]=b2.puan;
+          if(b3)yeniRatings[b3.kullanici]=b3.puan;
+          if(r)yeniRatings['bot_ai_yorum']=r.score;
+          const yeniBotYorumlar={...(post.botYorumlar||{})};
+          if(b1)yeniBotYorumlar[b1.kullanici]={yorum:b1.yorum,ad:b1.ad};
+          if(b2)yeniBotYorumlar[b2.kullanici]={yorum:b2.yorum,ad:b2.ad};
+          if(b3)yeniBotYorumlar[b3.kullanici]={yorum:b3.yorum,ad:b3.ad};
+          const idx=S.posts.findIndex(p=>p.id===post.id);
+          if(idx>-1){
+            S.posts[idx].userRatings=yeniRatings;
+            S.posts[idx].botYorumlar=yeniBotYorumlar;
+            if(r){S.posts[idx].aiScore=r.score;S.posts[idx].aiYorum=r.yorum;S.posts[idx].aiGuclu=r.gucluYonler;S.posts[idx].aiOneri=r.gelistirmeOnerisi;}
+          }
+          // Firebase güncelle
+          try{await db.collection("posts").doc(post.id).update({userRatings:yeniRatings,botYorumlar:yeniBotYorumlar,aiScore:r?r.score:post.aiScore,aiYorum:r?r.yorum:post.aiYorum,aiGuclu:r?r.gucluYonler:post.aiGuclu,aiOneri:r?r.gelistirmeOnerisi:post.aiOneri});}catch(e){console.error(e);}
+          sayac++;
+          durumEl.textContent=`${sayac}/${tumPostlar.length} şiir güncellendi...`;
+        }
+        save();
+        revalBtn.disabled=false;
+        revalBtn.textContent='🔄 Tüm Şiirleri Yeniden Değerlendir';
+        durumEl.textContent=`✅ ${sayac} şiir başarıyla güncellendi!`;
+        durumEl.style.color='#34d399';
+        render();
+      }
+    },'🔄 Tüm Şiirleri Yeniden Değerlendir');
+    adminPanel.appendChild(revalBtn);
+    adminPanel.appendChild(durumEl);
+    page.appendChild(adminPanel);
   }
   page.appendChild(card);
   page.appendChild(h('h3',{style:{fontFamily:"'Playfair Display',serif",color:'#a78bfa',marginBottom:'12px',fontSize:'1.1rem'}},'Şiirler'));
