@@ -1242,9 +1242,12 @@ function Profile(){
     },'🔄 Tüm Şiirleri Yeniden Değerlendir');
     adminPanel.appendChild(revalBtn);
     adminPanel.appendChild(durumEl);
-    page.appendChild(adminPanel);
   }
   page.appendChild(card);
+  // Admin panelini kartın altına ekle
+  if(S.me?.username===ADMIN_USERNAME){
+    page.appendChild(adminPanel);
+  }
   page.appendChild(h('h3',{style:{fontFamily:"'Playfair Display',serif",color:'#a78bfa',marginBottom:'12px',fontSize:'1.1rem'}},'Şiirler'));
   if(!ups.length){
     page.appendChild(h('p',{style:{color:'#6b5b8a',fontStyle:'italic'}},'Henüz şiir paylaşılmadı.'));
