@@ -148,7 +148,23 @@ const scoreBadge=s=>{if(!s)return'';if(s>=9)return'🏆 Başyapıt';if(s>=8)retu
 
 // ── ŞİİR ANALİZ MOTORU ──────────────────────────────────────────────────────
 
-async function scorePoem(text){ return scorePoemYerel(text); }
+async function scorePoem(text){
+  if(!text||text.trim().length<3)return null;
+  try{
+    const res = await fetch('/api/score', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({text})
+    });
+    if(!res.ok) throw new Error('Sunucu hatası: '+res.status);
+    const data = await res.json();
+    if(data.error) throw new Error(data.error);
+    return data;
+  } catch(e){
+    console.warn('Claude API çalışmadı, yerel algoritma kullanılıyor:', e.message);
+    return scorePoemYerel(text);
+  }
+}
 
 function scorePoemYerel(text){
   if(!text||text.trim().length<3)return null;
