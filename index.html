@@ -153,10 +153,6 @@ const GROQ_API_KEY = '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';
 
 async function scorePoem(text){
   if(!text||text.trim().length<3)return null;
-  if(!GROQ_API_KEY || GROQ_API_KEY==='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'){
-    console.warn('Groq API key tanımlanmamış, yerel algoritma kullanılıyor.');
-    return scorePoemYerel(text);
-  }
   try{
     const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
