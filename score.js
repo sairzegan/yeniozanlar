@@ -11,51 +11,52 @@ export default async function handler(req) {
       return new Response(JSON.stringify({ error: 'Metin çok kısa' }), { status: 400 });
     }
 
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
+    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'anthropic-version': '2023-06-01',
-        'x-api-key': process.env.ANTHROPIC_API_KEY,
+        'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
       },
       body: JSON.stringify({
-        model: 'claude-opus-4-5',
+        model: 'llama-3.3-70b-versatile',
         max_tokens: 1024,
+        temperature: 0.7,
         messages: [{
+          role: 'system',
+          content: 'Sen deneyimli bir Türk edebiyat eleştirmenisin. Şiirleri derinlemesine analiz eder, doğrudan söylenmese bile ima edilen duygu ve anlatıyı kavrayabilirsin. Yanıtlarını SADECE geçerli JSON formatında verirsin.'
+        },{
           role: 'user',
-          content: `Sen deneyimli bir Türk edebiyat eleştirmenisin. Aşağıdaki şiiri derinlemesine analiz et.
+          content: `Aşağıdaki şiiri analiz et:
 
-Şiir:
 """
 ${text}
 """
 
-Şiiri şu kriterlere göre değerlendir:
-1. Şiirden ne anladın? Doğrudan söylenmese bile ima edilen duygu, durum veya anlatı nedir?
-2. Ana tema ve ikincil tema nedir? Şiirdeki hangi dize veya kelimeler bunu taşıyor?
-3. İmge ve metaforlar: Özgün mü, klişe mi? Şiirden somut örnek ver.
-4. Dil kalitesi: Şiirsel mi, günlük dil mi, didaktik mi? Örnekle açıkla.
-5. Ses uyumu: Kafiye, hece ölçüsü, aliterasyon var mı? Gerçekten var mı, yoksa aynı kelime tekrarı mı?
-6. Güçlü ve zayıf yönleri neler?
-7. Puan: 2.0-9.8 arasında gerçekçi ve eleştirel bir puan ver. Kısa, günlük dilli, tekrarlı şiirlere düşük puan.
+Dikkat et:
+- Aynı kelimenin tekrarını kafiye sayma
+- Kısa ve tekrarlı şiirlere düşük puan ver
+- Doğrudan söylenmese bile ima edilen duyguyu, temayı, anlatıyı kavra (örnek: "narin bir nergis" bir kadını anlatıyor olabilir)
+- Şiirden gerçek dize alıntısı yap
+- Hece ölçüsünü doğru tespit et; çok kısa dizeler hece ölçülü sayılmaz
+- Günlük konuşma dili ve klişelere eksi puan ver
 
-SADECE şu JSON formatında yanıt ver:
+SADECE şu JSON ile yanıtla, başka hiçbir şey yazma:
 {
-  "score": <sayı>,
-  "yorum": "<4-6 cümle, somut dize alıntıları ile>",
-  "gucluYonler": "<tek cümle>",
-  "gelistirmeOnerisi": "<tek cümle, somut>"
+  "score": <2.0-9.8 arası gerçekçi puan>,
+  "yorum": "<5-7 cümle: şiirden ne anlaşıldığı, tema, imge, dil kalitesi, ses uyumu — hepsi şiirden somut alıntıyla>",
+  "gucluYonler": "<tek cümle, şiirden somut örnek>",
+  "gelistirmeOnerisi": "<tek cümle, somut ve uygulanabilir>"
 }`
         }]
       })
     });
 
     const data = await response.json();
-    if (!data.content) {
-      throw new Error('API yanıt vermedi: ' + JSON.stringify(data));
+    if (!data.choices?.[0]?.message?.content) {
+      throw new Error('Groq yanıt vermedi: ' + JSON.stringify(data));
     }
 
-    const raw = data.content.map(b => b.text || '').join('').trim();
+    const raw = data.choices[0].message.content.trim();
     const clean = raw.replace(/```json|```/g, '').trim();
     const jsonStr = clean.slice(clean.indexOf('{'), clean.lastIndexOf('}') + 1);
     const result = JSON.parse(jsonStr);
@@ -64,11 +65,17 @@ SADECE şu JSON formatında yanıt ver:
 
     return new Response(JSON.stringify(result), {
       status: 200,
-      headers: { 'Content-Type': 'application/json' }
+      headers: {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*'
+      }
     });
 
   } catch (err) {
     console.error('Hata:', err);
-    return new Response(JSON.stringify({ error: err.message }), { status: 500 });
+    return new Response(JSON.stringify({ error: err.message }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' }
+    });
   }
 }
