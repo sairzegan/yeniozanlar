@@ -148,20 +148,47 @@ const scoreBadge=s=>{if(!s)return'';if(s>=9)return'🏆 Başyapıt';if(s>=8)retu
 
 // ── ŞİİR ANALİZ MOTORU ──────────────────────────────────────────────────────
 
+// Groq API anahtarını buraya yapıştır:
+const GROQ_API_KEY = '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';
+
 async function scorePoem(text){
   if(!text||text.trim().length<3)return null;
+  if(!GROQ_API_KEY || GROQ_API_KEY==='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'){
+    console.warn('Groq API key tanımlanmamış, yerel algoritma kullanılıyor.');
+    return scorePoemYerel(text);
+  }
   try{
-    const res = await fetch('/api/score', {
+    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({text})
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${GROQ_API_KEY}`
+      },
+      body: JSON.stringify({
+        model: 'llama-3.3-70b-versatile',
+        max_tokens: 1024,
+        temperature: 0.7,
+        messages: [{
+          role: 'system',
+          content: 'Sen deneyimli bir Türk edebiyat eleştirmenisin. Şiirleri derinlemesine analiz eder, doğrudan söylenmese bile ima edilen duygu ve anlatıyı kavrayabilirsin. Yanıtlarını SADECE geçerli JSON formatında verirsin.'
+        },{
+          role: 'user',
+          content: `Aşağıdaki şiiri analiz et:\n\n"""\n${text}\n"""\n\nDikkat et:\n- Aynı kelimenin tekrarını kafiye sayma\n- Kısa ve tekrarlı şiirlere düşük puan ver\n- Doğrudan söylenmese bile ima edilen duyguyu, temayı, anlatıyı kavra\n- Şiirden gerçek dize alıntısı yap\n- Hece ölçüsünü doğru tespit et\n- Günlük konuşma dili ve klişelere eksi puan ver\n\nSADECE şu JSON ile yanıtla, başka hiçbir şey yazma:\n{\n  "score": <2.0-9.8 arası gerçekçi puan>,\n  "yorum": "<5-7 cümle: şiirden ne anlaşıldığı, tema, imge, dil kalitesi, ses uyumu>",\n  "gucluYonler": "<tek cümle, şiirden somut örnek>",\n  "gelistirmeOnerisi": "<tek cümle, somut ve uygulanabilir>"\n}`
+        }]
+      })
     });
-    if(!res.ok) throw new Error('Sunucu hatası: '+res.status);
+    if(!res.ok) throw new Error('Groq hatası: '+res.status);
     const data = await res.json();
-    if(data.error) throw new Error(data.error);
-    return data;
+    if(!data.choices?.[0]?.message?.content) throw new Error('Groq yanıt vermedi');
+    const raw = data.choices[0].message.content.trim();
+    const clean = raw.replace(/```json|```/g,'').trim();
+    const jsonStr = clean.slice(clean.indexOf('{'), clean.lastIndexOf('}')+1);
+    const result = JSON.parse(jsonStr);
+    result.score = Math.min(9.8, Math.max(2.0, parseFloat(result.score)));
+    result.score = Math.round(result.score * 10) / 10;
+    return result;
   } catch(e){
-    console.warn('Claude API çalışmadı, yerel algoritma kullanılıyor:', e.message);
+    console.warn('Groq API çalışmadı, yerel algoritma kullanılıyor:', e.message);
     return scorePoemYerel(text);
   }
 }
