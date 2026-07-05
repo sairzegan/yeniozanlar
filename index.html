@@ -2,9 +2,10 @@
 <html lang="tr">
 <head>
   <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="script-src 'self' 'unsafe-inline' 'unsafe-eval' https://www.gstatic.com https://apis.google.com; connect-src 'self' https://api.groq.com https://*.googleapis.com https://*.firebaseio.com wss://*.firebaseio.com;">
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Yeni Ozanlar 🪶</title>
-  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght=0,400;0,700;1,400&family=Crimson+Text:ital,wght=0,400;0,600;1,400&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;1,400&family=Crimson+Text:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
   <style>
     *{box-sizing:border-box;margin:0;padding:0}
     html{font-size:24px}
@@ -153,7 +154,10 @@ const GROQ_API_KEY = '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';
 
 async function scorePoem(text){
   if(!text||text.trim().length<3)return null;
-
+  if(!GROQ_API_KEY || GROQ_API_KEY==='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'){
+    console.warn('Groq API key tanımlanmamış, yerel algoritma kullanılıyor.');
+    return scorePoemYerel(text);
+  }
   try{
     const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
