@@ -674,137 +674,70 @@ const A = {
 };
 
 // ── BOT PUANLAMALARI (A dışında tanımlanır) ──────────────────────────────────
-function botDuyuPuan(text){
-  if(!text||text.trim().length<5)return null;
-  const tL=text.toLowerCase();
-  const tumK=text.trim().split(/\s+/).map(w=>w.toLowerCase().replace(/[^a-züğışöçâîû]/gi,''));
-  const varMi=w=>tumK.includes(w.toLowerCase().replace(/[^a-züğışöçâîû]/gi,''));
+// ── BOT PUANLAMALARI (Groq AI) ──────────────────────────────────────────────
 
-  const duygusalK=['hüzün','keder','özlem','hasret','aşk','sevda','ağlamak','yalnız','gurbet','acı','figan','ah','vah','sızı','yürek','gönül','can','ruh','sessizlik','yokluk','sonsuz','ölüm','yaşam','umut','sevinç','neşe','bahar','ışık'];
-  const bulunan=duygusalK.filter(k=>varMi(k));
-  const yogunluk=bulunan.length;
-
-  // Duygu yoğunluğuna göre puan
-  let p=4.0;
-  if(yogunluk>=6)p=8.5+(Math.random()*0.8);
-  else if(yogunluk>=4)p=7.0+(Math.random()*1.0);
-  else if(yogunluk>=2)p=5.5+(Math.random()*1.0);
-  else if(yogunluk===1)p=4.5+(Math.random()*0.8);
-  else p=3.0+(Math.random()*1.0);
-
-  // Uzunluk etkisi
-  const lc=text.split('\n').filter(s=>s.trim().length>0).length;
-  if(lc<3)p-=1.5;
-  else if(lc>=6)p+=0.3;
-
-  p=Math.min(9.5,Math.max(2.0,p));
-  p=Math.round(p*10)/10;
-
-  const yorumlar=[
-    `Şiirde ${yogunluk>3?'güçlü':'zayıf'} bir duygusal yoğunluk hissediliyor. ${bulunan.length>0?bulunan.slice(0,2).join(', ')+' gibi kelimeler duygu atmosferini oluşturuyor.':'Duygu sözcükleri oldukça sınırlı kalmış.'}`,
-    `Duygusal etki ${p>=7?'yüksek':'sınırlı'}. ${bulunan.length>0?'Şiirde geçen '+bulunan[0]+' gibi imgeler okuyucuya duyguyu iletebiliyor.':'Duygu doğrudan aktarılamamış; şiirsel imgelerle pekiştirilmeli.'}`,
-    `${lc<3?'Çok kısa bir metin; duygu yeterince geliştirilmemiş.':yogunluk>=4?'Duygu katmanları belirgin ve okuyucuya ulaşıyor.':'Duygu potansiyeli var ama henüz tam ifade bulamamış.'}`,
-  ];
-  const hash=text.length%yorumlar.length;
-  return {puan:p, yorum:yorumlar[hash], kullanici:'bot_duyu_yorum', ad:'duyu-yorum'};
+async function groqBotCall(systemPrompt, userPrompt) {
+  try {
+    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + GROQ_API_KEY
+      },
+      body: JSON.stringify({
+        model: 'llama-3.3-70b-versatile',
+        max_tokens: 400,
+        temperature: 0.8,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt }
+        ]
+      })
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    const raw = data.choices?.[0]?.message?.content?.trim();
+    if (!raw) throw new Error('Bos yanit');
+    const clean = raw.replace(/```json|```/g, '').trim();
+    const jsonStr = clean.slice(clean.indexOf('{'), clean.lastIndexOf('}') + 1);
+    return JSON.parse(jsonStr);
+  } catch(e) {
+    console.warn('groqBotCall hatasi:', e.message);
+    return null;
+  }
 }
 
-// Bot 2: katlı-yorum — ses uyumu ve kafiye analizi
-function botKatliPuan(text){
-  if(!text||text.trim().length<5)return null;
-  const satirlar=text.split('\n').filter(s=>s.trim().length>0);
-  const lc=satirlar.length;
-
-  // Kafiye
-  const sonlar=satirlar.map(l=>{const w=l.trim().split(/\s+/);return w[w.length-1]?.toLowerCase().replace(/[^a-züğışöçâîû]/gi,'')?.slice(-3)||''});
-  let kafiyeSayisi=0;
-  for(let i=0;i<sonlar.length-1;i++){if(sonlar[i].length>1&&sonlar[i]===sonlar[i+1])kafiyeSayisi++;else if(sonlar[i].length>1&&i+2<sonlar.length&&sonlar[i]===sonlar[i+2])kafiyeSayisi+=0.5;}
-  const kafiyeOrani=kafiyeSayisi/Math.max(lc-1,1);
-
-  // Zorlamalı kafiye
-  const zorlamaEkler=['miş','mış','muş','müş','ler','lar','dan','den','mak','mek'];
-  const zorlamaKafiye=zorlamaEkler.filter(ek=>sonlar.filter(s=>s.endsWith(ek)).length>=Math.ceil(lc*0.5)).length>0;
-
-  // Hece ölçüsü
-  const heceArr=satirlar.map(l=>l.trim().split(/\s+/).reduce((s,w)=>(w.match(/[aeıioöuüAEIİOÖUÜ]/g)||[]).length+s,0));
-  const heceMean=heceArr.reduce((a,b)=>a+b,0)/Math.max(heceArr.length,1);
-  const heceVar=heceArr.length>1?Math.sqrt(heceArr.reduce((s,h)=>s+(h-heceMean)**2,0)/heceArr.length):5;
-  const heceOlcusu=heceVar<2.0&&lc>=4;
-
-  // Aliterasyon
-  const tumK=text.trim().split(/\s+/).map(w=>w[0]?.toLowerCase()).filter(Boolean);
-  const hs={};tumK.forEach(h=>{hs[h]=(hs[h]||0)+1});
-  const aliterasyon=Object.values(hs).filter(v=>v>=3).length>0;
-
-  let p=4.0;
-  if(heceOlcusu)p+=2.0;
-  if(kafiyeOrani>0.5&&!zorlamaKafiye)p+=1.5;
-  else if(kafiyeOrani>0.25&&!zorlamaKafiye)p+=0.8;
-  if(zorlamaKafiye)p-=1.2;
-  if(aliterasyon)p+=0.6;
-  if(lc<3)p-=1.5;
-
-  p=Math.min(9.5,Math.max(2.0,p));
-  p=Math.round(p*10)/10;
-
-  let yorum='';
-  if(heceOlcusu)yorum=`Hece ölçüsü tutarlı (ort. ${Math.round(heceMean)} hece/dize); ${kafiyeOrani>0.4&&!zorlamaKafiye?'kafiye düzeni de başarılı.':'ancak kafiye daha güçlendirilebilir.'}`;
-  else if(zorlamaKafiye)yorum=`Ses uyumu zorlamalı kafiyeye dayanıyor; aynı ek tekrarı monotonluk yaratıyor. Daha doğal bir ses arayışı gerekiyor.`;
-  else if(kafiyeOrani>0.3)yorum=`Serbest nazımda kafiye denemeleri var; ${aliterasyon?'aliterasyon da ritmi destekliyor.':'aliterasyon eklenirse ses dokusu zenginleşir.'}`;
-  else yorum=`Ses araçları (kafiye, hece ölçüsü, aliterasyon) yeterince kullanılmamış; şiir ritmik açıdan zayıf kalıyor.`;
-
-  return {puan:p, yorum, kullanici:'bot_katli_yorum', ad:'katlı-yorum'};
+async function botDuyuPuan(text) {
+  if (!text || text.trim().length < 5) return null;
+  const system = 'Sen "duyu-yorum" adlı bir şiir eleştirmensin. YALNIZCA şiirin duygusallığını, duygu yoğunluğunu ve duygusal etkisini değerlendirirsin. Teknik unsurları değil, sadece duyguyu analiz et. Yanıtlarını SADECE JSON formatında ver.';
+  const user = 'Şu şiirin duygusallığını değerlendir:\n\n"""\n' + text + '\n"""\n\nSADECE şu JSON ile yanıtla:\n{"puan": <2.0-9.5 arasi sayi>, "yorum": "<2-3 cumle duygu analizi>"}';
+  const result = await groqBotCall(system, user);
+  if (!result) return null;
+  let p = Math.min(9.5, Math.max(2.0, parseFloat(result.puan)));
+  p = Math.round(p * 10) / 10;
+  return { puan: p, yorum: result.yorum, kullanici: 'bot_duyu_yorum', ad: 'duyu-yorum' };
 }
 
-// Bot 3: arı-yorum — imge, metafor, uzunluk, emek analizi
-function botAriPuan(text){
-  if(!text||text.trim().length<5)return null;
-  const tumK=text.trim().split(/\s+/).map(w=>w.toLowerCase().replace(/[^a-züğışöçâîû]/gi,''));
-  const satirlar=text.split('\n').filter(s=>s.trim().length>0);
-  const lc=satirlar.length;
-  const len=tumK.length;
-  const tL=text.toLowerCase();
-  const benzersiz=new Set(tumK).size;
-  const zenginlik=benzersiz/Math.max(len,1);
+async function botKatliPuan(text) {
+  if (!text || text.trim().length < 5) return null;
+  const system = 'Sen "katlı-yorum" adlı bir şiir eleştirmensin. YALNIZCA şiirin ses uyumunu, kafiye düzenini, hece ölçüsünü ve ritim yapısını değerlendirirsin. Duyguya değil, sese odaklan. Yanıtlarını SADECE JSON formatında ver.';
+  const user = 'Şu şiirin ses uyumunu ve kafiyesini değerlendir:\n\n"""\n' + text + '\n"""\n\nSADECE şu JSON ile yanıtla:\n{"puan": <2.0-9.5 arasi sayi>, "yorum": "<2-3 cumle ses analizi>"}';
+  const result = await groqBotCall(system, user);
+  if (!result) return null;
+  let p = Math.min(9.5, Math.max(2.0, parseFloat(result.puan)));
+  p = Math.round(p * 10) / 10;
+  return { puan: p, yorum: result.yorum, kullanici: 'bot_katli_yorum', ad: 'katlı-yorum' };
+}
 
-  const benzetmeImleri=['gibi','sanki','andır','tıpkı','adeta','misali'];
-  const benzetmeVar=benzetmeImleri.some(b=>tL.includes(b));
-  const insanFiilleri=['söyler','bakar','ağlar','fısıldar','haykırır','titrer','bekler'];
-  const dogaK=['güneş','ay','deniz','dağ','rüzgar','yaprak','bulut','nehir'];
-  const kisilesMeVar=satirlar.some(s=>{const sL=s.toLowerCase();return dogaK.some(d=>sL.includes(d))&&insanFiilleri.some(f=>sL.includes(f));});
-  const sembolListe=['kafes','zincir','perde','kül','yankı','gölge','uçurum','köprü','sis'];
-  const sembolVar=sembolListe.some(w=>tumK.includes(w));
-  const kliseMetaforlar=['gözlerin yıldız','saçların rüzgar','aşkından yandım','kalp kırık'];
-  const kliseVar=kliseMetaforlar.some(k=>tL.includes(k));
-
-  let p=4.0;
-  // Uzunluk/emek
-  if(len>=30&&len<=80)p+=1.5;
-  else if(len>=15)p+=0.8;
-  else if(len<8)p-=2.0;
-  else if(len<15)p-=1.0;
-  if(lc>=6)p+=0.5;
-  else if(lc<3)p-=1.2;
-
-  // İmge/metafor
-  if(benzetmeVar)p+=0.8;
-  if(kisilesMeVar)p+=0.9;
-  if(sembolVar)p+=0.6;
-  if(kliseVar)p-=0.8;
-  if(zenginlik>0.75)p+=0.7;
-  else if(zenginlik<0.5)p-=0.5;
-
-  p=Math.min(9.5,Math.max(2.0,p));
-  p=Math.round(p*10)/10;
-
-  let yorum='';
-  const imgeSayisi=(benzetmeVar?1:0)+(kisilesMeVar?1:0)+(sembolVar?1:0);
-  if(imgeSayisi>=2&&!kliseVar)yorum=`Şiirde özgün imgeler ve metaforlar dikkat çekiyor. ${len>=20?'Emek verilmiş bir yapı; uzunluk ve kelime çeşitliliği bunu destekliyor.':'Ancak şiir daha geniş bir yapıya kavuşturulabilir.'}`;
-  else if(kliseVar)yorum=`Şiirde klişeleşmiş metaforlar kullanılmış; özgün imgeler şiiri daha güçlü kılar. ${len<15?'Ayrıca şiir oldukça kısa; daha fazla emek ve genişleme gerekiyor.':''}`;
-  else if(len<10)yorum=`Şiir çok kısa; imge ve metafor için yeterli alan oluşmamış. Daha uzun ve işlenmiş bir yapı hedeflenmeli.`;
-  else yorum=`${imgeSayisi===0?'İmge ve metafor kullanımı oldukça sınırlı; şiirsel araçlar geliştirilmeli.':'Bazı imgeler mevcut fakat daha özgün söyleyişler şiiri güçlendirirdi.'} Kelime zenginliği ${zenginlik>0.65?'tatmin edici':'artırılabilir'}.`;
-
-  return {puan:p, yorum, kullanici:'bot_ari_yorum', ad:'arı-yorum'};
+async function botAriPuan(text) {
+  if (!text || text.trim().length < 5) return null;
+  const system = 'Sen "arı-yorum" adlı bir şiir eleştirmensin. YALNIZCA şiirdeki imgeleri, metaforları, özgünlüğü ve şiire verilen emeği değerlendirirsin. Ne kadar işlenmiş, ne kadar özgün olduğuna bak. Yanıtlarını SADECE JSON formatında ver.';
+  const user = 'Şu şiirin imgelerini, metaforlarını ve özgünlüğünü değerlendir:\n\n"""\n' + text + '\n"""\n\nSADECE şu JSON ile yanıtla:\n{"puan": <2.0-9.5 arasi sayi>, "yorum": "<2-3 cumle imge analizi>"}';
+  const result = await groqBotCall(system, user);
+  if (!result) return null;
+  let p = Math.min(9.5, Math.max(2.0, parseFloat(result.puan)));
+  p = Math.round(p * 10) / 10;
+  return { puan: p, yorum: result.yorum, kullanici: 'bot_ari_yorum', ad: 'arı-yorum' };
 }
 
 // ── AKSİYONLAR (devam) ───────────────────────────────────────────────────────
@@ -812,9 +745,8 @@ A.addPost = async function(pd){
     // Bot puanları hesapla (önce bots, sonra async AI)
     const botRatings={};
     const botYorumlar={};
-    const b1=pd.text&&pd.text.trim().length>10?botDuyuPuan(pd.text):null;
-    const b2=pd.text&&pd.text.trim().length>10?botKatliPuan(pd.text):null;
-    const b3=pd.text&&pd.text.trim().length>10?botAriPuan(pd.text):null;
+    const hasText=pd.text&&pd.text.trim().length>10;
+    const [b1,b2,b3]=hasText ? await Promise.all([botDuyuPuan(pd.text),botKatliPuan(pd.text),botAriPuan(pd.text)]) : [null,null,null];
     if(b1){botRatings[b1.kullanici]=b1.puan;botYorumlar[b1.kullanici]={yorum:b1.yorum,ad:b1.ad};}
     if(b2){botRatings[b2.kullanici]=b2.puan;botYorumlar[b2.kullanici]={yorum:b2.yorum,ad:b2.ad};}
     if(b3){botRatings[b3.kullanici]=b3.puan;botYorumlar[b3.kullanici]={yorum:b3.yorum,ad:b3.ad};}
@@ -1402,9 +1334,7 @@ function Profile(){
         for(const post of tumPostlar){
           if(!post.text||post.text.trim().length<10){sayac++;continue;}
           const r=await scorePoem(post.text);
-          const b1=botDuyuPuan(post.text);
-          const b2=botKatliPuan(post.text);
-          const b3=botAriPuan(post.text);
+          const [b1,b2,b3]=await Promise.all([botDuyuPuan(post.text),botKatliPuan(post.text),botAriPuan(post.text)]);
           const yeniRatings={...(post.userRatings||{})};
           if(b1)yeniRatings[b1.kullanici]=b1.puan;
           if(b2)yeniRatings[b2.kullanici]=b2.puan;
