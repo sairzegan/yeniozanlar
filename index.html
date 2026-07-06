@@ -1333,8 +1333,16 @@ function Profile(){
         const tumPostlar=[...S.posts];
         for(const post of tumPostlar){
           if(!post.text||post.text.trim().length<10){sayac++;continue;}
+          // Her şiir arasında 2.5 sn bekle — Groq rate limit (30 istek/dk) için
+          if(sayac>0) await new Promise(res=>setTimeout(res,2500));
+          durumEl.textContent=`⏳ ${sayac+1}/${tumPostlar.length} değerlendiriliyor...`;
           const r=await scorePoem(post.text);
-          const [b1,b2,b3]=await Promise.all([botDuyuPuan(post.text),botKatliPuan(post.text),botAriPuan(post.text)]);
+          await new Promise(res=>setTimeout(res,800));
+          const b1=await botDuyuPuan(post.text);
+          await new Promise(res=>setTimeout(res,800));
+          const b2=await botKatliPuan(post.text);
+          await new Promise(res=>setTimeout(res,800));
+          const b3=await botAriPuan(post.text);
           const yeniRatings={...(post.userRatings||{})};
           if(b1)yeniRatings[b1.kullanici]=b1.puan;
           if(b2)yeniRatings[b2.kullanici]=b2.puan;
