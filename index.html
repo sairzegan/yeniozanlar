@@ -611,24 +611,26 @@ function refreshCard(pid){
   if(!post)return;
   const oldCard=document.querySelector(`[data-pid="${pid}"]`);
   if(!oldCard)return;
-  // Kartın genişletilmiş mi olduğunu kaydet
+  // Mevcut durumu kaydet
   const wasExpanded=oldCard.querySelector('.post-full')?.style.display==='block';
-  // Yorumlar açık mıydı
-  const cmtBodyEl=oldCard.querySelector('.cmt-body');
-  const cmtsOpen=cmtBodyEl?.style.display==='block';
-  // Mevcut scroll pozisyonunu kaydet
+  const cmtsOpen=oldCard.querySelector('.cmt-body')?.style.display==='block';
   const scrollY=window.scrollY;
-  // Yeni kartı oluştur — her zaman genişletilmiş tut
+  const cardTop=oldCard.getBoundingClientRect().top;
+  // Eski kartın yüksekliğini sabit tut — layout shift önle
+  oldCard.style.minHeight=oldCard.offsetHeight+'px';
+  // Yeni kartı oluştur
   const newCard=postCard(post, wasExpanded);
   newCard.setAttribute('data-pid',pid);
   oldCard.replaceWith(newCard);
   // Yorumlar açıksa yeni kartta da aç
   if(cmtsOpen){
-    const newCmtBody=newCard.querySelector('.cmt-body');
-    if(newCmtBody)newCmtBody.style.display='block';
+    const b=newCard.querySelector('.cmt-body');
+    if(b)b.style.display='block';
   }
-  // Scroll pozisyonunu geri yükle — sayfa kaymaz
-  window.scrollTo({top:scrollY,behavior:'instant'});
+  // Kartın ekrandaki konumunu koruyarak scroll'u sabitle
+  const newCardTop=newCard.getBoundingClientRect().top;
+  const diff=newCardTop-cardTop;
+  window.scrollTo({top:scrollY+diff,behavior:'instant'});
 }
 function save(){lsSet('yo_users',S.users);lsSet('yo_posts',S.posts);lsSet('yo_me',S.me);lsSet('yo_follows',S.follows);lsSet('yo_msgs',S.msgs)}
 
@@ -957,7 +959,7 @@ function postCard(post, forceExpand=false){
   card.appendChild(preview);
 
   // ── TAM İÇERİK ────────────────────────────────────────────────────────────
-  const full=h('div',{style:{display:'none',marginTop:'12px',borderTop:'1px solid #2d1b52',paddingTop:'12px'}});
+  const full=h('div',{class:'post-full',style:{display:'none',marginTop:'12px',borderTop:'1px solid #2d1b52',paddingTop:'12px'}});
 
   // tam header
   const hdr=h('div',{style:{display:'flex',alignItems:'center',gap:'10px',marginBottom:'14px',paddingRight:'70px'}},[
