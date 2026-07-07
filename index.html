@@ -1030,6 +1030,61 @@ function postCard(post, forceExpand=false){
     full.appendChild(rw);
   }
   if((isOwn||isAdmin)&&ucnt>0) full.appendChild(h('div',{style:{background:'#0f0a1a',border:'1px solid #2d1b52',borderRadius:'12px',padding:'10px 14px',marginBottom:'12px'}},[h('p',{style:{fontSize:'.85rem',color:'#a78bfa'}},`${ucnt} kişi puan verdi · Ort: ${(Object.values(post.userRatings).reduce((a,b)=>a+b,0)/ucnt).toFixed(1)}/10`)]));
+
+  // ADMIN: Tekil yeniden değerlendir butonu
+  if(isAdmin && post.text && post.text.trim().length>10){
+    const revalDiv=h('div',{style:{marginBottom:'12px'}});
+    const revalBtn2=h('button',{class:'btn',style:{width:'100%',background:'linear-gradient(135deg,#1e1040,#2d1b52)',color:'#a78bfa',border:'1px solid #5b21b6',fontSize:'.8rem',padding:'8px'}}, '🤖 Yapay Zeka ile Yeniden Değerlendir');
+    const revalStatus=h('p',{style:{fontSize:'.75rem',color:'#6b5b8a',marginTop:'6px',textAlign:'center',display:'none'}});
+    revalBtn2.onclick=async(e)=>{
+      e.stopPropagation();
+      revalBtn2.disabled=true;
+      revalBtn2.textContent='⏳ Değerlendiriliyor...';
+      revalStatus.style.display='block';
+      revalStatus.textContent='Ana AI çalışıyor...';
+      revalStatus.style.color='#6b5b8a';
+      try{
+        const r=await scorePoem(post.text);
+        revalStatus.textContent='duyu-yorum analiz ediyor...';
+        const b1=await botDuyuPuan(post.text);
+        await new Promise(res=>setTimeout(res,600));
+        revalStatus.textContent='katlı-yorum analiz ediyor...';
+        const b2=await botKatliPuan(post.text);
+        await new Promise(res=>setTimeout(res,600));
+        revalStatus.textContent='arı-yorum analiz ediyor...';
+        const b3=await botAriPuan(post.text);
+        const idx=S.posts.findIndex(p=>p.id===post.id);
+        if(idx>-1){
+          const yeniRatings={...(S.posts[idx].userRatings||{})};
+          const yeniBotYorumlar={...(S.posts[idx].botYorumlar||{})};
+          if(b1){yeniRatings[b1.kullanici]=b1.puan;yeniBotYorumlar[b1.kullanici]={yorum:b1.yorum,ad:b1.ad};}
+          if(b2){yeniRatings[b2.kullanici]=b2.puan;yeniBotYorumlar[b2.kullanici]={yorum:b2.yorum,ad:b2.ad};}
+          if(b3){yeniRatings[b3.kullanici]=b3.puan;yeniBotYorumlar[b3.kullanici]={yorum:b3.yorum,ad:b3.ad};}
+          if(r){yeniRatings['bot_ai_yorum']=r.score;}
+          S.posts[idx].userRatings=yeniRatings;
+          S.posts[idx].botYorumlar=yeniBotYorumlar;
+          if(r){S.posts[idx].aiScore=r.score;S.posts[idx].aiYorum=r.yorum;S.posts[idx].aiGuclu=r.gucluYonler;S.posts[idx].aiOneri=r.gelistirmeOnerisi;}
+          save();
+          await db.collection('posts').doc(post.id).update({
+            userRatings:yeniRatings,botYorumlar:yeniBotYorumlar,
+            aiScore:r?r.score:post.aiScore,aiYorum:r?r.yorum:post.aiYorum,
+            aiGuclu:r?r.gucluYonler:post.aiGuclu,aiOneri:r?r.gelistirmeOnerisi:post.aiOneri
+          });
+          refreshCard(post.id);
+          revalStatus.textContent='✅ Güncellendi!';
+          revalStatus.style.color='#34d399';
+        }
+      } catch(err){
+        revalStatus.textContent='❌ Hata: '+err.message;
+        revalStatus.style.color='#f87171';
+      }
+      revalBtn2.disabled=false;
+      revalBtn2.textContent='🤖 Yapay Zeka ile Yeniden Değerlendir';
+    };
+    revalDiv.appendChild(revalBtn2);
+    revalDiv.appendChild(revalStatus);
+    full.appendChild(revalDiv);
+  }
   if(avg!==null) full.appendChild(h('p',{style:{fontSize:'.82rem',color:scoreColor(avg),textAlign:'center',marginBottom:'10px'}},scoreBadge(avg)));
 
   // yorumlar
