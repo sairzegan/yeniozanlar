@@ -1037,7 +1037,7 @@ function postCard(post, forceExpand=false){
   if(isAdmin && post.text && post.text.trim().length>10){
     const revalDiv=h('div',{style:{marginBottom:'12px'}});
     const revalBtn2=h('button',{class:'btn',style:{width:'100%',background:'linear-gradient(135deg,#1e1040,#2d1b52)',color:'#a78bfa',border:'1px solid #5b21b6',fontSize:'.8rem',padding:'8px'}}, '🤖 Yapay Zeka ile Yeniden Değerlendir');
-    const revalStatus=h('p',{style:{fontSize:'.75rem',color:'#6b5b8a',marginTop:'6px',textAlign:'center',display:'none'}});
+    const revalStatus=h('p',{class:'reval-status',style:{fontSize:'.75rem',color:'#6b5b8a',marginTop:'6px',textAlign:'center',display:'none'}});
     revalBtn2.onclick=async(e)=>{
       e.stopPropagation();
       revalBtn2.disabled=true;
@@ -1072,9 +1072,19 @@ function postCard(post, forceExpand=false){
             aiScore:r?r.score:post.aiScore,aiYorum:r?r.yorum:post.aiYorum,
             aiGuclu:r?r.gucluYonler:post.aiGuclu,aiOneri:r?r.gelistirmeOnerisi:post.aiOneri
           });
+          // Scroll ve genişletilmiş durumu koru
+          const card=document.querySelector('[data-pid="'+post.id+'"]');
+          const scrollY=window.scrollY;
+          const cardTop=card?card.getBoundingClientRect().top:0;
+          if(card) card.style.minHeight=card.offsetHeight+'px';
           refreshCard(post.id);
-          revalStatus.textContent='✅ Güncellendi!';
-          revalStatus.style.color='#34d399';
+          // Yeni kartta buton hâlâ görünür — status güncelle
+          const newCard=document.querySelector('[data-pid="'+post.id+'"]');
+          const newCardTop=newCard?newCard.getBoundingClientRect().top:cardTop;
+          window.scrollTo({top:scrollY+(newCardTop-cardTop),behavior:'instant'});
+          // Güncellendi mesajını yeni karttaki status elementine yaz
+          const newStatus=newCard?newCard.querySelector('.reval-status'):null;
+          if(newStatus){newStatus.style.display='block';newStatus.textContent='✅ Güncellendi!';newStatus.style.color='#34d399';}
         }
       } catch(err){
         revalStatus.textContent='❌ Hata: '+err.message;
