@@ -151,6 +151,28 @@ const scoreBadge=s=>{if(!s)return'';if(s>=9)return'🏆 Başyapıt';if(s>=8)retu
 // Groq API anahtarını buraya yapıştır:
 const GROQ_API_KEY = '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';
 
+// Groq rate limit takibi
+const groqKota = {
+  limitDakika: null,      // dakikada kaç istek
+  kalanDakika: null,      // bu dakikada kalan
+  limitGun: null,         // günlük limit
+  kalanGun: null,         // bugün kalan
+  sıfırlanma: null,       // sıfırlanma zamanı
+  sonGuncelleme: null,    // son güncelleme
+  toplamIstek: 0,         // oturumdaki toplam istek sayısı
+};
+
+function groqKotaGuncelle(headers) {
+  const get = k => headers.get(k);
+  if (get('x-ratelimit-limit-requests'))   groqKota.limitDakika   = parseInt(get('x-ratelimit-limit-requests'));
+  if (get('x-ratelimit-remaining-requests')) groqKota.kalanDakika = parseInt(get('x-ratelimit-remaining-requests'));
+  if (get('x-ratelimit-limit-tokens'))     groqKota.limitGun      = get('x-ratelimit-limit-tokens');
+  if (get('x-ratelimit-remaining-tokens')) groqKota.kalanGun      = get('x-ratelimit-remaining-tokens');
+  if (get('x-ratelimit-reset-requests'))   groqKota.sifirlanma    = get('x-ratelimit-reset-requests');
+  groqKota.sonGuncelleme = new Date().toLocaleTimeString('tr-TR');
+  groqKota.toplamIstek++;
+}
+
 async function scorePoem(text){
   if(!text||text.trim().length<3)return null;
   try{
@@ -173,6 +195,7 @@ async function scorePoem(text){
         }]
       })
     });
+    groqKotaGuncelle(res.headers);
     if(!res.ok) throw new Error('Groq hatası: '+res.status);
     const data = await res.json();
     if(!data.choices?.[0]?.message?.content) throw new Error('Groq yanıt vermedi');
@@ -696,6 +719,7 @@ async function groqBotCall(systemPrompt, userPrompt) {
         ]
       })
     });
+    groqKotaGuncelle(res.headers);
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const data = await res.json();
     const raw = data.choices?.[0]?.message?.content?.trim();
@@ -1390,6 +1414,40 @@ function Profile(){
   if(S.me?.username===ADMIN_USERNAME){
     adminPanel=h('div',{class:'card',style:{marginTop:'16px',border:'1px solid #5b21b6',background:'linear-gradient(135deg,#1e0a3e,#160d28)'}});
     adminPanel.appendChild(h('h3',{style:{fontFamily:"'Playfair Display',serif",color:'#c084fc',marginBottom:'12px',fontSize:'1rem'}},'⚙️ Admin Paneli'));
+
+    // Groq Kota Bölümü
+    const kotaDiv=h('div',{style:{background:'#0f0a1a',border:'1px solid #2d1b52',borderRadius:'10px',padding:'12px',marginBottom:'14px'}});
+    kotaDiv.appendChild(h('p',{style:{color:'#a78bfa',fontSize:'.8rem',fontWeight:'bold',marginBottom:'8px'}},'🤖 Groq API Kota Durumu'));
+
+    const kotaIcerik=h('div');
+    function kotaGoster(){
+      kotaIcerik.innerHTML='';
+      if(groqKota.sonGuncelleme===null){
+        kotaIcerik.appendChild(h('p',{style:{color:'#6b5b8a',fontSize:'.75rem',fontStyle:'italic'}},'Henüz API isteği yapılmadı.'));
+      } else {
+        const satir=(label,val,renk)=>{
+          const d=h('div',{style:{display:'flex',justifyContent:'space-between',marginBottom:'4px'}});
+          d.appendChild(h('span',{style:{color:'#6b5b8a',fontSize:'.75rem'}},label));
+          d.appendChild(h('span',{style:{color:renk||'#e2e8f0',fontSize:'.75rem',fontWeight:'bold'}},String(val)));
+          return d;
+        };
+        const kalanRenk=groqKota.kalanDakika!==null?(groqKota.kalanDakika<=5?'#f87171':groqKota.kalanDakika<=15?'#fbbf24':'#34d399'):'#e2e8f0';
+        if(groqKota.kalanDakika!==null) kotaIcerik.appendChild(satir('Dakikada kalan istek:',groqKota.kalanDakika+' / '+(groqKota.limitDakika||'?'),kalanRenk));
+        if(groqKota.sifirlanma)    kotaIcerik.appendChild(satir('Kota sıfırlanma:',groqKota.sifirlanma));
+        if(groqKota.kalanGun)      kotaIcerik.appendChild(satir('Kalan token:',groqKota.kalanGun));
+        kotaIcerik.appendChild(satir('Bu oturumda yapılan:',groqKota.toplamIstek+' istek'));
+        kotaIcerik.appendChild(satir('Son güncelleme:',groqKota.sonGuncelleme,'#6b5b8a'));
+      }
+    }
+    kotaGoster();
+
+    const yenileBtn=h('button',{style:{marginTop:'8px',fontSize:'.7rem',padding:'4px 10px',background:'transparent',color:'#7c3aed',border:'1px solid #3d1f6e',borderRadius:'8px',cursor:'pointer'},
+      onclick:()=>{kotaGoster();}
+    },'🔄 Yenile');
+
+    kotaDiv.appendChild(kotaIcerik);
+    kotaDiv.appendChild(yenileBtn);
+    adminPanel.appendChild(kotaDiv);
     const durumEl=h('p',{style:{color:'#6b5b8a',fontSize:'.85rem',marginTop:'10px',fontStyle:'italic'}},'');
     const revalBtn=h('button',{class:'pb btn',style:{width:'100%',background:'linear-gradient(135deg,#5b21b6,#7c3aed)',fontSize:'.9rem'},
       onclick:async()=>{
