@@ -151,26 +151,92 @@ const scoreBadge=s=>{if(!s)return'';if(s>=9)return'🏆 Başyapıt';if(s>=8)retu
 // Groq API anahtarını buraya yapıştır:
 const GROQ_API_KEY = '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';
 
-// Groq rate limit takibi
+// ── Groq kota yardımcıları ───────────────────────────────────────────────
+// Groq "2m59.56s", "7.66s", "1h2m3s" veya "500ms" gibi süre string'leri döner; saniyeye çeviririz.
+function groqSureCevir(str){
+  if(!str) return null;
+  str = String(str).trim();
+  if(/^[\d.]+ms$/.test(str)) return parseFloat(str)/1000;
+  let toplam = 0, bulundu = false;
+  const saat = str.match(/([\d.]+)h/);
+  const dakika = str.match(/([\d.]+)m(?!s)/);
+  const saniye = str.match(/([\d.]+)s/);
+  if(saat){ toplam += parseFloat(saat[1])*3600; bulundu = true; }
+  if(dakika){ toplam += parseFloat(dakika[1])*60; bulundu = true; }
+  if(saniye){ toplam += parseFloat(saniye[1]); bulundu = true; }
+  if(!bulundu){
+    const n = parseFloat(str);
+    if(!isNaN(n)) toplam = n; else return null;
+  }
+  return toplam;
+}
+// Şu andan itibaren N saniye sonrasının saatini okunaklı yazar
+function groqSaatFormatla(saniyeSonra){
+  if(saniyeSonra===null || isNaN(saniyeSonra)) return '—';
+  return new Date(Date.now() + saniyeSonra*1000).toLocaleTimeString('tr-TR');
+}
+// N saniyeyi "X dk Y sn" gibi yazar
+function groqSureFormatla(saniye){
+  if(saniye===null || isNaN(saniye)) return '';
+  saniye = Math.max(0, Math.round(saniye));
+  const dk = Math.floor(saniye/60), sn = saniye%60;
+  return dk>0 ? `${dk} dk ${sn} sn` : `${sn} sn`;
+}
+
+// Groq, günlük istek hakkını (RPD) her zaman header'da vermeyebilir.
+// Bu yüzden "bugün kaç şiir Groq ile yorumlandı / kaçı yerel algoritmaya düştü" bilgisini
+// tarayıcıda ayrıca sayıyoruz; sayfa yenilense de kaybolmaz, her gün otomatik sıfırlanır.
+const GROQ_GUNLUK_ANAHTAR = 'yo_groq_gunluk';
+function groqGunlukDurum(){
+  const bugun = new Date().toLocaleDateString('tr-TR');
+  let kayit = lsGet(GROQ_GUNLUK_ANAHTAR, null);
+  if(!kayit || kayit.tarih !== bugun){
+    kayit = { tarih: bugun, basarili: 0, yerel: 0 };
+    lsSet(GROQ_GUNLUK_ANAHTAR, kayit);
+  }
+  return kayit;
+}
+function groqGunlukArttir(basariliMi){
+  const k = groqGunlukDurum();
+  if(basariliMi) k.basarili++; else k.yerel++;
+  lsSet(GROQ_GUNLUK_ANAHTAR, k);
+  return k;
+}
+
+// Groq rate limit takibi (canlı, oturum bazlı)
 const groqKota = {
-  limitDakika: null,      // dakikada kaç istek
-  kalanDakika: null,      // bu dakikada kalan
-  limitGun: null,         // günlük limit
-  kalanGun: null,         // bugün kalan
-  sıfırlanma: null,       // sıfırlanma zamanı
-  sonGuncelleme: null,    // son güncelleme
-  toplamIstek: 0,         // oturumdaki toplam istek sayısı
+  limitIstek: null,          // Groq'un bildirdiği istek limiti
+  kalanIstek: null,          // kalan istek hakkı
+  istekSifirlanmaSn: null,   // istek kotasının kaç saniye sonra yenileneceği
+  limitToken: null,          // dakikalık token limiti
+  kalanToken: null,          // kalan token
+  tokenSifirlanmaSn: null,   // token kotasının kaç saniye sonra yenileneceği
+  toplamIstek: 0,            // bu oturumda Groq'a yapılan toplam istek
+  sonGuncelleme: null,       // son güncelleme saati
+  sonKaynak: null,           // 'groq' | 'yerel' — son şiir yorumu nereden geldi
+  sonHata: null,             // son hata mesajı (varsa)
+  kotaDolduMu: false,        // 429 (kota doldu) durumuna geçildi mi
+  kotaAcilmaZamani: null,    // kota tekrar açılacağı an (Date.now() + saniye)
 };
 
 function groqKotaGuncelle(headers) {
   const get = k => headers.get(k);
-  if (get('x-ratelimit-limit-requests'))   groqKota.limitDakika   = parseInt(get('x-ratelimit-limit-requests'));
-  if (get('x-ratelimit-remaining-requests')) groqKota.kalanDakika = parseInt(get('x-ratelimit-remaining-requests'));
-  if (get('x-ratelimit-limit-tokens'))     groqKota.limitGun      = get('x-ratelimit-limit-tokens');
-  if (get('x-ratelimit-remaining-tokens')) groqKota.kalanGun      = get('x-ratelimit-remaining-tokens');
-  if (get('x-ratelimit-reset-requests'))   groqKota.sifirlanma    = get('x-ratelimit-reset-requests');
+  if (get('x-ratelimit-limit-requests'))     groqKota.limitIstek = parseInt(get('x-ratelimit-limit-requests'));
+  if (get('x-ratelimit-remaining-requests')) groqKota.kalanIstek = parseInt(get('x-ratelimit-remaining-requests'));
+  if (get('x-ratelimit-reset-requests'))     groqKota.istekSifirlanmaSn = groqSureCevir(get('x-ratelimit-reset-requests'));
+  if (get('x-ratelimit-limit-tokens'))       groqKota.limitToken = parseInt(get('x-ratelimit-limit-tokens'));
+  if (get('x-ratelimit-remaining-tokens'))   groqKota.kalanToken = parseInt(get('x-ratelimit-remaining-tokens'));
+  if (get('x-ratelimit-reset-tokens'))       groqKota.tokenSifirlanmaSn = groqSureCevir(get('x-ratelimit-reset-tokens'));
   groqKota.sonGuncelleme = new Date().toLocaleTimeString('tr-TR');
   groqKota.toplamIstek++;
+}
+
+// 429 (Too Many Requests) geldiğinde çağrılır: kota doldu bilgisini işaretler
+function groqKota429Isaretle(headers){
+  groqKota.kotaDolduMu = true;
+  const retryAfter = headers?.get ? parseFloat(headers.get('retry-after')) : null;
+  const bekleSn = (retryAfter && !isNaN(retryAfter)) ? retryAfter : (groqKota.istekSifirlanmaSn ?? 60);
+  groqKota.kotaAcilmaZamani = Date.now() + bekleSn*1000;
 }
 
 async function scorePoem(text){
@@ -196,6 +262,11 @@ async function scorePoem(text){
       })
     });
     groqKotaGuncelle(res.headers);
+    if(res.status===429){
+      groqKota429Isaretle(res.headers);
+      throw new Error('Groq kota doldu (429)');
+    }
+    groqKota.kotaDolduMu = false;
     if(!res.ok) throw new Error('Groq hatası: '+res.status);
     const data = await res.json();
     if(!data.choices?.[0]?.message?.content) throw new Error('Groq yanıt vermedi');
@@ -205,9 +276,15 @@ async function scorePoem(text){
     const result = JSON.parse(jsonStr);
     result.score = Math.min(9.8, Math.max(2.0, parseFloat(result.score)));
     result.score = Math.round(result.score * 10) / 10;
+    groqKota.sonKaynak = 'groq';
+    groqKota.sonHata = null;
+    groqGunlukArttir(true);
     return result;
   } catch(e){
     console.warn('Groq API çalışmadı, yerel algoritma kullanılıyor:', e.message);
+    groqKota.sonKaynak = 'yerel';
+    groqKota.sonHata = e.message;
+    groqGunlukArttir(false);
     return scorePoemYerel(text);
   }
 }
@@ -720,6 +797,11 @@ async function groqBotCall(systemPrompt, userPrompt) {
       })
     });
     groqKotaGuncelle(res.headers);
+    if (res.status === 429) {
+      groqKota429Isaretle(res.headers);
+      throw new Error('Groq kota doldu (429)');
+    }
+    groqKota.kotaDolduMu = false;
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const data = await res.json();
     const raw = data.choices?.[0]?.message?.content?.trim();
@@ -729,6 +811,7 @@ async function groqBotCall(systemPrompt, userPrompt) {
     return JSON.parse(jsonStr);
   } catch(e) {
     console.warn('groqBotCall hatasi:', e.message);
+    groqKota.sonHata = e.message;
     return null;
   }
 }
@@ -1422,22 +1505,52 @@ function Profile(){
     const kotaIcerik=h('div');
     function kotaGoster(){
       kotaIcerik.innerHTML='';
+      const satir=(label,val,renk)=>{
+        const d=h('div',{style:{display:'flex',justifyContent:'space-between',marginBottom:'4px',gap:'10px'}});
+        d.appendChild(h('span',{style:{color:'#6b5b8a',fontSize:'.75rem'}},label));
+        d.appendChild(h('span',{style:{color:renk||'#e2e8f0',fontSize:'.75rem',fontWeight:'bold',textAlign:'right'}},String(val)));
+        return d;
+      };
+
+      // Kota doldu uyarısı (Groq 429 döndüyse)
+      if(groqKota.kotaDolduMu){
+        const kalanSn = groqKota.kotaAcilmaZamani!==null ? Math.max(0,(groqKota.kotaAcilmaZamani-Date.now())/1000) : null;
+        const uyari=h('div',{style:{background:'#3b0d0d',border:'1px solid #7f1d1d',borderRadius:'8px',padding:'8px',marginBottom:'10px'}});
+        uyari.appendChild(h('p',{style:{color:'#f87171',fontSize:'.78rem',fontWeight:'bold',marginBottom:'2px'}},'⛔ Groq kotası doldu — şu an yorumlar yerel algoritmayla yapılıyor'));
+        if(kalanSn!==null){
+          uyari.appendChild(h('p',{style:{color:'#fca5a5',fontSize:'.72rem'}},`Tahmini yenilenme: ${groqSaatFormatla(kalanSn)} (~${groqSureFormatla(kalanSn)} sonra)`));
+        }
+        kotaIcerik.appendChild(uyari);
+      }
+
       if(groqKota.sonGuncelleme===null){
         kotaIcerik.appendChild(h('p',{style:{color:'#6b5b8a',fontSize:'.75rem',fontStyle:'italic'}},'Henüz API isteği yapılmadı.'));
       } else {
-        const satir=(label,val,renk)=>{
-          const d=h('div',{style:{display:'flex',justifyContent:'space-between',marginBottom:'4px'}});
-          d.appendChild(h('span',{style:{color:'#6b5b8a',fontSize:'.75rem'}},label));
-          d.appendChild(h('span',{style:{color:renk||'#e2e8f0',fontSize:'.75rem',fontWeight:'bold'}},String(val)));
-          return d;
-        };
-        const kalanRenk=groqKota.kalanDakika!==null?(groqKota.kalanDakika<=5?'#f87171':groqKota.kalanDakika<=15?'#fbbf24':'#34d399'):'#e2e8f0';
-        if(groqKota.kalanDakika!==null) kotaIcerik.appendChild(satir('Dakikada kalan istek:',groqKota.kalanDakika+' / '+(groqKota.limitDakika||'?'),kalanRenk));
-        if(groqKota.sifirlanma)    kotaIcerik.appendChild(satir('Kota sıfırlanma:',groqKota.sifirlanma));
-        if(groqKota.kalanGun)      kotaIcerik.appendChild(satir('Kalan token:',groqKota.kalanGun));
-        kotaIcerik.appendChild(satir('Bu oturumda yapılan:',groqKota.toplamIstek+' istek'));
+        const kalanRenk=groqKota.kalanIstek!==null?(groqKota.kalanIstek<=5?'#f87171':groqKota.kalanIstek<=15?'#fbbf24':'#34d399'):'#e2e8f0';
+        if(groqKota.kalanIstek!==null)
+          kotaIcerik.appendChild(satir('Kalan istek hakkı:',groqKota.kalanIstek+' / '+(groqKota.limitIstek??'?'),kalanRenk));
+        if(groqKota.istekSifirlanmaSn!==null)
+          kotaIcerik.appendChild(satir('İstek kotası yenilenme:',groqSaatFormatla(groqKota.istekSifirlanmaSn)+' ('+groqSureFormatla(groqKota.istekSifirlanmaSn)+' sonra)'));
+        if(groqKota.kalanToken!==null)
+          kotaIcerik.appendChild(satir('Kalan token (dk.):',groqKota.kalanToken+' / '+(groqKota.limitToken??'?')));
+        if(groqKota.tokenSifirlanmaSn!==null)
+          kotaIcerik.appendChild(satir('Token kotası yenilenme:',groqSaatFormatla(groqKota.tokenSifirlanmaSn)+' ('+groqSureFormatla(groqKota.tokenSifirlanmaSn)+' sonra)'));
+        kotaIcerik.appendChild(satir('Son yorumun kaynağı:',
+          groqKota.sonKaynak==='groq'?'🤖 Groq AI':groqKota.sonKaynak==='yerel'?'💻 Yerel algoritma':'—',
+          groqKota.sonKaynak==='groq'?'#34d399':groqKota.sonKaynak==='yerel'?'#fbbf24':'#e2e8f0'));
+        kotaIcerik.appendChild(satir('Bu oturumda yapılan istek:',groqKota.toplamIstek+' istek'));
         kotaIcerik.appendChild(satir('Son güncelleme:',groqKota.sonGuncelleme,'#6b5b8a'));
       }
+
+      // Günlük yerel sayaç — Groq günlük limiti header'da her zaman gelmeyebildiği için
+      // bu tarayıcıda bugün yapılan şiir yorumlarını ayrıca sayıyoruz.
+      const gunluk = groqGunlukDurum();
+      const gunlukDiv=h('div',{style:{marginTop:'8px',paddingTop:'8px',borderTop:'1px solid #2d1b52'}});
+      gunlukDiv.appendChild(h('p',{style:{color:'#a78bfa',fontSize:'.72rem',fontWeight:'bold',marginBottom:'4px'}},`📅 Bugün (${gunluk.tarih}) bu tarayıcıda:`));
+      gunlukDiv.appendChild(satir('Groq AI ile yorumlanan:',gunluk.basarili+' şiir','#34d399'));
+      gunlukDiv.appendChild(satir('Yerel algoritmaya düşen:',gunluk.yerel+' şiir', gunluk.yerel>0?'#fbbf24':'#6b5b8a'));
+      kotaIcerik.appendChild(gunlukDiv);
+      kotaIcerik.appendChild(h('p',{style:{color:'#4b3d6b',fontSize:'.65rem',fontStyle:'italic',marginTop:'6px'}},'Not: "Kalan istek hakkı" Groq\'un o anki yanıtına göredir; dakikalık veya günlük limiti yansıtabilir.'));
     }
     kotaGoster();
 
