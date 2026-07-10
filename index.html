@@ -235,6 +235,23 @@ function groqKotaGuncelle(headers) {
   groqKota.toplamIstek++;
 }
 
+// Ham hata mesajını (sonHata) admin için anlaşılır bir teşhise çevirir.
+function groqHataTanisi(hata){
+  if(!hata) return null;
+  if(/^429:/.test(hata)) return '⏳ Gerçek kota doldu. Yukarıdaki "Yenilenme" saatini bekleyin.';
+  if(/^401:/.test(hata) || /invalid.?api.?key/i.test(hata) || /invalid_api_key/i.test(hata))
+    return '🔑 API anahtarı geçersiz veya devre dışı bırakılmış. Not: API anahtarları kod içinde (ör. GitHub\'da) herkese açık paylaşılırsa Groq bunu otomatik olarak iptal edebilir. console.groq.com/keys üzerinden yeni bir anahtar oluşturup kodda güncelleyin.';
+  if(/^403:/.test(hata)) return '🚫 Erişim reddedildi (403) — API anahtarının bu modele/organizasyona erişim izni olmayabilir.';
+  if(/model_decommissioned/i.test(hata) || /has been decommissioned/i.test(hata))
+    return '🔁 Kullanılan model artık desteklenmiyor. Kodda model adını güncel bir modelle (ör. openai/gpt-oss-120b) değiştirin.';
+  if(/^400:/.test(hata)) return '⚠️ İstek hatalı (400) — model adı, parametreler veya istek formatı Groq tarafından reddedildi.';
+  if(/^JSON_HATASI/.test(hata)) return '🤖 Yapay zeka geçerli JSON formatında yanıt vermedi (genelde geçici bir model tutarsızlığı) — tekrar denendiğinde genelde düzelir.';
+  if(/^BOS_YANIT/.test(hata)) return '📭 Groq boş içerik döndürdü — tekrar deneyin.';
+  if(/Failed to fetch|NetworkError|TypeError/i.test(hata))
+    return '🌐 Groq\'a bağlanılamadı — ağ engeli, CORS kısıtlaması veya internet bağlantı sorunu olabilir.';
+  return null;
+}
+
 // Groq, kota dolduğunda (429) response body'sinde şu formatta bir mesaj döner:
 // "Rate limit reached for model `...` on requests per day (RPD): Limit 1000, Used 1000,
 //  Requested 1. Please try again in 6m 11.52s. Visit ..."
@@ -306,20 +323,25 @@ async function scorePoem(text){
       let mesaj = '';
       try{ const errBody = await res.json(); mesaj = errBody?.error?.message || ''; }catch(_){}
       groqKota429Isaretle(res.headers, mesaj);
-      throw new Error(mesaj || 'Groq kota doldu (429)');
+      throw new Error('429: '+(mesaj || 'Groq kota doldu'));
     }
     groqKota.kotaDolduMu = false;
     if(!res.ok){
       let mesaj = '';
       try{ const errBody = await res.json(); mesaj = errBody?.error?.message || ''; }catch(_){}
-      throw new Error(mesaj || ('Groq hatası: '+res.status));
+      throw new Error(res.status+': '+(mesaj || 'Groq hatası'));
     }
     const data = await res.json();
-    if(!data.choices?.[0]?.message?.content) throw new Error('Groq yanıt vermedi');
+    if(!data.choices?.[0]?.message?.content) throw new Error('BOS_YANIT: Groq içerik döndürmedi');
     const raw = data.choices[0].message.content.trim();
     const clean = raw.replace(/```json|```/g,'').trim();
     const jsonStr = clean.slice(clean.indexOf('{'), clean.lastIndexOf('}')+1);
-    const result = JSON.parse(jsonStr);
+    let result;
+    try{
+      result = JSON.parse(jsonStr);
+    } catch(parseErr){
+      throw new Error('JSON_HATASI: Yapay zeka geçersiz format döndürdü → "'+raw.slice(0,150)+(raw.length>150?'...':'')+'"');
+    }
     result.score = Math.min(9.8, Math.max(2.0, parseFloat(result.score)));
     result.score = Math.round(result.score * 10) / 10;
     groqKota.sonKaynak = 'groq';
@@ -847,20 +869,24 @@ async function groqBotCall(systemPrompt, userPrompt) {
       let mesaj = '';
       try{ const errBody = await res.json(); mesaj = errBody?.error?.message || ''; }catch(_){}
       groqKota429Isaretle(res.headers, mesaj);
-      throw new Error(mesaj || 'Groq kota doldu (429)');
+      throw new Error('429: '+(mesaj || 'Groq kota doldu'));
     }
     groqKota.kotaDolduMu = false;
     if (!res.ok){
       let mesaj = '';
       try{ const errBody = await res.json(); mesaj = errBody?.error?.message || ''; }catch(_){}
-      throw new Error(mesaj || ('HTTP ' + res.status));
+      throw new Error(res.status+': '+(mesaj || 'Groq hatası'));
     }
     const data = await res.json();
     const raw = data.choices?.[0]?.message?.content?.trim();
-    if (!raw) throw new Error('Bos yanit');
+    if (!raw) throw new Error('BOS_YANIT: Groq içerik döndürmedi');
     const clean = raw.replace(/```json|```/g, '').trim();
     const jsonStr = clean.slice(clean.indexOf('{'), clean.lastIndexOf('}') + 1);
-    return JSON.parse(jsonStr);
+    try{
+      return JSON.parse(jsonStr);
+    } catch(parseErr){
+      throw new Error('JSON_HATASI: Yapay zeka geçersiz format döndürdü → "'+raw.slice(0,150)+(raw.length>150?'...':'')+'"');
+    }
   } catch(e) {
     console.warn('groqBotCall hatasi:', e.message);
     groqKota.sonHata = e.message;
@@ -1595,8 +1621,13 @@ function Profile(){
         kotaIcerik.appendChild(satir('Son yorumun kaynağı:',
           groqKota.sonKaynak==='groq'?'🤖 Groq AI':groqKota.sonKaynak==='yerel'?'💻 Yerel algoritma':'—',
           groqKota.sonKaynak==='groq'?'#34d399':groqKota.sonKaynak==='yerel'?'#fbbf24':'#e2e8f0'));
-        if(groqKota.sonHata)
+        if(groqKota.sonHata){
           kotaIcerik.appendChild(satir('Son hata:',groqKota.sonHata,'#fbbf24'));
+          const tanisi = groqHataTanisi(groqKota.sonHata);
+          if(tanisi){
+            kotaIcerik.appendChild(h('p',{style:{color:'#93c5fd',fontSize:'.72rem',marginTop:'2px',marginBottom:'4px',lineHeight:'1.4'}},tanisi));
+          }
+        }
         kotaIcerik.appendChild(satir('Bu oturumda yapılan istek:',groqKota.toplamIstek+' istek'));
         kotaIcerik.appendChild(satir('Son güncelleme:',groqKota.sonGuncelleme,'#6b5b8a'));
       }
@@ -1622,8 +1653,19 @@ function Profile(){
       onclick:()=>{kotaGoster();}
     },'🔄 Yenile');
 
+    const testBtn=h('button',{style:{marginTop:'8px',marginLeft:'8px',fontSize:'.7rem',padding:'4px 10px',background:'transparent',color:'#34d399',border:'1px solid #1d5c3d',borderRadius:'8px',cursor:'pointer'},
+      onclick:async(ev)=>{
+        const btn=ev.currentTarget;
+        btn.disabled=true; const eskiMetin=btn.textContent; btn.textContent='⏳ Test ediliyor...';
+        await scorePoem('Deneme şiiri:\nGökyüzü mavi, rüzgar eser,\nBu satırlar sadece test eder.');
+        kotaGoster();
+        btn.disabled=false; btn.textContent=eskiMetin;
+      }
+    },'🔍 Bağlantıyı Test Et');
+
     kotaDiv.appendChild(kotaIcerik);
     kotaDiv.appendChild(yenileBtn);
+    kotaDiv.appendChild(testBtn);
     adminPanel.appendChild(kotaDiv);
     const durumEl=h('p',{style:{color:'#6b5b8a',fontSize:'.85rem',marginTop:'10px',fontStyle:'italic'}},'');
     const revalBtn=h('button',{class:'pb btn',style:{width:'100%',background:'linear-gradient(135deg,#5b21b6,#7c3aed)',fontSize:'.9rem'},
