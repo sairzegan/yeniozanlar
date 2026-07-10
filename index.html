@@ -214,9 +214,13 @@ const groqKota = {
   toplamIstek: 0,            // bu oturumda Groq'a yapılan toplam istek
   sonGuncelleme: null,       // son güncelleme saati
   sonKaynak: null,           // 'groq' | 'yerel' — son şiir yorumu nereden geldi
-  sonHata: null,             // son hata mesajı (varsa)
+  sonHata: null,             // son hata mesajı (varsa) — admin panelinde gösterilir
   kotaDolduMu: false,        // 429 (kota doldu) durumuna geçildi mi
   kotaAcilmaZamani: null,    // kota tekrar açılacağı an (Date.now() + saniye)
+  kotaTuru: null,            // 'RPM' | 'RPD' | 'TPM' | 'TPD' — Groq'un hata mesajından okunur
+  kotaLimit: null,           // ilgili kotanın toplam limiti
+  kotaKullanilan: null,      // ilgili kotadan kullanılan miktar
+  kotaMesaj: null,           // Groq'un ham hata mesajı
 };
 
 function groqKotaGuncelle(headers) {
@@ -231,12 +235,48 @@ function groqKotaGuncelle(headers) {
   groqKota.toplamIstek++;
 }
 
-// 429 (Too Many Requests) geldiğinde çağrılır: kota doldu bilgisini işaretler
-function groqKota429Isaretle(headers){
+// Groq, kota dolduğunda (429) response body'sinde şu formatta bir mesaj döner:
+// "Rate limit reached for model `...` on requests per day (RPD): Limit 1000, Used 1000,
+//  Requested 1. Please try again in 6m 11.52s. Visit ..."
+// Bu bilgi, tarayıcının CORS nedeniyle engelleyebileceği x-ratelimit-* header'larının
+// aksine HER ZAMAN okunabilir (response body serbestçe okunur), bu yüzden asıl
+// güvenilir kota bilgisi kaynağımız burasıdır.
+function groqHataAyristir(mesaj){
+  if(!mesaj) return null;
+  const turEsleme = {
+    'requests per minute':'RPM (dakikalık istek)',
+    'requests per day':'RPD (günlük istek)',
+    'tokens per minute':'TPM (dakikalık token)',
+    'tokens per day':'TPD (günlük token)'
+  };
+  let tur = null;
+  for(const anahtar in turEsleme){ if(mesaj.toLowerCase().includes(anahtar)){ tur = turEsleme[anahtar]; break; } }
+  const sayilar = mesaj.match(/Limit ([\d,]+),\s*Used ([\d,]+),\s*Requested ~?([\d,]+)/i);
+  const sureEslesme = mesaj.match(/Please try again in\s*((?:[\d.]+h\s*)?(?:[\d.]+m\s*)?(?:[\d.]+s)?)/i);
+  const bekleSn = sureEslesme ? groqSureCevir(sureEslesme[1].trim()) : null;
+  return {
+    tur,
+    limit: sayilar ? parseInt(sayilar[1].replace(/,/g,'')) : null,
+    kullanilan: sayilar ? parseInt(sayilar[2].replace(/,/g,'')) : null,
+    bekleSn,
+  };
+}
+
+// 429 (Too Many Requests) geldiğinde çağrılır: kota doldu bilgisini işaretler.
+// mesaj: Groq'un response body'sindeki error.message alanı (varsa)
+function groqKota429Isaretle(headers, mesaj){
   groqKota.kotaDolduMu = true;
-  const retryAfter = headers?.get ? parseFloat(headers.get('retry-after')) : null;
-  const bekleSn = (retryAfter && !isNaN(retryAfter)) ? retryAfter : (groqKota.istekSifirlanmaSn ?? 60);
+  groqKota.kotaMesaj = mesaj || null;
+  const ayristirilmis = groqHataAyristir(mesaj);
+  let bekleSn = ayristirilmis?.bekleSn;
+  if(bekleSn===null || bekleSn===undefined){
+    const retryAfter = headers?.get ? parseFloat(headers.get('retry-after')) : null;
+    bekleSn = (retryAfter && !isNaN(retryAfter)) ? retryAfter : 60;
+  }
   groqKota.kotaAcilmaZamani = Date.now() + bekleSn*1000;
+  groqKota.kotaTuru = ayristirilmis?.tur ?? null;
+  groqKota.kotaLimit = ayristirilmis?.limit ?? null;
+  groqKota.kotaKullanilan = ayristirilmis?.kullanilan ?? null;
 }
 
 async function scorePoem(text){
@@ -263,11 +303,17 @@ async function scorePoem(text){
     });
     groqKotaGuncelle(res.headers);
     if(res.status===429){
-      groqKota429Isaretle(res.headers);
-      throw new Error('Groq kota doldu (429)');
+      let mesaj = '';
+      try{ const errBody = await res.json(); mesaj = errBody?.error?.message || ''; }catch(_){}
+      groqKota429Isaretle(res.headers, mesaj);
+      throw new Error(mesaj || 'Groq kota doldu (429)');
     }
     groqKota.kotaDolduMu = false;
-    if(!res.ok) throw new Error('Groq hatası: '+res.status);
+    if(!res.ok){
+      let mesaj = '';
+      try{ const errBody = await res.json(); mesaj = errBody?.error?.message || ''; }catch(_){}
+      throw new Error(mesaj || ('Groq hatası: '+res.status));
+    }
     const data = await res.json();
     if(!data.choices?.[0]?.message?.content) throw new Error('Groq yanıt vermedi');
     const raw = data.choices[0].message.content.trim();
@@ -798,11 +844,17 @@ async function groqBotCall(systemPrompt, userPrompt) {
     });
     groqKotaGuncelle(res.headers);
     if (res.status === 429) {
-      groqKota429Isaretle(res.headers);
-      throw new Error('Groq kota doldu (429)');
+      let mesaj = '';
+      try{ const errBody = await res.json(); mesaj = errBody?.error?.message || ''; }catch(_){}
+      groqKota429Isaretle(res.headers, mesaj);
+      throw new Error(mesaj || 'Groq kota doldu (429)');
     }
     groqKota.kotaDolduMu = false;
-    if (!res.ok) throw new Error('HTTP ' + res.status);
+    if (!res.ok){
+      let mesaj = '';
+      try{ const errBody = await res.json(); mesaj = errBody?.error?.message || ''; }catch(_){}
+      throw new Error(mesaj || ('HTTP ' + res.status));
+    }
     const data = await res.json();
     const raw = data.choices?.[0]?.message?.content?.trim();
     if (!raw) throw new Error('Bos yanit');
@@ -1512,13 +1564,18 @@ function Profile(){
         return d;
       };
 
-      // Kota doldu uyarısı (Groq 429 döndüyse)
+      // Kota doldu uyarısı (Groq 429 döndüyse) — bilgiler Groq'un hata mesajından (body) alınır,
+      // çünkü tarayıcı x-ratelimit-* header'larını CORS nedeniyle genelde engeller.
       if(groqKota.kotaDolduMu){
         const kalanSn = groqKota.kotaAcilmaZamani!==null ? Math.max(0,(groqKota.kotaAcilmaZamani-Date.now())/1000) : null;
         const uyari=h('div',{style:{background:'#3b0d0d',border:'1px solid #7f1d1d',borderRadius:'8px',padding:'8px',marginBottom:'10px'}});
-        uyari.appendChild(h('p',{style:{color:'#f87171',fontSize:'.78rem',fontWeight:'bold',marginBottom:'2px'}},'⛔ Groq kotası doldu — şu an yorumlar yerel algoritmayla yapılıyor'));
+        uyari.appendChild(h('p',{style:{color:'#f87171',fontSize:'.78rem',fontWeight:'bold',marginBottom:'4px'}},'⛔ Groq kotası doldu — şu an yorumlar yerel algoritmayla yapılıyor'));
+        if(groqKota.kotaTuru)
+          uyari.appendChild(h('p',{style:{color:'#fca5a5',fontSize:'.72rem',marginBottom:'2px'}},`Dolan kota: ${groqKota.kotaTuru}`));
+        if(groqKota.kotaLimit!==null && groqKota.kotaKullanilan!==null)
+          uyari.appendChild(h('p',{style:{color:'#fca5a5',fontSize:'.72rem',marginBottom:'2px'}},`Kullanım: ${groqKota.kotaKullanilan.toLocaleString('tr-TR')} / ${groqKota.kotaLimit.toLocaleString('tr-TR')}`));
         if(kalanSn!==null){
-          uyari.appendChild(h('p',{style:{color:'#fca5a5',fontSize:'.72rem'}},`Tahmini yenilenme: ${groqSaatFormatla(kalanSn)} (~${groqSureFormatla(kalanSn)} sonra)`));
+          uyari.appendChild(h('p',{style:{color:'#fbbf24',fontSize:'.75rem',fontWeight:'bold',marginTop:'4px'}},`⏰ Yenilenme: ${groqSaatFormatla(kalanSn)} (~${groqSureFormatla(kalanSn)} sonra)`));
         }
         kotaIcerik.appendChild(uyari);
       }
@@ -1538,6 +1595,8 @@ function Profile(){
         kotaIcerik.appendChild(satir('Son yorumun kaynağı:',
           groqKota.sonKaynak==='groq'?'🤖 Groq AI':groqKota.sonKaynak==='yerel'?'💻 Yerel algoritma':'—',
           groqKota.sonKaynak==='groq'?'#34d399':groqKota.sonKaynak==='yerel'?'#fbbf24':'#e2e8f0'));
+        if(groqKota.sonHata)
+          kotaIcerik.appendChild(satir('Son hata:',groqKota.sonHata,'#fbbf24'));
         kotaIcerik.appendChild(satir('Bu oturumda yapılan istek:',groqKota.toplamIstek+' istek'));
         kotaIcerik.appendChild(satir('Son güncelleme:',groqKota.sonGuncelleme,'#6b5b8a'));
       }
@@ -1553,6 +1612,11 @@ function Profile(){
       kotaIcerik.appendChild(h('p',{style:{color:'#4b3d6b',fontSize:'.65rem',fontStyle:'italic',marginTop:'6px'}},'Not: "Kalan istek hakkı" Groq\'un o anki yanıtına göredir; dakikalık veya günlük limiti yansıtabilir.'));
     }
     kotaGoster();
+    // Kota doldu ise geri sayımı canlı tutmak için her 5 saniyede bir otomatik güncelle
+    const kotaIntervalId = setInterval(()=>{
+      if(document.body.contains(kotaIcerik)) kotaGoster();
+      else clearInterval(kotaIntervalId);
+    }, 5000);
 
     const yenileBtn=h('button',{style:{marginTop:'8px',fontSize:'.7rem',padding:'4px 10px',background:'transparent',color:'#7c3aed',border:'1px solid #3d1f6e',borderRadius:'8px',cursor:'pointer'},
       onclick:()=>{kotaGoster();}
