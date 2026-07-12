@@ -205,6 +205,10 @@ function groqGunlukArttir(basariliMi){
 }
 
 // Groq rate limit takibi (canlı, oturum bazlı)
+// Kota süresi dolduğunda arka planda otomatik test isteği atılırken aynı anda
+// birden fazla kontrolün üst üste binmesini engelleyen kilit.
+let groqOtomatikKontrolDevamEdiyor = false;
+
 const groqKota = {
   limitIstek: null,          // Groq'un bildirdiği istek limiti
   kalanIstek: null,          // kalan istek hakkı
@@ -328,7 +332,14 @@ async function scorePoem(text){
     groqKota.kotaDolduMu = false;
     if(!res.ok){
       let mesaj = '';
-      try{ const errBody = await res.json(); mesaj = errBody?.error?.message || ''; }catch(_){}
+      try{
+        const errBody = await res.json();
+        mesaj = errBody?.error?.message || '';
+        if(errBody?.error?.teshis){
+          const t = errBody.error.teshis;
+          mesaj += ` [çalışan ortam: ${t.calisan_ortam}; bulunan GROQ değişkenleri: ${t.groq_ile_ilgili_bulunan_degisken_isimleri?.length ? t.groq_ile_ilgili_bulunan_degisken_isimleri.join(', ') : 'yok'}]`;
+        }
+      }catch(_){}
       throw new Error(res.status+': '+(mesaj || 'Groq hatası'));
     }
     const data = await res.json();
@@ -873,7 +884,14 @@ async function groqBotCall(systemPrompt, userPrompt) {
     groqKota.kotaDolduMu = false;
     if (!res.ok){
       let mesaj = '';
-      try{ const errBody = await res.json(); mesaj = errBody?.error?.message || ''; }catch(_){}
+      try{
+        const errBody = await res.json();
+        mesaj = errBody?.error?.message || '';
+        if(errBody?.error?.teshis){
+          const t = errBody.error.teshis;
+          mesaj += ` [çalışan ortam: ${t.calisan_ortam}; bulunan GROQ değişkenleri: ${t.groq_ile_ilgili_bulunan_degisken_isimleri?.length ? t.groq_ile_ilgili_bulunan_degisken_isimleri.join(', ') : 'yok'}]`;
+        }
+      }catch(_){}
       throw new Error(res.status+': '+(mesaj || 'Groq hatası'));
     }
     const data = await res.json();
@@ -1600,7 +1618,12 @@ function Profile(){
         if(groqKota.kotaLimit!==null && groqKota.kotaKullanilan!==null)
           uyari.appendChild(h('p',{style:{color:'#fca5a5',fontSize:'.72rem',marginBottom:'2px'}},`Kullanım: ${groqKota.kotaKullanilan.toLocaleString('tr-TR')} / ${groqKota.kotaLimit.toLocaleString('tr-TR')}`));
         if(kalanSn!==null){
-          uyari.appendChild(h('p',{style:{color:'#fbbf24',fontSize:'.75rem',fontWeight:'bold',marginTop:'4px'}},`⏰ Yenilenme: ${groqSaatFormatla(kalanSn)} (~${groqSureFormatla(kalanSn)} sonra)`));
+          if(kalanSn>0){
+            uyari.appendChild(h('p',{style:{color:'#fbbf24',fontSize:'.75rem',fontWeight:'bold',marginTop:'4px'}},`⏰ Tahmini yenilenme: ${groqSaatFormatla(kalanSn)} (~${groqSureFormatla(kalanSn)} sonra)`));
+            uyari.appendChild(h('p',{style:{color:'#a78bfa',fontSize:'.68rem',marginTop:'2px'}},'Bu, Groq\'un verdiği tahmini süredir (kesin değil). Süre dolunca sistem otomatik olarak arka planda test edip burayı güncelleyecek.'));
+          } else {
+            uyari.appendChild(h('p',{style:{color:'#93c5fd',fontSize:'.75rem',fontWeight:'bold',marginTop:'4px'}},'🔄 Tahmini süre doldu, kota şu an otomatik olarak kontrol ediliyor...'));
+          }
         }
         kotaIcerik.appendChild(uyari);
       }
@@ -1642,10 +1665,22 @@ function Profile(){
       kotaIcerik.appendChild(h('p',{style:{color:'#4b3d6b',fontSize:'.65rem',fontStyle:'italic',marginTop:'6px'}},'Not: "Kalan istek hakkı" Groq\'un o anki yanıtına göredir; dakikalık veya günlük limiti yansıtabilir.'));
     }
     kotaGoster();
-    // Kota doldu ise geri sayımı canlı tutmak için her 5 saniyede bir otomatik güncelle
-    const kotaIntervalId = setInterval(()=>{
-      if(document.body.contains(kotaIcerik)) kotaGoster();
-      else clearInterval(kotaIntervalId);
+    // Her 5 saniyede bir: ekranı güncelle. Ayrıca, gösterilen bekleme süresi dolduysa
+    // (kota tahmini olarak açılmış olmalıysa) arka planda GERÇEK bir test isteği atıp
+    // kotanın gerçekten açılıp açılmadığını doğrular — sadece sayaç sıfırlanınca "kota
+    // dolu" yazısının otomatik güncellenmemesi sorununu bu şekilde çözüyoruz.
+    const kotaIntervalId = setInterval(async ()=>{
+      if(!document.body.contains(kotaIcerik)){ clearInterval(kotaIntervalId); return; }
+      const suresiDolduMu = groqKota.kotaDolduMu && groqKota.kotaAcilmaZamani!==null && Date.now() >= groqKota.kotaAcilmaZamani;
+      if(suresiDolduMu && !groqOtomatikKontrolDevamEdiyor){
+        groqOtomatikKontrolDevamEdiyor = true;
+        try{
+          await scorePoem('Deneme şiiri:\nGüneş doğar, kuşlar öter,\nBu satırlar sadece test eder.');
+        } finally {
+          groqOtomatikKontrolDevamEdiyor = false;
+        }
+      }
+      kotaGoster();
     }, 5000);
 
     const yenileBtn=h('button',{style:{marginTop:'8px',fontSize:'.7rem',padding:'4px 10px',background:'transparent',color:'#7c3aed',border:'1px solid #3d1f6e',borderRadius:'8px',cursor:'pointer'},
