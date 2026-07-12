@@ -895,6 +895,27 @@ function refreshCard(pid){
   const diff=newCardTop-cardTop;
   window.scrollTo({top:scrollY+diff,behavior:'instant'});
 }
+// Tam sayfa render yapmadan (örn. açık sohbet ekranını kapatmadan) sadece
+// mesaj/bildirim rozetlerini günceller. showChat/showNotifs gibi kısmi DOM
+// güncellemesi yapan yerlerden çağrılır.
+function mesajBildirimRozetGuncelle(){
+  const unreadMsg=(S.msgs||[]).filter(m=>m.toId===S.me?.id && !m.read).length;
+  const unreadNotif=(S.notifs||[]).filter(n=>!n.read).length;
+  const toplam=unreadMsg+unreadNotif;
+  document.querySelectorAll('[data-navkey="messages"] .nav-badge').forEach(b=>{
+    b.style.display = toplam>0 ? 'flex' : 'none';
+    b.textContent = toplam>9 ? '9+' : String(toplam);
+  });
+  document.querySelectorAll('[data-subtab="msgs"] .sub-badge').forEach(b=>{
+    b.style.display = unreadMsg>0 ? 'flex' : 'none';
+    b.textContent = unreadMsg>9 ? '9+' : String(unreadMsg);
+  });
+  document.querySelectorAll('[data-subtab="notifs"] .sub-badge').forEach(b=>{
+    b.style.display = unreadNotif>0 ? 'flex' : 'none';
+    b.textContent = unreadNotif>9 ? '9+' : String(unreadNotif);
+  });
+}
+
 function save(){lsSet('yo_users',S.users);lsSet('yo_posts',S.posts);lsSet('yo_me',S.me);lsSet('yo_follows',S.follows);lsSet('yo_msgs',S.msgs)}
 
 const A = {
@@ -1080,6 +1101,14 @@ A.addPost = async function(pd){
       }
     }
     db.collection("posts").doc(np.id).set(np).catch(err=>console.error("Kaydetme hatası:",err));
+
+    // Takipçilere yeni paylaşım bildirimi gönder
+    const takipciler = Object.keys(S.follows).filter(uid => (S.follows[uid]||[]).includes(S.me.id));
+    if(takipciler.length){
+      const baslik = np.title || np.text?.slice(0,20) || 'yeni bir şiir';
+      const paylasan = S.me.name||S.me.username;
+      takipciler.forEach(fid => A.addNotif(fid, `${paylasan} yeni bir şiir paylaştı: "${baslik}"`));
+    }
 };
 A.deletePost = function(pid){
     if(!confirm("Bu şiir kalıcı olarak silinecek. Emin misiniz?")) return;
@@ -1124,11 +1153,50 @@ A.deleteComment = function(pid,cid){
       db.collection("posts").doc(pid).update({ comments: updatedComments });
     }
 };
-A.toggleFollow = function(tid){const l=S.follows[S.me.id]||[];const has=l.includes(tid);S.follows={...S.follows,[S.me.id]:has?l.filter(x=>x!==tid):[...l,tid]};save();render();};
+A.toggleFollow = function(tid){
+  const l=S.follows[S.me.id]||[];
+  const has=l.includes(tid);
+  S.follows={...S.follows,[S.me.id]:has?l.filter(x=>x!==tid):[...l,tid]};
+  save();render();
+  if(!has){
+    // Yeni takip başladıysa, takip edilen kişiye bildirim gönder
+    const takipEden = S.me.name||S.me.username;
+    A.addNotif(tid, `${takipEden} sizi takip etmeye başladı.`);
+  }
+};
 A.sendMsg = function(toId,text){
-    const msg={id:uid(),fromId:S.me.id,toId,text,date:now()};
+    const msg={id:uid(),fromId:S.me.id,toId,text,date:now(),read:false};
     S.msgs=[...S.msgs,msg];save();render();
     db.collection("msgs").doc(msg.id).set(msg).catch(err=>console.error("Mesaj hatası:",err));
+};
+A.deleteMsg = function(mid){
+    if(!confirm("Bu mesaj silinsin mi?")) return;
+    S.msgs = S.msgs.filter(m=>m.id!==mid);
+    lsSet('yo_msgs',S.msgs);
+    db.collection("msgs").doc(mid).delete().catch(err=>console.error("Mesaj silme hatası:",err));
+};
+A.deleteConversation = function(otherId){
+    if(!confirm("Bu sohbetteki tüm mesajlar kalıcı olarak silinecek. Emin misiniz?")) return;
+    const silinecekler = S.msgs.filter(m=>(m.fromId===S.me.id&&m.toId===otherId)||(m.fromId===otherId&&m.toId===S.me.id));
+    S.msgs = S.msgs.filter(m=>!(( m.fromId===S.me.id&&m.toId===otherId)||(m.fromId===otherId&&m.toId===S.me.id)));
+    lsSet('yo_msgs',S.msgs);
+    silinecekler.forEach(m=>db.collection("msgs").doc(m.id).delete().catch(()=>{}));
+    render();
+};
+A.deleteNotif = function(nid){
+    S.notifs = (S.notifs||[]).filter(n=>n.id!==nid);
+    lsSet('yo_notifs',S.notifs);
+    db.collection("notifs").doc(nid).delete().catch(()=>{});
+    render();
+};
+A.clearAllNotifs = function(){
+    if(!(S.notifs||[]).length) return;
+    if(!confirm("Tüm bildirimler kalıcı olarak silinecek. Emin misiniz?")) return;
+    const hepsi=[...(S.notifs||[])];
+    S.notifs=[];
+    lsSet('yo_notifs',S.notifs);
+    hepsi.forEach(n=>db.collection("notifs").doc(n.id).delete().catch(()=>{}));
+    render();
 };
 A.addNotif = function(toId,text){
     if(toId===S.me?.id)return;
@@ -1172,7 +1240,9 @@ function inp(placeholder,type='text',style={}){
 }
 
 function navBar(){
-  const unreadCount=(S.notifs||[]).filter(n=>!n.read).length;
+  const unreadMsgCount=(S.msgs||[]).filter(m=>m.toId===S.me?.id && !m.read).length;
+  const unreadNotifCount=(S.notifs||[]).filter(n=>!n.read).length;
+  const unreadCount=unreadMsgCount+unreadNotifCount;
   const tabs=[
     {k:'feed',ic:'🏠',lb:'Akış'},
     {k:'leaderboard',ic:'🏆',lb:'Sıralama'},
@@ -1190,10 +1260,15 @@ function navBar(){
       ])
     ]),
     h('div',{class:'nav-bottom'},tabs.map(t=>{
-      const btn=h('button',{class:'btn',style:{background:'none',color:S.screen===t.k?'#c084fc':'#6b5b8a',display:'flex',flexDirection:'column',alignItems:'center',gap:'2px',fontSize:'.62rem',padding:'4px 6px',borderBottom:S.screen===t.k?'2px solid #c084fc':'2px solid transparent',position:'relative'},onclick:()=>go(t.k)});
+      const btn=h('button',{class:'btn','data-navkey':t.k,style:{background:'none',color:S.screen===t.k?'#c084fc':'#6b5b8a',display:'flex',flexDirection:'column',alignItems:'center',gap:'2px',fontSize:'.62rem',padding:'4px 6px',borderBottom:S.screen===t.k?'2px solid #c084fc':'2px solid transparent',position:'relative'},onclick:()=>go(t.k)});
       const icWrap=h('span',{style:{position:'relative',display:'inline-block'}});
       icWrap.appendChild(h('span',{style:{fontSize:'1.2rem'}},t.ic));
-      if(t.badge>0){const badge=h('span',{style:{position:'absolute',top:'-4px',right:'-6px',background:'#e879f9',color:'#fff',borderRadius:'50%',width:'16px',height:'16px',fontSize:'.55rem',display:'flex',alignItems:'center',justifyContent:'center',fontWeight:'700'}},String(t.badge>9?'9+':t.badge));icWrap.appendChild(badge);}
+      // Rozet, sayı 0 olsa bile DOM'da tutulur (gizli), böylece sayfa tekrar
+      // render edilmeden sadece rozet güncellenmek istendiğinde (bkz. mesajBildirimRozetGuncelle) bulunabilir.
+      if(t.k==='messages'){
+        const badge=h('span',{class:'nav-badge',style:{position:'absolute',top:'-4px',right:'-6px',background:'#e879f9',color:'#fff',borderRadius:'50%',width:'16px',height:'16px',fontSize:'.55rem',display:t.badge>0?'flex':'none',alignItems:'center',justifyContent:'center',fontWeight:'700'}},String(t.badge>9?'9+':(t.badge||0)));
+        icWrap.appendChild(badge);
+      }
       btn.appendChild(icWrap);btn.appendChild(document.createTextNode(t.lb));
       return btn;
     }))
@@ -1884,11 +1959,16 @@ function Messages(){
   const page=h('div',{class:'page'});
 
   // Sekmeler
-  const unreadCount=(S.notifs||[]).filter(n=>!n.read).length;
-  const msgsBtn=h('button',{class:'btn',style:{flex:'1',padding:'10px',borderRadius:'10px',fontSize:'.88rem',background:'linear-gradient(135deg,#7c3aed,#a855f7)',color:'#fff',border:'none'}},'✉️ Mesajlar');
-  const notifBtn=h('button',{class:'btn',style:{flex:'1',padding:'10px',borderRadius:'10px',fontSize:'.88rem',background:'#1a0f2e',color:'#a78bfa',border:'1px solid #2d1b52',position:'relative'}});
+  const unreadMsgCount=(S.msgs||[]).filter(m=>m.toId===S.me?.id && !m.read).length;
+  const unreadNotifCount=(S.notifs||[]).filter(n=>!n.read).length;
+  const msgsBtn=h('button',{class:'btn','data-subtab':'msgs',style:{flex:'1',padding:'10px',borderRadius:'10px',fontSize:'.88rem',background:'linear-gradient(135deg,#7c3aed,#a855f7)',color:'#fff',border:'none',position:'relative'}});
+  msgsBtn.appendChild(document.createTextNode('✉️ Mesajlar'));
+  const msgsBadge=h('span',{class:'sub-badge',style:{position:'absolute',top:'-4px',right:'-4px',background:'#e879f9',color:'#fff',borderRadius:'50%',width:'18px',height:'18px',fontSize:'.6rem',display:unreadMsgCount>0?'flex':'none',alignItems:'center',justifyContent:'center',fontWeight:'700'}},String(unreadMsgCount>9?'9+':unreadMsgCount));
+  msgsBtn.appendChild(msgsBadge);
+  const notifBtn=h('button',{class:'btn','data-subtab':'notifs',style:{flex:'1',padding:'10px',borderRadius:'10px',fontSize:'.88rem',background:'#1a0f2e',color:'#a78bfa',border:'1px solid #2d1b52',position:'relative'}});
   notifBtn.appendChild(document.createTextNode('🔔 Bildirimler'));
-  if(unreadCount>0){const badge=h('span',{style:{position:'absolute',top:'-4px',right:'-4px',background:'#e879f9',color:'#fff',borderRadius:'50%',width:'18px',height:'18px',fontSize:'.6rem',display:'flex',alignItems:'center',justifyContent:'center',fontWeight:'700'}},String(unreadCount>9?'9+':unreadCount));notifBtn.appendChild(badge);}
+  const notifBadge=h('span',{class:'sub-badge',style:{position:'absolute',top:'-4px',right:'-4px',background:'#e879f9',color:'#fff',borderRadius:'50%',width:'18px',height:'18px',fontSize:'.6rem',display:unreadNotifCount>0?'flex':'none',alignItems:'center',justifyContent:'center',fontWeight:'700'}},String(unreadNotifCount>9?'9+':unreadNotifCount));
+  notifBtn.appendChild(notifBadge);
   const tabRow=h('div',{style:{display:'flex',gap:'8px',marginBottom:'16px'}},[msgsBtn,notifBtn]);
   page.appendChild(tabRow);
 
@@ -1922,7 +2002,9 @@ function Messages(){
       info.appendChild(h('p',{style:{fontFamily:"'Playfair Display',serif",color:'#e9d5ff',fontWeight:'700'}},u.name));
       if(last)info.appendChild(h('p',{style:{color:'#6b5b8a',fontSize:'.83rem'}},last.text.slice(0,40)+(last.text.length>40?'…':'')));
       card.appendChild(info);
-      if(unread>0)card.appendChild(h('span',{style:{background:'#c084fc',color:'#fff',borderRadius:'50%',width:'20px',height:'20px',fontSize:'.7rem',display:'flex',alignItems:'center',justifyContent:'center',fontWeight:'700'}},String(unread)));
+      if(unread>0)card.appendChild(h('span',{style:{background:'#c084fc',color:'#fff',borderRadius:'50%',width:'20px',height:'20px',fontSize:'.7rem',display:'flex',alignItems:'center',justifyContent:'center',fontWeight:'700',flexShrink:'0'}},String(unread)));
+      const delBtn=h('button',{class:'btn',title:'Sohbeti sil',style:{background:'none',color:'#6b5b8a',fontSize:'.95rem',padding:'4px 6px',flexShrink:'0'},onclick:(e)=>{e.stopPropagation();A.deleteConversation(u.id);}},'🗑');
+      card.appendChild(delBtn);
       ct.appendChild(card);
     });
   }
@@ -1949,36 +2031,62 @@ function Messages(){
     if(unread.length>0){
       unread.forEach(n=>{n.read=true;db.collection("notifs").doc(n.id).update({read:true}).catch(()=>{});});
       lsSet('yo_notifs',S.notifs);
+      mesajBildirimRozetGuncelle();
     }
     const notifs=S.notifs||[];
     if(!notifs.length){
       ct.appendChild(h('p',{style:{color:'#6b5b8a',fontStyle:'italic',textAlign:'center',marginTop:'40px'}},'Henüz bildirim yok. Şiirlerine yorum ve puan geldikçe burada görünecek! 🌙'));
       return;
     }
+    const temizleBtn=h('button',{class:'btn',style:{width:'100%',marginBottom:'12px',background:'none',color:'#f87171',fontSize:'.82rem',border:'1px solid #4c1d1d',borderRadius:'10px',padding:'8px'},onclick:()=>{A.clearAllNotifs();}},'🗑 Tümünü Temizle');
+    ct.appendChild(temizleBtn);
     notifs.forEach(n=>{
       const card=h('div',{class:'card',style:{display:'flex',gap:'12px',alignItems:'flex-start',background:n.read?'linear-gradient(135deg,#1a0f2e,#160d28)':'linear-gradient(135deg,#2d1060,#1e0f3a)',border:n.read?'1px solid #2d1b52':'1px solid #7c3aed'}});
-      card.appendChild(h('span',{style:{fontSize:'1.4rem',flexShrink:'0'}},n.text.includes('yorum')?'💬':'⭐'));
+      const ikon = n.text.includes('takip')?'👤':n.text.includes('paylaştı')?'🪶':n.text.includes('yorum')?'💬':'⭐';
+      card.appendChild(h('span',{style:{fontSize:'1.4rem',flexShrink:'0'}},ikon));
       const info=h('div',{style:{flex:'1'}});
       info.appendChild(h('p',{style:{color:'#e9d5ff',fontSize:'.92rem',lineHeight:'1.5',fontFamily:"'Crimson Text',serif"}},n.text));
       info.appendChild(h('p',{style:{color:'#6b5b8a',fontSize:'.75rem',marginTop:'4px'}},n.date));
       card.appendChild(info);
       if(!n.read)card.appendChild(h('span',{style:{width:'8px',height:'8px',borderRadius:'50%',background:'#c084fc',flexShrink:'0',marginTop:'4px',display:'inline-block'}}));
+      const delBtn=h('button',{class:'btn',title:'Bildirimi sil',style:{background:'none',color:'#6b5b8a',fontSize:'.9rem',padding:'2px 4px',flexShrink:'0'},onclick:()=>{A.deleteNotif(n.id);showNotifs();}},'✕');
+      card.appendChild(delBtn);
       ct.appendChild(card);
     });
   }
 
   function showChat(){
+    // Bu sohbette bana ait, henüz okunmamış mesajları okundu olarak işaretle
+    const okunmamislar = S.msgs.filter(m=>m.fromId===chat && m.toId===S.me?.id && !m.read);
+    if(okunmamislar.length>0){
+      okunmamislar.forEach(m=>{
+        m.read=true;
+        db.collection("msgs").doc(m.id).update({read:true}).catch(()=>{});
+      });
+      lsSet('yo_msgs',S.msgs);
+      mesajBildirimRozetGuncelle();
+    }
     ct.innerHTML='';
     const chatUser=S.users.find(u=>u.id===chat);
     const hdr=h('div',{style:{display:'flex',alignItems:'center',gap:'10px',marginBottom:'12px'}});
     hdr.appendChild(h('button',{class:'btn',style:{background:'none',color:'#a78bfa',fontSize:'.9rem'},onclick:()=>{chat=null;showMsgs();}},'←'));
     hdr.appendChild(av(chatUser,36));
-    hdr.appendChild(h('p',{style:{fontFamily:"'Playfair Display',serif",color:'#e9d5ff',fontWeight:'700'}},chatUser?.name||''));
+    hdr.appendChild(h('p',{style:{fontFamily:"'Playfair Display',serif",color:'#e9d5ff',fontWeight:'700',flex:'1'}},chatUser?.name||''));
+    hdr.appendChild(h('button',{class:'btn',title:'Sohbeti sil',style:{background:'none',color:'#f87171',fontSize:'.85rem',padding:'4px 8px'},onclick:()=>{A.deleteConversation(chat);}},'🗑 Sohbeti Sil'));
     ct.appendChild(hdr);
     const msgs=h('div',{style:{height:'55vh',overflowY:'auto',display:'flex',flexDirection:'column',gap:'10px',paddingBottom:'8px'}});
     S.msgs.filter(m=>(m.fromId===S.me?.id&&m.toId===chat)||(m.fromId===chat&&m.toId===S.me?.id)).forEach(m=>{
       const mine=m.fromId===S.me?.id;
-      msgs.appendChild(h('div',{style:{display:'flex',justifyContent:mine?'flex-end':'flex-start'}},[h('div',{style:{maxWidth:'70%',background:mine?'linear-gradient(135deg,#7c3aed,#a855f7)':'#1a0f2e',borderRadius:mine?'16px 16px 4px 16px':'16px 16px 16px 4px',padding:'10px 14px',border:mine?'none':'1px solid #2d1b52'}},[h('p',{style:{color:'#f0e8ff',fontSize:'.95rem'}},m.text),h('p',{style:{color:mine?'#ddd6fe':'#6b5b8a',fontSize:'.7rem',marginTop:'4px',textAlign:mine?'right':'left'}},m.date)])]));
+      const bubbleRow=h('div',{style:{display:'flex',justifyContent:mine?'flex-end':'flex-start',alignItems:'center',gap:'6px'}});
+      const bubble=h('div',{style:{maxWidth:'70%',background:mine?'linear-gradient(135deg,#7c3aed,#a855f7)':'#1a0f2e',borderRadius:mine?'16px 16px 4px 16px':'16px 16px 16px 4px',padding:'10px 14px',border:mine?'none':'1px solid #2d1b52'}},[h('p',{style:{color:'#f0e8ff',fontSize:'.95rem'}},m.text),h('p',{style:{color:mine?'#ddd6fe':'#6b5b8a',fontSize:'.7rem',marginTop:'4px',textAlign:mine?'right':'left'}},m.date)]);
+      if(mine){
+        const delBtn=h('button',{class:'btn',title:'Mesajı sil',style:{background:'none',color:'#6b5b8a',fontSize:'.8rem',padding:'2px 4px',flexShrink:'0'},onclick:()=>{A.deleteMsg(m.id);showChat();}},'🗑');
+        bubbleRow.appendChild(delBtn);
+        bubbleRow.appendChild(bubble);
+      } else {
+        bubbleRow.appendChild(bubble);
+      }
+      msgs.appendChild(bubbleRow);
     });
     msgs.scrollTop=msgs.scrollHeight;
     const mi=inp('Mesajını yaz...');mi.style.borderRadius='20px';mi.style.flex='1';
@@ -2012,14 +2120,19 @@ function Notifs(){
   if(!notifs.length){
     page.appendChild(h('p',{style:{color:'#6b5b8a',fontStyle:'italic',textAlign:'center',marginTop:'40px'}},'Henüz bildirim yok. Şiirlerine yorum ve puan geldikçe burada görünecek! 🌙'));
   } else {
+    const temizleBtn=h('button',{class:'btn',style:{width:'100%',marginBottom:'12px',background:'none',color:'#f87171',fontSize:'.82rem',border:'1px solid #4c1d1d',borderRadius:'10px',padding:'8px'},onclick:()=>{A.clearAllNotifs();}},'🗑 Tümünü Temizle');
+    page.appendChild(temizleBtn);
     notifs.forEach(n=>{
       const card=h('div',{class:'card',style:{display:'flex',gap:'12px',alignItems:'flex-start',background:n.read?'linear-gradient(135deg,#1a0f2e,#160d28)':'linear-gradient(135deg,#2d1060,#1e0f3a)',border:n.read?'1px solid #2d1b52':'1px solid #7c3aed'}});
-      card.appendChild(h('span',{style:{fontSize:'1.5rem',flexShrink:'0'}},n.text.includes('yorum')? '💬':'⭐'));
+      const ikon = n.text.includes('takip')?'👤':n.text.includes('paylaştı')?'🪶':n.text.includes('yorum')?'💬':'⭐';
+      card.appendChild(h('span',{style:{fontSize:'1.5rem',flexShrink:'0'}},ikon));
       const info=h('div',{style:{flex:'1'}});
       info.appendChild(h('p',{style:{color:'#e9d5ff',fontSize:'.92rem',lineHeight:'1.5',fontFamily:"'Crimson Text',serif"}},n.text));
       info.appendChild(h('p',{style:{color:'#6b5b8a',fontSize:'.75rem',marginTop:'4px'}},n.date));
       card.appendChild(info);
       if(!n.read)card.appendChild(h('span',{style:{width:'8px',height:'8px',borderRadius:'50%',background:'#c084fc',flexShrink:'0',marginTop:'4px'}}));
+      const delBtn=h('button',{class:'btn',title:'Bildirimi sil',style:{background:'none',color:'#6b5b8a',fontSize:'.9rem',padding:'2px 4px',flexShrink:'0'},onclick:()=>{A.deleteNotif(n.id);}},'✕');
+      card.appendChild(delBtn);
       page.appendChild(card);
     });
   }
