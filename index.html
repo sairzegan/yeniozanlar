@@ -148,8 +148,9 @@ const scoreBadge=s=>{if(!s)return'';if(s>=9)return'🏆 Başyapıt';if(s>=8)retu
 
 // ── ŞİİR ANALİZ MOTORU ──────────────────────────────────────────────────────
 
-// Groq API anahtarını buraya yapıştır:
-const GROQ_API_KEY = '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';
+// Groq API anahtarı artık burada DEĞİL. İstekler /api/groq (Vercel serverless function) üzerinden
+// yapılıyor; anahtar yalnızca Vercel'in Environment Variables ayarında (GROQ_API_KEY) tutuluyor.
+// Bkz. /api/groq.js
 
 // ── Groq kota yardımcıları ───────────────────────────────────────────────
 // Groq "2m59.56s", "7.66s", "1h2m3s" veya "500ms" gibi süre string'leri döner; saniyeye çeviririz.
@@ -299,11 +300,10 @@ function groqKota429Isaretle(headers, mesaj){
 async function scorePoem(text){
   if(!text||text.trim().length<3)return null;
   try{
-    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    const res = await fetch('/api/groq', {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + GROQ_API_KEY
+        'Content-Type': 'application/json'
       },
       body: JSON.stringify({
         model: 'llama-3.3-70b-versatile',
@@ -848,11 +848,10 @@ const A = {
 
 async function groqBotCall(systemPrompt, userPrompt) {
   try {
-    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    const res = await fetch('/api/groq', {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + GROQ_API_KEY
+        'Content-Type': 'application/json'
       },
       body: JSON.stringify({
         model: 'llama-3.3-70b-versatile',
