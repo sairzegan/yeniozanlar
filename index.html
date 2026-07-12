@@ -1200,10 +1200,12 @@ A.clearAllNotifs = function(){
 };
 A.addNotif = function(toId,text){
     if(toId===S.me?.id)return;
+    // ÖNEMLİ: S.notifs yalnızca O AN GİRİŞ YAPMIŞ KULLANICININ KENDİ bildirimlerini tutar
+    // (Firebase'den toId == kendi ID'n filtresiyle yüklenir). Bu bildirim BAŞKA bir kullanıcı
+    // içindir (toId burada her zaman başkasıdır, satır 2 zaten kendine bildirimi engeller),
+    // bu yüzden yerel S.notifs listesine EKLENMEMELİDİR — sadece Firebase'e yazılır.
+    // Alıcı, bir sonraki sayfa yüklemesinde/girişinde kendi bildirimini Firebase'den çekecektir.
     const notif={id:uid(),toId,text,date:now(),read:false};
-    if(!S.notifs)S.notifs=[];
-    S.notifs.push(notif);
-    lsSet('yo_notifs',S.notifs);
     db.collection("notifs").doc(notif.id).set(notif).catch(e=>console.error(e));
 };
 
