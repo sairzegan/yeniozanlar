@@ -807,6 +807,65 @@ function scorePoemYerel(text){
   return { score:p, yorum, gucluYonler:guclu, gelistirmeOnerisi:oneri };
 }
 
+// ── BOT YORUMLARI İÇİN YEREL YEDEK ─────────────────────────────────────────
+// Groq'un 3 modeli de (kademe) başarısız olursa botDuyuPuan/botKatliPuan/botAriPuan
+// artık null dönüp yorumu tamamen atlamak yerine, kısa ve o botun temasına uygun
+// bir yerel yorum üretir. Böylece kota tamamen dolsa bile 3 bot da yorum bırakır.
+function _yerelYardimci(text){
+  const satirlar = text.split('\n').filter(s=>s.trim().length>0);
+  const lc = satirlar.length;
+  const kelimeler = text.trim().split(/\s+/);
+  const len = kelimeler.length;
+  const hash = text.split('').reduce((a,c)=>((a<<5)-a)+c.charCodeAt(0),0)>>>0;
+  const rnd = n => Math.abs(hash) % n;
+  const satirSon = satirlar.map(l=>{
+    const ws = l.trim().split(/\s+/);
+    const tam = ws[ws.length-1]?.toLowerCase().replace(/[^a-züğışöçâîû]/gi,'') || '';
+    return tam.slice(-3);
+  });
+  const ekSayisi = {};
+  satirSon.forEach(s=>{ if(s) ekSayisi[s]=(ekSayisi[s]||0)+1; });
+  const kafiyeVar = Object.values(ekSayisi).some(v=>v>=2);
+  const benzetmeImleri = ['gibi','sanki','andır','tıpkı','adeta','misali'];
+  const imgeVar = satirlar.some(s=>benzetmeImleri.some(b=>s.toLowerCase().includes(b)));
+  const benzersiz = new Set(kelimeler.map(w=>w.toLowerCase())).size;
+  const zenginlik = benzersiz / Math.max(len,1);
+  return { lc, len, rnd, kafiyeVar, imgeVar, zenginlik };
+}
+
+function botDuyuPuanYerel(text){
+  const { rnd, len } = _yerelYardimci(text);
+  const yorumlar = [
+    'Satırlarda belli bir duygu akışı var ama daha derinleşebilir.',
+    'Duygusal ton okurken hissediliyor, samimi bir hava taşıyor.',
+    'Duygu güçlü verilmiş ama biraz daha katmanlı olabilirdi.',
+    'İçtenlik var, fakat duygu bazı yerlerde yüzeyde kalmış.',
+  ];
+  const taban = 5.5 + (len>=20?0.8:0) + rnd(20)/10;
+  const p = Math.round(Math.min(9.5,Math.max(2.0,taban))*10)/10;
+  return { puan: p, yorum: yorumlar[rnd(yorumlar.length)], kullanici: 'bot_duyu_yorum', ad: 'duyu-yorum' };
+}
+
+function botKatliPuanYerel(text){
+  const { rnd, kafiyeVar, lc } = _yerelYardimci(text);
+  const yorumlar = kafiyeVar
+    ? ['Ses uyumu ve kafiye düzeni fark edilir şekilde işlenmiş.', 'Dizeler arasında hoş bir ritim yakalanmış.']
+    : ['Serbest bir yapı tercih edilmiş, kafiyeye dayanmıyor.', 'Ritim daha çok anlam akışına dayanıyor, kafiye zorlanmamış.'];
+  const taban = (kafiyeVar?6.2:5.0) + (lc>=6?0.5:0) + rnd(15)/10;
+  const p = Math.round(Math.min(9.5,Math.max(2.0,taban))*10)/10;
+  return { puan: p, yorum: yorumlar[rnd(yorumlar.length)], kullanici: 'bot_katli_yorum', ad: 'katlı-yorum' };
+}
+
+function botAriPuanYerel(text){
+  const { rnd, imgeVar, zenginlik } = _yerelYardimci(text);
+  const yorumlar = imgeVar
+    ? ['Benzetmeler şiire özgün bir görsellik katmış.', 'İmgeler dikkat çekici, emek verilmiş bir dil var.']
+    : ['İmge kullanımı sınırlı, daha somut betimlemeler eklenebilir.', 'Metaforlar yerine daha doğrudan bir anlatım tercih edilmiş.'];
+  const taban = (imgeVar?6.0:4.8) + zenginlik*2 + rnd(10)/10;
+  const p = Math.round(Math.min(9.5,Math.max(2.0,taban))*10)/10;
+  return { puan: p, yorum: yorumlar[rnd(yorumlar.length)], kullanici: 'bot_ari_yorum', ad: 'arı-yorum' };
+}
+
 function go(screen,extra={}){Object.assign(S,{screen,...extra});render()}
 
 // Sadece ilgili kartı günceller, sayfa kaymaz
@@ -952,7 +1011,7 @@ async function botDuyuPuan(text) {
   const system = 'Sen "duyu-yorum" adlı bir şiir eleştirmensin. YALNIZCA şiirin duygusallığını, duygu yoğunluğunu ve duygusal etkisini değerlendirirsin. Teknik unsurları değil, sadece duyguyu analiz et. Yanıtlarını SADECE JSON formatında ver.';
   const user = 'Şu şiirin duygusallığını değerlendir:\n\n"""\n' + text + '\n"""\n\nSADECE şu JSON ile yanıtla:\n{"puan": <2.0-9.5 arasi sayi>, "yorum": "<2-3 cumle duygu analizi>"}';
   const result = await groqBotCall(system, user);
-  if (!result) return null;
+  if (!result) return botDuyuPuanYerel(text);
   let p = Math.min(9.5, Math.max(2.0, parseFloat(result.puan)));
   p = Math.round(p * 10) / 10;
   return { puan: p, yorum: result.yorum, kullanici: 'bot_duyu_yorum', ad: 'duyu-yorum' };
@@ -963,7 +1022,7 @@ async function botKatliPuan(text) {
   const system = 'Sen "katlı-yorum" adlı bir şiir eleştirmensin. YALNIZCA şiirin ses uyumunu, kafiye düzenini, hece ölçüsünü ve ritim yapısını değerlendirirsin. Duyguya değil, sese odaklan. Yanıtlarını SADECE JSON formatında ver.';
   const user = 'Şu şiirin ses uyumunu ve kafiyesini değerlendir:\n\n"""\n' + text + '\n"""\n\nSADECE şu JSON ile yanıtla:\n{"puan": <2.0-9.5 arasi sayi>, "yorum": "<2-3 cumle ses analizi>"}';
   const result = await groqBotCall(system, user);
-  if (!result) return null;
+  if (!result) return botKatliPuanYerel(text);
   let p = Math.min(9.5, Math.max(2.0, parseFloat(result.puan)));
   p = Math.round(p * 10) / 10;
   return { puan: p, yorum: result.yorum, kullanici: 'bot_katli_yorum', ad: 'katlı-yorum' };
@@ -974,7 +1033,7 @@ async function botAriPuan(text) {
   const system = 'Sen "arı-yorum" adlı bir şiir eleştirmensin. YALNIZCA şiirdeki imgeleri, metaforları, özgünlüğü ve şiire verilen emeği değerlendirirsin. Ne kadar işlenmiş, ne kadar özgün olduğuna bak. Yanıtlarını SADECE JSON formatında ver.';
   const user = 'Şu şiirin imgelerini, metaforlarını ve özgünlüğünü değerlendir:\n\n"""\n' + text + '\n"""\n\nSADECE şu JSON ile yanıtla:\n{"puan": <2.0-9.5 arasi sayi>, "yorum": "<2-3 cumle imge analizi>"}';
   const result = await groqBotCall(system, user);
-  if (!result) return null;
+  if (!result) return botAriPuanYerel(text);
   let p = Math.min(9.5, Math.max(2.0, parseFloat(result.puan)));
   p = Math.round(p * 10) / 10;
   return { puan: p, yorum: result.yorum, kullanici: 'bot_ari_yorum', ad: 'arı-yorum' };
