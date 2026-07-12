@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <!-- Ana Sayfanız -->
+  <url>
+    <loc>https://yeniozanlar.vercel.app/</loc>
+    <priority>1.0</priority>
+  </url>
+  
+  <!-- Eğer varsa Hakkımızda, İletişim gibi diğer sayfalarınızı da alta bu şekilde ekleyebilirsiniz -->
+  <!-- 
+  <url>
+    <loc>https://vercel.app</loc>
+    <priority>0.8</priority>
+  </url> 
+  -->
+</urlset>
