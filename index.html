@@ -219,6 +219,7 @@ const groqKota = {
   toplamIstek: 0,            // bu oturumda Groq'a yapılan toplam istek
   sonGuncelleme: null,       // son güncelleme saati
   sonKaynak: null,           // 'groq' | 'yerel' — son şiir yorumu nereden geldi
+  sonModel: null,            // en son başarılı isteği hangi model karşıladı
   sonHata: null,             // son hata mesajı (varsa) — admin panelinde gösterilir
   kotaDolduMu: false,        // 429 (kota doldu) durumuna geçildi mi
   kotaAcilmaZamani: null,    // kota tekrar açılacağı an (Date.now() + saniye)
@@ -301,71 +302,95 @@ function groqKota429Isaretle(headers, mesaj){
   groqKota.kotaKullanilan = ayristirilmis?.kullanilan ?? null;
 }
 
+// Aynı Groq API anahtarıyla, her modelin kendine ait AYRI bir günlük kotası vardır.
+// Bu yüzden tek bir modele bağlı kalmak yerine, kota dolduğunda otomatik olarak
+// bir sonraki modele geçiyoruz. Toplamda çok daha yüksek bir günlük kapasiteye
+// (yaklaşık 800.000 token/gün) ulaşmış oluyoruz — yeni anahtar veya yeni sağlayıcı gerekmez.
+// Sıralama: önce en kaliteli/dengeli model, en son en yüksek kotalı ama daha basit model.
+const GROQ_MODEL_KADEMESI = [
+  'openai/gpt-oss-120b',      // ~200.000 token/gün — kaliteli, iyi bir denge
+  'llama-3.3-70b-versatile',  // ~100.000 token/gün — önceki varsayılan model
+  'llama-3.1-8b-instant',     // ~500.000 token/gün — daha basit ama en yüksek kota
+];
+
+async function scorePoemTekModel(text, model){
+  const res = await fetch('/api/groq', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      model: model,
+      max_tokens: 1024,
+      temperature: 0.7,
+      messages: [{
+        role: 'system',
+        content: 'Sen deneyimli bir Türk edebiyat eleştirmenisin. Şiirleri derinlemesine analiz eder, doğrudan söylenmese bile ima edilen duygu ve anlatıyı kavrayabilirsin. Yanıtlarını SADECE geçerli JSON formatında verirsin.'
+      },{
+        role: 'user',
+        content: `Aşağıdaki şiiri analiz et:\n\n"""\n${text}\n"""\n\nDikkat et:\n- Aynı kelimenin tekrarını kafiye sayma\n- Kısa ve tekrarlı şiirlere düşük puan ver\n- Doğrudan söylenmese bile ima edilen duyguyu, temayı, anlatıyı kavra\n- Şiirden gerçek dize alıntısı yap\n- Hece ölçüsünü doğru tespit et\n- Günlük konuşma dili ve klişelere eksi puan ver\n\nSADECE şu JSON ile yanıtla, başka hiçbir şey yazma:\n{\n  "score": <2.0-9.8 arası gerçekçi puan>,\n  "yorum": "<5-7 cümle: şiirden ne anlaşıldığı, tema, imge, dil kalitesi, ses uyumu>",\n  "gucluYonler": "<tek cümle, şiirden somut örnek>",\n  "gelistirmeOnerisi": "<tek cümle, somut ve uygulanabilir>"\n}`
+      }]
+    })
+  });
+  groqKotaGuncelle(res.headers);
+  if(res.status===429){
+    let mesaj = '';
+    try{ const errBody = await res.json(); mesaj = errBody?.error?.message || ''; }catch(_){}
+    groqKota429Isaretle(res.headers, mesaj);
+    throw new Error('429: '+(mesaj || 'Groq kota doldu'));
+  }
+  groqKota.kotaDolduMu = false;
+  if(!res.ok){
+    let mesaj = '';
+    try{
+      const errBody = await res.json();
+      mesaj = errBody?.error?.message || '';
+      if(errBody?.error?.teshis){
+        const t = errBody.error.teshis;
+        mesaj += ` [çalışan ortam: ${t.calisan_ortam}; bulunan GROQ değişkenleri: ${t.groq_ile_ilgili_bulunan_degisken_isimleri?.length ? t.groq_ile_ilgili_bulunan_degisken_isimleri.join(', ') : 'yok'}]`;
+      }
+    }catch(_){}
+    throw new Error(res.status+': '+(mesaj || 'Groq hatası'));
+  }
+  const data = await res.json();
+  if(!data.choices?.[0]?.message?.content) throw new Error('BOS_YANIT: Groq içerik döndürmedi');
+  const raw = data.choices[0].message.content.trim();
+  const clean = raw.replace(/```json|```/g,'').trim();
+  const jsonStr = clean.slice(clean.indexOf('{'), clean.lastIndexOf('}')+1);
+  let result;
+  try{
+    result = JSON.parse(jsonStr);
+  } catch(parseErr){
+    throw new Error('JSON_HATASI: Yapay zeka geçersiz format döndürdü → "'+raw.slice(0,150)+(raw.length>150?'...':'')+'"');
+  }
+  result.score = Math.min(9.8, Math.max(2.0, parseFloat(result.score)));
+  result.score = Math.round(result.score * 10) / 10;
+  return result;
+}
+
 async function scorePoem(text){
   if(!text||text.trim().length<3)return null;
-  try{
-    const res = await fetch('/api/groq', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
-        max_tokens: 1024,
-        temperature: 0.7,
-        messages: [{
-          role: 'system',
-          content: 'Sen deneyimli bir Türk edebiyat eleştirmenisin. Şiirleri derinlemesine analiz eder, doğrudan söylenmese bile ima edilen duygu ve anlatıyı kavrayabilirsin. Yanıtlarını SADECE geçerli JSON formatında verirsin.'
-        },{
-          role: 'user',
-          content: `Aşağıdaki şiiri analiz et:\n\n"""\n${text}\n"""\n\nDikkat et:\n- Aynı kelimenin tekrarını kafiye sayma\n- Kısa ve tekrarlı şiirlere düşük puan ver\n- Doğrudan söylenmese bile ima edilen duyguyu, temayı, anlatıyı kavra\n- Şiirden gerçek dize alıntısı yap\n- Hece ölçüsünü doğru tespit et\n- Günlük konuşma dili ve klişelere eksi puan ver\n\nSADECE şu JSON ile yanıtla, başka hiçbir şey yazma:\n{\n  "score": <2.0-9.8 arası gerçekçi puan>,\n  "yorum": "<5-7 cümle: şiirden ne anlaşıldığı, tema, imge, dil kalitesi, ses uyumu>",\n  "gucluYonler": "<tek cümle, şiirden somut örnek>",\n  "gelistirmeOnerisi": "<tek cümle, somut ve uygulanabilir>"\n}`
-        }]
-      })
-    });
-    groqKotaGuncelle(res.headers);
-    if(res.status===429){
-      let mesaj = '';
-      try{ const errBody = await res.json(); mesaj = errBody?.error?.message || ''; }catch(_){}
-      groqKota429Isaretle(res.headers, mesaj);
-      throw new Error('429: '+(mesaj || 'Groq kota doldu'));
-    }
-    groqKota.kotaDolduMu = false;
-    if(!res.ok){
-      let mesaj = '';
-      try{
-        const errBody = await res.json();
-        mesaj = errBody?.error?.message || '';
-        if(errBody?.error?.teshis){
-          const t = errBody.error.teshis;
-          mesaj += ` [çalışan ortam: ${t.calisan_ortam}; bulunan GROQ değişkenleri: ${t.groq_ile_ilgili_bulunan_degisken_isimleri?.length ? t.groq_ile_ilgili_bulunan_degisken_isimleri.join(', ') : 'yok'}]`;
-        }
-      }catch(_){}
-      throw new Error(res.status+': '+(mesaj || 'Groq hatası'));
-    }
-    const data = await res.json();
-    if(!data.choices?.[0]?.message?.content) throw new Error('BOS_YANIT: Groq içerik döndürmedi');
-    const raw = data.choices[0].message.content.trim();
-    const clean = raw.replace(/```json|```/g,'').trim();
-    const jsonStr = clean.slice(clean.indexOf('{'), clean.lastIndexOf('}')+1);
-    let result;
+  let sonHataMesaji = null;
+  for(const model of GROQ_MODEL_KADEMESI){
     try{
-      result = JSON.parse(jsonStr);
-    } catch(parseErr){
-      throw new Error('JSON_HATASI: Yapay zeka geçersiz format döndürdü → "'+raw.slice(0,150)+(raw.length>150?'...':'')+'"');
+      const result = await scorePoemTekModel(text, model);
+      groqKota.sonKaynak = 'groq';
+      groqKota.sonModel = model;
+      groqKota.sonHata = null;
+      groqGunlukArttir(true);
+      return result;
+    } catch(e){
+      sonHataMesaji = e.message;
+      console.warn(`Groq (${model}) başarısız, sıradaki modele geçiliyor:`, e.message);
+      // sıradaki modele geç
     }
-    result.score = Math.min(9.8, Math.max(2.0, parseFloat(result.score)));
-    result.score = Math.round(result.score * 10) / 10;
-    groqKota.sonKaynak = 'groq';
-    groqKota.sonHata = null;
-    groqGunlukArttir(true);
-    return result;
-  } catch(e){
-    console.warn('Groq API çalışmadı, yerel algoritma kullanılıyor:', e.message);
-    groqKota.sonKaynak = 'yerel';
-    groqKota.sonHata = e.message;
-    groqGunlukArttir(false);
-    return scorePoemYerel(text);
   }
+  console.warn('Tüm Groq modelleri başarısız oldu, yerel algoritma kullanılıyor:', sonHataMesaji);
+  groqKota.sonKaynak = 'yerel';
+  groqKota.sonModel = null;
+  groqKota.sonHata = sonHataMesaji;
+  groqGunlukArttir(false);
+  return scorePoemYerel(text);
 }
 
 function scorePoemYerel(text){
@@ -857,58 +882,69 @@ const A = {
 // ── BOT PUANLAMALARI (A dışında tanımlanır) ──────────────────────────────────
 // ── BOT PUANLAMALARI (Groq AI) ──────────────────────────────────────────────
 
-async function groqBotCall(systemPrompt, userPrompt) {
-  try {
-    const res = await fetch('/api/groq', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
-        max_tokens: 400,
-        temperature: 0.8,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt }
-        ]
-      })
-    });
-    groqKotaGuncelle(res.headers);
-    if (res.status === 429) {
-      let mesaj = '';
-      try{ const errBody = await res.json(); mesaj = errBody?.error?.message || ''; }catch(_){}
-      groqKota429Isaretle(res.headers, mesaj);
-      throw new Error('429: '+(mesaj || 'Groq kota doldu'));
-    }
-    groqKota.kotaDolduMu = false;
-    if (!res.ok){
-      let mesaj = '';
-      try{
-        const errBody = await res.json();
-        mesaj = errBody?.error?.message || '';
-        if(errBody?.error?.teshis){
-          const t = errBody.error.teshis;
-          mesaj += ` [çalışan ortam: ${t.calisan_ortam}; bulunan GROQ değişkenleri: ${t.groq_ile_ilgili_bulunan_degisken_isimleri?.length ? t.groq_ile_ilgili_bulunan_degisken_isimleri.join(', ') : 'yok'}]`;
-        }
-      }catch(_){}
-      throw new Error(res.status+': '+(mesaj || 'Groq hatası'));
-    }
-    const data = await res.json();
-    const raw = data.choices?.[0]?.message?.content?.trim();
-    if (!raw) throw new Error('BOS_YANIT: Groq içerik döndürmedi');
-    const clean = raw.replace(/```json|```/g, '').trim();
-    const jsonStr = clean.slice(clean.indexOf('{'), clean.lastIndexOf('}') + 1);
-    try{
-      return JSON.parse(jsonStr);
-    } catch(parseErr){
-      throw new Error('JSON_HATASI: Yapay zeka geçersiz format döndürdü → "'+raw.slice(0,150)+(raw.length>150?'...':'')+'"');
-    }
-  } catch(e) {
-    console.warn('groqBotCall hatasi:', e.message);
-    groqKota.sonHata = e.message;
-    return null;
+async function groqBotCallTekModel(systemPrompt, userPrompt, model) {
+  const res = await fetch('/api/groq', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      model: model,
+      max_tokens: 400,
+      temperature: 0.8,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt }
+      ]
+    })
+  });
+  groqKotaGuncelle(res.headers);
+  if (res.status === 429) {
+    let mesaj = '';
+    try{ const errBody = await res.json(); mesaj = errBody?.error?.message || ''; }catch(_){}
+    groqKota429Isaretle(res.headers, mesaj);
+    throw new Error('429: '+(mesaj || 'Groq kota doldu'));
   }
+  groqKota.kotaDolduMu = false;
+  if (!res.ok){
+    let mesaj = '';
+    try{
+      const errBody = await res.json();
+      mesaj = errBody?.error?.message || '';
+      if(errBody?.error?.teshis){
+        const t = errBody.error.teshis;
+        mesaj += ` [çalışan ortam: ${t.calisan_ortam}; bulunan GROQ değişkenleri: ${t.groq_ile_ilgili_bulunan_degisken_isimleri?.length ? t.groq_ile_ilgili_bulunan_degisken_isimleri.join(', ') : 'yok'}]`;
+      }
+    }catch(_){}
+    throw new Error(res.status+': '+(mesaj || 'Groq hatası'));
+  }
+  const data = await res.json();
+  const raw = data.choices?.[0]?.message?.content?.trim();
+  if (!raw) throw new Error('BOS_YANIT: Groq içerik döndürmedi');
+  const clean = raw.replace(/```json|```/g, '').trim();
+  const jsonStr = clean.slice(clean.indexOf('{'), clean.lastIndexOf('}') + 1);
+  try{
+    return JSON.parse(jsonStr);
+  } catch(parseErr){
+    throw new Error('JSON_HATASI: Yapay zeka geçersiz format döndürdü → "'+raw.slice(0,150)+(raw.length>150?'...':'')+'"');
+  }
+}
+
+async function groqBotCall(systemPrompt, userPrompt) {
+  let sonHataMesaji = null;
+  for(const model of GROQ_MODEL_KADEMESI){
+    try{
+      const result = await groqBotCallTekModel(systemPrompt, userPrompt, model);
+      groqKota.sonHata = null;
+      return result;
+    } catch(e){
+      sonHataMesaji = e.message;
+      console.warn(`groqBotCall (${model}) başarısız, sıradaki modele geçiliyor:`, e.message);
+    }
+  }
+  console.warn('groqBotCall: tüm Groq modelleri başarısız oldu:', sonHataMesaji);
+  groqKota.sonHata = sonHataMesaji;
+  return null;
 }
 
 async function botDuyuPuan(text) {
@@ -1641,7 +1677,7 @@ function Profile(){
         if(groqKota.tokenSifirlanmaSn!==null)
           kotaIcerik.appendChild(satir('Token kotası yenilenme:',groqSaatFormatla(groqKota.tokenSifirlanmaSn)+' ('+groqSureFormatla(groqKota.tokenSifirlanmaSn)+' sonra)'));
         kotaIcerik.appendChild(satir('Son yorumun kaynağı:',
-          groqKota.sonKaynak==='groq'?'🤖 Groq AI':groqKota.sonKaynak==='yerel'?'💻 Yerel algoritma':'—',
+          groqKota.sonKaynak==='groq'?`🤖 Groq AI${groqKota.sonModel?' ('+groqKota.sonModel+')':''}`:groqKota.sonKaynak==='yerel'?'💻 Yerel algoritma':'—',
           groqKota.sonKaynak==='groq'?'#34d399':groqKota.sonKaynak==='yerel'?'#fbbf24':'#e2e8f0'));
         if(groqKota.sonHata){
           kotaIcerik.appendChild(satir('Son hata:',groqKota.sonHata,'#fbbf24'));
