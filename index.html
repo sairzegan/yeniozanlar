@@ -76,6 +76,7 @@ let S = {
   screen: 'landing',
   profileId: null,
   postId: null,
+  acilacakYorum: false,
   follows: lsGet('yo_follows', {}),
   msgs: lsGet('yo_msgs', []),
   notifs: lsGet('yo_notifs', []),
@@ -118,6 +119,13 @@ async function verileriYukle() {
     console.log("Bağlantı hatası:", error);
   } finally {
     S.loading = false;
+    if(S.me && (S.screen==='landing'||S.screen==='login'||S.screen==='register')){
+      S.screen='feed';
+    }
+    // Uygulamanın başladığı ekranı tarayıcı geçmişine temel (baseline) olarak yaz.
+    // Bundan sonraki her go() çağrısı bunun üzerine "ileri" doğru geçmiş kaydı ekler,
+    // böylece geri tuşu bu ekrana (anasayfaya değil, gerçek önceki duruma) döner.
+    history.replaceState({screen:S.screen, profileId:S.profileId, postId:S.postId}, '', '#'+S.screen);
     render();
   }
 }
@@ -314,23 +322,34 @@ const GROQ_MODEL_KADEMESI = [
 ];
 
 async function scorePoemTekModel(text, model){
+  // openai/gpt-oss-* modelleri "akıl yürütme" (reasoning) modelleridir; varsayılan
+  // ayarlarla yanıt vermeden önce uzun bir iç düşünme süreci üretebilir ve bu da
+  // max_tokens sınırını tüketip asıl JSON'a hiç sıra gelmeden yanıtı kesebilir.
+  // reasoning_effort:'low' bunu en aza indirir. response_format json_object ise
+  // Groq'un resmi JSON modu — sözdizimsel olarak geçerli JSON garantisi verir.
+  const govde = {
+    model: model,
+    max_tokens: 1024,
+    temperature: 0.7,
+    response_format: { type: 'json_object' },
+    messages: [{
+      role: 'system',
+      content: 'Sen deneyimli bir Türk edebiyat eleştirmenisin. Şiirleri derinlemesine analiz eder, doğrudan söylenmese bile ima edilen duygu ve anlatıyı kavrayabilirsin. Yanıtlarını SADECE geçerli JSON formatında verirsin.'
+    },{
+      role: 'user',
+      content: `Aşağıdaki şiiri analiz et:\n\n"""\n${text}\n"""\n\nDikkat et:\n- Aynı kelimenin tekrarını kafiye sayma\n- Kısa ve tekrarlı şiirlere düşük puan ver\n- Doğrudan söylenmese bile ima edilen duyguyu, temayı, anlatıyı kavra\n- Şiirden gerçek dize alıntısı yap\n- Hece ölçüsünü doğru tespit et\n- Günlük konuşma dili ve klişelere eksi puan ver\n\nSADECE şu JSON ile yanıtla, başka hiçbir şey yazma:\n{\n  "score": <2.0-9.8 arası gerçekçi puan>,\n  "yorum": "<5-7 cümle: şiirden ne anlaşıldığı, tema, imge, dil kalitesi, ses uyumu>",\n  "gucluYonler": "<tek cümle, şiirden somut örnek>",\n  "gelistirmeOnerisi": "<tek cümle, somut ve uygulanabilir>"\n}`
+    }]
+  };
+  if(model.startsWith('openai/gpt-oss')){
+    govde.reasoning_effort = 'low';
+    govde.include_reasoning = false;
+  }
   const res = await fetch('/api/groq', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify({
-      model: model,
-      max_tokens: 1024,
-      temperature: 0.7,
-      messages: [{
-        role: 'system',
-        content: 'Sen deneyimli bir Türk edebiyat eleştirmenisin. Şiirleri derinlemesine analiz eder, doğrudan söylenmese bile ima edilen duygu ve anlatıyı kavrayabilirsin. Yanıtlarını SADECE geçerli JSON formatında verirsin.'
-      },{
-        role: 'user',
-        content: `Aşağıdaki şiiri analiz et:\n\n"""\n${text}\n"""\n\nDikkat et:\n- Aynı kelimenin tekrarını kafiye sayma\n- Kısa ve tekrarlı şiirlere düşük puan ver\n- Doğrudan söylenmese bile ima edilen duyguyu, temayı, anlatıyı kavra\n- Şiirden gerçek dize alıntısı yap\n- Hece ölçüsünü doğru tespit et\n- Günlük konuşma dili ve klişelere eksi puan ver\n\nSADECE şu JSON ile yanıtla, başka hiçbir şey yazma:\n{\n  "score": <2.0-9.8 arası gerçekçi puan>,\n  "yorum": "<5-7 cümle: şiirden ne anlaşıldığı, tema, imge, dil kalitesi, ses uyumu>",\n  "gucluYonler": "<tek cümle, şiirden somut örnek>",\n  "gelistirmeOnerisi": "<tek cümle, somut ve uygulanabilir>"\n}`
-      }]
-    })
+    body: JSON.stringify(govde)
   });
   groqKotaGuncelle(res.headers);
   if(res.status===429){
@@ -866,7 +885,30 @@ function botAriPuanYerel(text){
   return { puan: p, yorum: yorumlar[rnd(yorumlar.length)], kullanici: 'bot_ari_yorum', ad: 'arı-yorum' };
 }
 
-function go(screen,extra={}){Object.assign(S,{screen,...extra});render()}
+// go(): ekran değiştirir VE tarayıcı geçmişine (history) bir kayıt ekler, böylece
+// fiziksel "geri" tuşu bir önceki ziyaret edilen ekrana döner (her zaman anasayfaya değil).
+// profileId/postId gibi ekrana özgü alanlar, yeni ekran onları belirtmediyse sıfırlanır
+// (aksi halde bir önceki ekrandan kalan eski id'ler sızabilir).
+function go(screen,extra={}){
+  S.screen = screen;
+  S.profileId = 'profileId' in extra ? extra.profileId : null;
+  S.postId = 'postId' in extra ? extra.postId : null;
+  render();
+  history.pushState({screen:S.screen, profileId:S.profileId, postId:S.postId}, '', '#'+screen);
+}
+window.addEventListener('popstate', (e)=>{
+  const st = e.state;
+  if(st){
+    S.screen = st.screen;
+    S.profileId = st.profileId ?? null;
+    S.postId = st.postId ?? null;
+  } else {
+    S.screen = S.me ? 'feed' : 'landing';
+    S.profileId = null;
+    S.postId = null;
+  }
+  render();
+});
 
 // Sadece ilgili kartı günceller, sayfa kaymaz
 function refreshCard(pid){
@@ -963,20 +1005,26 @@ const A = {
 // ── BOT PUANLAMALARI (Groq AI) ──────────────────────────────────────────────
 
 async function groqBotCallTekModel(systemPrompt, userPrompt, model) {
+  const govde = {
+    model: model,
+    max_tokens: 400,
+    temperature: 0.8,
+    response_format: { type: 'json_object' },
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userPrompt }
+    ]
+  };
+  if(model.startsWith('openai/gpt-oss')){
+    govde.reasoning_effort = 'low';
+    govde.include_reasoning = false;
+  }
   const res = await fetch('/api/groq', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify({
-      model: model,
-      max_tokens: 400,
-      temperature: 0.8,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt }
-      ]
-    })
+    body: JSON.stringify(govde)
   });
   groqKotaGuncelle(res.headers);
   if (res.status === 429) {
@@ -1107,7 +1155,7 @@ A.addPost = async function(pd){
     if(takipciler.length){
       const baslik = np.title || np.text?.slice(0,20) || 'yeni bir şiir';
       const paylasan = S.me.name||S.me.username;
-      takipciler.forEach(fid => A.addNotif(fid, `${paylasan} yeni bir şiir paylaştı: "${baslik}"`));
+      takipciler.forEach(fid => A.addNotif(fid, `${paylasan} yeni bir şiir paylaştı: "${baslik}"`, {postId:np.id}));
     }
 };
 A.deletePost = function(pid){
@@ -1115,6 +1163,32 @@ A.deletePost = function(pid){
     S.posts = S.posts.filter(p => p.id !== pid);
     save();render();
     db.collection("posts").doc(pid).delete().catch(err=>console.error("Silme hatası:",err));
+};
+// tur: 'like' | 'dislike' | 'heart'. like/dislike birbirini dışlar (biri seçilince öteki kalkar),
+// kalp bunlardan bağımsızdır. Aynı butona tekrar basmak tepkiyi kaldırır (toggle).
+A.react = function(pid, tur){
+    const pIndex = S.posts.findIndex(p=>p.id===pid);
+    if(pIndex<0) return;
+    const post = S.posts[pIndex];
+    if(!post.reactions) post.reactions = {like:[],dislike:[],heart:[]};
+    ['like','dislike','heart'].forEach(t=>{ if(!post.reactions[t]) post.reactions[t]=[]; });
+    const meId = S.me.id;
+    const zatenVar = post.reactions[tur].includes(meId);
+    if(zatenVar){
+      post.reactions[tur] = post.reactions[tur].filter(id=>id!==meId);
+    } else {
+      post.reactions[tur] = [...post.reactions[tur], meId];
+      if(tur==='like')    post.reactions.dislike = post.reactions.dislike.filter(id=>id!==meId);
+      if(tur==='dislike') post.reactions.like    = post.reactions.like.filter(id=>id!==meId);
+      if(tur!=='dislike'){
+        const postTitle=post.title||post.text?.slice(0,20)||'şiirinize';
+        const eylem = tur==='like' ? 'beğendi' : 'kalp attı';
+        A.addNotif(post.authorId, `${S.me.name||S.me.username} sizin "${postTitle}" başlıklı şiirinizi ${eylem}.`, {postId:post.id});
+      }
+    }
+    save();
+    refreshCard(pid);
+    db.collection("posts").doc(pid).update({reactions:post.reactions}).catch(err=>console.error("Tepki hatası:",err));
 };
 A.ratePost = function(pid,score){
     const pIndex = S.posts.findIndex(p=>p.id===pid);
@@ -1125,7 +1199,7 @@ A.ratePost = function(pid,score){
       refreshCard(pid);
       const post=S.posts[pIndex];
       const postTitle=post.title||post.text?.slice(0,20)||'şiirinize';
-      A.addNotif(post.authorId, `${S.me.name||S.me.username} sizin "${postTitle}" başlıklı şiirinize ${score}/10 puan verdi.`);
+      A.addNotif(post.authorId, `${S.me.name||S.me.username} sizin "${postTitle}" başlıklı şiirinize ${score}/10 puan verdi.`, {postId:post.id,tur:'puan'});
       db.collection("posts").doc(pid).update({ userRatings: S.posts[pIndex].userRatings });
     }
 };
@@ -1139,7 +1213,7 @@ A.addComment = function(pid,text){
       refreshCard(pid);
       const post=S.posts[pIndex];
       const postTitle=post.title||post.text?.slice(0,20)||'şiirinize';
-      A.addNotif(post.authorId, `${S.me.name||S.me.username} sizin "${postTitle}" başlıklı şiirinize yorum yaptı.`);
+      A.addNotif(post.authorId, `${S.me.name||S.me.username} sizin "${postTitle}" başlıklı şiirinize yorum yaptı.`, {postId:post.id,tur:'yorum'});
       db.collection("posts").doc(pid).update({ comments: updatedComments });
     }
 };
@@ -1161,7 +1235,7 @@ A.toggleFollow = function(tid){
   if(!has){
     // Yeni takip başladıysa, takip edilen kişiye bildirim gönder
     const takipEden = S.me.name||S.me.username;
-    A.addNotif(tid, `${takipEden} sizi takip etmeye başladı.`);
+    A.addNotif(tid, `${takipEden} sizi takip etmeye başladı.`, {fromId:S.me.id});
   }
 };
 A.sendMsg = function(toId,text){
@@ -1198,14 +1272,17 @@ A.clearAllNotifs = function(){
     hepsi.forEach(n=>db.collection("notifs").doc(n.id).delete().catch(()=>{}));
     render();
 };
-A.addNotif = function(toId,text){
+A.addNotif = function(toId,text,extra={}){
     if(toId===S.me?.id)return;
     // ÖNEMLİ: S.notifs yalnızca O AN GİRİŞ YAPMIŞ KULLANICININ KENDİ bildirimlerini tutar
     // (Firebase'den toId == kendi ID'n filtresiyle yüklenir). Bu bildirim BAŞKA bir kullanıcı
     // içindir (toId burada her zaman başkasıdır, satır 2 zaten kendine bildirimi engeller),
     // bu yüzden yerel S.notifs listesine EKLENMEMELİDİR — sadece Firebase'e yazılır.
     // Alıcı, bir sonraki sayfa yüklemesinde/girişinde kendi bildirimini Firebase'den çekecektir.
-    const notif={id:uid(),toId,text,date:now(),read:false};
+    // extra.postId: bildirime tıklanınca hangi şiire gidileceği
+    // extra.fromId: bildirime tıklanınca hangi profile gidileceği (örn. takip bildirimi)
+    // extra.tur: 'yorum' ise şiir açıldığında yorum bölümü otomatik açılır
+    const notif={id:uid(),toId,text,date:now(),read:false,postId:extra.postId||null,fromId:extra.fromId||null,tur:extra.tur||null};
     db.collection("notifs").doc(notif.id).set(notif).catch(e=>console.error(e));
 };
 
@@ -1278,7 +1355,7 @@ function navBar(){
 }
 
 
-function postCard(post, forceExpand=false){
+function postCard(post, forceExpand=false, autoOpenComments=false){
   const author=byId(post.authorId);
   const vid=ytId(post.youtube);
   const avg=calcAvg(post.userRatings,post.aiScore);
@@ -1323,9 +1400,13 @@ function postCard(post, forceExpand=false){
     preview.appendChild(h('p',{style:{fontFamily:"'Crimson Text',serif",fontSize:'.9rem',color:'#a78bfa',lineHeight:'1.5',whiteSpace:'pre-wrap'}},snip));
   }
   // alt bilgi
-  const pfoot=h('div',{style:{display:'flex',gap:'12px',marginTop:'8px',paddingTop:'8px',borderTop:'1px solid #2d1b5244',alignItems:'center'}});
+  const pfoot=h('div',{style:{display:'flex',gap:'12px',marginTop:'8px',paddingTop:'8px',borderTop:'1px solid #2d1b5244',alignItems:'center',flexWrap:'wrap'}});
   pfoot.appendChild(h('span',{style:{fontSize:'.75rem',color:'#6b5b8a'}},`💬 ${(post.comments||[]).length}`));
   pfoot.appendChild(h('span',{style:{fontSize:'.75rem',color:'#6b5b8a'}},`⭐ ${ucnt} oy`));
+  const rTeps=post.reactions||{like:[],dislike:[],heart:[]};
+  if((rTeps.like||[]).length>0) pfoot.appendChild(h('span',{style:{fontSize:'.75rem',color:'#6b5b8a'}},`👍 ${rTeps.like.length}`));
+  if((rTeps.dislike||[]).length>0) pfoot.appendChild(h('span',{style:{fontSize:'.75rem',color:'#6b5b8a'}},`👎 ${rTeps.dislike.length}`));
+  if((rTeps.heart||[]).length>0) pfoot.appendChild(h('span',{style:{fontSize:'.75rem',color:'#6b5b8a'}},`❤️ ${rTeps.heart.length}`));
   if(avg!==null) pfoot.appendChild(h('span',{style:{fontSize:'.75rem',color:scoreColor(avg)}},scoreBadge(avg)));
   const expandLabel=h('span',{style:{fontSize:'.75rem',color:'#7c3aed',marginLeft:'auto'}},'Devamını gör ▼');
   pfoot.appendChild(expandLabel);
@@ -1473,10 +1554,25 @@ function postCard(post, forceExpand=false){
   }
   if(avg!==null) full.appendChild(h('p',{style:{fontSize:'.82rem',color:scoreColor(avg),textAlign:'center',marginBottom:'10px'}},scoreBadge(avg)));
 
+  // ── TEPKİ BUTONLARI (beğeni / dislike / kalp) ──────────────────────────────
+  {
+    const rTeps=post.reactions||{like:[],dislike:[],heart:[]};
+    ['like','dislike','heart'].forEach(t=>{ if(!rTeps[t]) rTeps[t]=[]; });
+    const benLike=rTeps.like.includes(S.me?.id);
+    const benDislike=rTeps.dislike.includes(S.me?.id);
+    const benHeart=rTeps.heart.includes(S.me?.id);
+    const reactRow=h('div',{style:{display:'flex',gap:'8px',marginBottom:'12px'}});
+    const reactBtn=(tur,ikon,sayi,aktifMi,aktifRenk)=>h('button',{class:'btn',style:{flex:'1',display:'flex',alignItems:'center',justifyContent:'center',gap:'6px',padding:'8px',borderRadius:'10px',fontSize:'.85rem',background:aktifMi?aktifRenk+'22':'#0f0a1a',border:`1px solid ${aktifMi?aktifRenk:'#2d1b52'}`,color:aktifMi?aktifRenk:'#a78bfa'},onclick:(e)=>{e.stopPropagation();A.react(post.id,tur);}},[h('span',{},ikon),h('span',{style:{fontWeight:aktifMi?'700':'400'}},String(sayi))]);
+    reactRow.appendChild(reactBtn('like','👍',rTeps.like.length,benLike,'#34d399'));
+    reactRow.appendChild(reactBtn('dislike','👎',rTeps.dislike.length,benDislike,'#f87171'));
+    reactRow.appendChild(reactBtn('heart','❤️',rTeps.heart.length,benHeart,'#e879f9'));
+    full.appendChild(reactRow);
+  }
+
   // yorumlar
-  let showC=false;
+  let showC=!!autoOpenComments;
   const cbtn=h('button',{class:'btn',style:{background:'none',color:'#6b5b8a',fontSize:'.88rem',display:'flex',gap:'6px',paddingTop:'10px',borderTop:'1px solid #2d1b52',width:'100%'},onclick:(e)=>{e.stopPropagation();showC=!showC;cbody.style.display=showC?'block':'none';}},`💬 ${(post.comments||[]).length} yorum${(post.comments||[]).length===0?' — ilk yorumu sen yaz!':''}`);
-  const cbody=h('div',{class:'cmt-body',style:{marginTop:'10px',display:'none'}});
+  const cbody=h('div',{class:'cmt-body',style:{marginTop:'10px',display:showC?'block':'none'}});
   (post.comments||[]).forEach(c=>{
     const ca=byId(c.authorId);
     const isCommentOwner=c.authorId===S.me?.id;
@@ -1669,7 +1765,9 @@ function Leaderboard(){
       tl.onclick=()=>go('postdetail',{postId:p.id});
       info.appendChild(tl);
       info.appendChild(h('div',{style:{display:'flex',alignItems:'center',gap:'6px',marginBottom:'4px'}},[av(author,20,()=>go('profile',{profileId:author?.id})),h('span',{style:{fontSize:'.8rem',color:'#a78bfa',cursor:'pointer'},onclick:()=>go('profile',{profileId:author?.id})},author?.name||'')]));
-      info.appendChild(h('div',{style:{display:'flex',gap:'10px'}},[h('span',{style:{fontSize:'.72rem',color:'#6b5b8a'}},`${Object.keys(p.userRatings||{}).length} oy · ${(p.comments||[]).length} yorum`),h('span',{style:{fontSize:'.72rem',color:scoreColor(p.avg)}},scoreBadge(p.avg))]));
+      const pR=p.reactions||{like:[],dislike:[],heart:[]};
+      const tepkiMetin=[(pR.like||[]).length?`👍${pR.like.length}`:'',(pR.dislike||[]).length?`👎${pR.dislike.length}`:'',(pR.heart||[]).length?`❤️${pR.heart.length}`:''].filter(Boolean).join(' ');
+      info.appendChild(h('div',{style:{display:'flex',gap:'10px',flexWrap:'wrap',alignItems:'center'}},[h('span',{style:{fontSize:'.72rem',color:'#6b5b8a'}},`${Object.keys(p.userRatings||{}).length} oy · ${(p.comments||[]).length} yorum`),tepkiMetin?h('span',{style:{fontSize:'.72rem',color:'#6b5b8a'}},tepkiMetin):null,h('span',{style:{fontSize:'.72rem',color:scoreColor(p.avg)}},scoreBadge(p.avg))]));
       card.appendChild(info);ct.appendChild(card);
     });
   }
@@ -1733,7 +1831,7 @@ function Profile(){
   const wrap=h('div',{},[navBar()]);
   const page=h('div',{class:'page'});
   if(S.profileId && S.profileId !== S.me?.id){
-    page.appendChild(h('button',{class:'btn',style:{background:'none',color:'#a78bfa',marginBottom:'16px',fontSize:'.9rem'},onclick:()=>go('feed')},'← Geri'));
+    page.appendChild(h('button',{class:'btn',style:{background:'none',color:'#a78bfa',marginBottom:'16px',fontSize:'.9rem'},onclick:()=>history.back()},'← Geri'));
   }
   if(!user){
     page.appendChild(h('p',{style:{color:'#6b5b8a',fontStyle:'italic'}},'Kullanıcı bulunamadı.'));
@@ -1754,6 +1852,17 @@ function Profile(){
   const stats=h('div',{style:{display:'flex',justifyContent:'center',gap:'28px',marginBottom:'16px'}});
   [['Şiir',ups.length],['Takipçi',fc],['Takip',fg]].forEach(([l,v])=>stats.appendChild(h('div',{},[h('p',{style:{fontFamily:"'Playfair Display',serif",fontSize:'1.3rem',color:'#e9d5ff'}},String(v)),h('p',{style:{color:'#6b5b8a',fontSize:'.8rem'}},l)])));
   card.appendChild(stats);
+  // Bu ozanın tüm şiirlerindeki toplam tepkiler (beğeni/dislike/kalp)
+  const toplamLike=ups.reduce((s,p)=>s+((p.reactions?.like||[]).length),0);
+  const toplamDislike=ups.reduce((s,p)=>s+((p.reactions?.dislike||[]).length),0);
+  const toplamHeart=ups.reduce((s,p)=>s+((p.reactions?.heart||[]).length),0);
+  if(toplamLike+toplamDislike+toplamHeart>0){
+    const rStats=h('div',{style:{display:'flex',justifyContent:'center',gap:'20px',marginBottom:'16px',paddingTop:'12px',borderTop:'1px solid #2d1b52'}});
+    [['👍',toplamLike,'#34d399'],['👎',toplamDislike,'#f87171'],['❤️',toplamHeart,'#e879f9']].forEach(([ikon,v,renk])=>{
+      if(v>0) rStats.appendChild(h('div',{style:{display:'flex',alignItems:'center',gap:'4px'}},[h('span',{style:{fontSize:'1.1rem'}},ikon),h('span',{style:{color:renk,fontWeight:'700',fontSize:'.95rem'}},String(v))]));
+    });
+    card.appendChild(rStats);
+  }
   if(!isMe && user.username !== ADMIN_USERNAME){
     const fb=h('button',{class:'pb btn',onclick:()=>{A.toggleFollow(user.id);render();}},isF(user.id)?'Takibi Bırak':'Takip Et');
     card.appendChild(fb);
@@ -1948,8 +2057,11 @@ function PostDetail(){
   const post=S.posts.find(p=>p.id===S.postId);
   const wrap=h('div',{},[navBar()]);
   const page=h('div',{class:'page'});
-  page.appendChild(h('button',{class:'btn',style:{background:'none',color:'#a78bfa',marginBottom:'16px'},onclick:()=>go('feed')},'← Akışa Dön'));
-  if(post)page.appendChild(postCard(post,true));
+  page.appendChild(h('button',{class:'btn',style:{background:'none',color:'#a78bfa',marginBottom:'16px'},onclick:()=>history.back()},'← Akışa Dön'));
+  // Bir bildirimden (yorum bildirimi) gelindiyse yorum bölümünü otomatik aç
+  const yorumAc = !!S.acilacakYorum;
+  S.acilacakYorum = false;
+  if(post)page.appendChild(postCard(post,true,yorumAc));
   else page.appendChild(h('p',{style:{color:'#6b5b8a',fontStyle:'italic'}},'Şiir bulunamadı.'));
   wrap.appendChild(page);return wrap;
 }
@@ -2043,15 +2155,26 @@ function Messages(){
     const temizleBtn=h('button',{class:'btn',style:{width:'100%',marginBottom:'12px',background:'none',color:'#f87171',fontSize:'.82rem',border:'1px solid #4c1d1d',borderRadius:'10px',padding:'8px'},onclick:()=>{A.clearAllNotifs();}},'🗑 Tümünü Temizle');
     ct.appendChild(temizleBtn);
     notifs.forEach(n=>{
-      const card=h('div',{class:'card',style:{display:'flex',gap:'12px',alignItems:'flex-start',background:n.read?'linear-gradient(135deg,#1a0f2e,#160d28)':'linear-gradient(135deg,#2d1060,#1e0f3a)',border:n.read?'1px solid #2d1b52':'1px solid #7c3aed'}});
-      const ikon = n.text.includes('takip')?'👤':n.text.includes('paylaştı')?'🪶':n.text.includes('yorum')?'💬':'⭐';
+      const tiklanabilir = !!(n.postId || n.fromId);
+      const card=h('div',{class:'card',style:{display:'flex',gap:'12px',alignItems:'flex-start',cursor:tiklanabilir?'pointer':'default',background:n.read?'linear-gradient(135deg,#1a0f2e,#160d28)':'linear-gradient(135deg,#2d1060,#1e0f3a)',border:n.read?'1px solid #2d1b52':'1px solid #7c3aed'}});
+      if(tiklanabilir){
+        card.onclick=()=>{
+          if(n.postId){
+            S.acilacakYorum = n.tur==='yorum';
+            go('postdetail',{postId:n.postId});
+          } else if(n.fromId){
+            go('profile',{profileId:n.fromId});
+          }
+        };
+      }
+      const ikon = n.text.includes('takip')?'👤':n.text.includes('paylaştı')?'🪶':n.text.includes('yorum')?'💬':n.text.includes('beğendi')?'👍':n.text.includes('kalp')?'❤️':'⭐';
       card.appendChild(h('span',{style:{fontSize:'1.4rem',flexShrink:'0'}},ikon));
       const info=h('div',{style:{flex:'1'}});
       info.appendChild(h('p',{style:{color:'#e9d5ff',fontSize:'.92rem',lineHeight:'1.5',fontFamily:"'Crimson Text',serif"}},n.text));
       info.appendChild(h('p',{style:{color:'#6b5b8a',fontSize:'.75rem',marginTop:'4px'}},n.date));
       card.appendChild(info);
       if(!n.read)card.appendChild(h('span',{style:{width:'8px',height:'8px',borderRadius:'50%',background:'#c084fc',flexShrink:'0',marginTop:'4px',display:'inline-block'}}));
-      const delBtn=h('button',{class:'btn',title:'Bildirimi sil',style:{background:'none',color:'#6b5b8a',fontSize:'.9rem',padding:'2px 4px',flexShrink:'0'},onclick:()=>{A.deleteNotif(n.id);showNotifs();}},'✕');
+      const delBtn=h('button',{class:'btn',title:'Bildirimi sil',style:{background:'none',color:'#6b5b8a',fontSize:'.9rem',padding:'2px 4px',flexShrink:'0'},onclick:(e)=>{e.stopPropagation();A.deleteNotif(n.id);showNotifs();}},'✕');
       card.appendChild(delBtn);
       ct.appendChild(card);
     });
@@ -2125,15 +2248,26 @@ function Notifs(){
     const temizleBtn=h('button',{class:'btn',style:{width:'100%',marginBottom:'12px',background:'none',color:'#f87171',fontSize:'.82rem',border:'1px solid #4c1d1d',borderRadius:'10px',padding:'8px'},onclick:()=>{A.clearAllNotifs();}},'🗑 Tümünü Temizle');
     page.appendChild(temizleBtn);
     notifs.forEach(n=>{
-      const card=h('div',{class:'card',style:{display:'flex',gap:'12px',alignItems:'flex-start',background:n.read?'linear-gradient(135deg,#1a0f2e,#160d28)':'linear-gradient(135deg,#2d1060,#1e0f3a)',border:n.read?'1px solid #2d1b52':'1px solid #7c3aed'}});
-      const ikon = n.text.includes('takip')?'👤':n.text.includes('paylaştı')?'🪶':n.text.includes('yorum')?'💬':'⭐';
+      const tiklanabilir = !!(n.postId || n.fromId);
+      const card=h('div',{class:'card',style:{display:'flex',gap:'12px',alignItems:'flex-start',cursor:tiklanabilir?'pointer':'default',background:n.read?'linear-gradient(135deg,#1a0f2e,#160d28)':'linear-gradient(135deg,#2d1060,#1e0f3a)',border:n.read?'1px solid #2d1b52':'1px solid #7c3aed'}});
+      if(tiklanabilir){
+        card.onclick=()=>{
+          if(n.postId){
+            S.acilacakYorum = n.tur==='yorum';
+            go('postdetail',{postId:n.postId});
+          } else if(n.fromId){
+            go('profile',{profileId:n.fromId});
+          }
+        };
+      }
+      const ikon = n.text.includes('takip')?'👤':n.text.includes('paylaştı')?'🪶':n.text.includes('yorum')?'💬':n.text.includes('beğendi')?'👍':n.text.includes('kalp')?'❤️':'⭐';
       card.appendChild(h('span',{style:{fontSize:'1.5rem',flexShrink:'0'}},ikon));
       const info=h('div',{style:{flex:'1'}});
       info.appendChild(h('p',{style:{color:'#e9d5ff',fontSize:'.92rem',lineHeight:'1.5',fontFamily:"'Crimson Text',serif"}},n.text));
       info.appendChild(h('p',{style:{color:'#6b5b8a',fontSize:'.75rem',marginTop:'4px'}},n.date));
       card.appendChild(info);
       if(!n.read)card.appendChild(h('span',{style:{width:'8px',height:'8px',borderRadius:'50%',background:'#c084fc',flexShrink:'0',marginTop:'4px'}}));
-      const delBtn=h('button',{class:'btn',title:'Bildirimi sil',style:{background:'none',color:'#6b5b8a',fontSize:'.9rem',padding:'2px 4px',flexShrink:'0'},onclick:()=>{A.deleteNotif(n.id);}},'✕');
+      const delBtn=h('button',{class:'btn',title:'Bildirimi sil',style:{background:'none',color:'#6b5b8a',fontSize:'.9rem',padding:'2px 4px',flexShrink:'0'},onclick:(e)=>{e.stopPropagation();A.deleteNotif(n.id);}},'✕');
       card.appendChild(delBtn);
       page.appendChild(card);
     });
