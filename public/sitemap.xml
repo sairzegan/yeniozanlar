@@ -4,4 +4,15 @@
     <loc>https://yeniozanlar.vercel.app/</loc>
     <priority>1.0</priority>
   </url>
+   <loc>https://yeniozanlar.vercel.app/#leaderboard/</loc>
+  <priority>0.8</priority>
+  </url>
+   </url>
+   <loc>https://yeniozanlar.vercel.app/#explore/</loc>
+  <priority>0.8</priority>
+  </url>
+   </url>
+   <loc>https://yeniozanlar.vercel.app/#profile/</loc>
+  <priority>0.8</priority>
+  </url>
 </urlset>
