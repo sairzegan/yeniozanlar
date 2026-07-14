@@ -73,7 +73,7 @@ let S = {
   users: lsGet('yo_users', []),
   posts: lsGet('yo_posts', []),
   me: lsGet('yo_me', null),
-  screen: 'landing',
+  screen: 'feed',
   profileId: null,
   postId: null,
   acilacakYorum: false,
@@ -119,7 +119,10 @@ async function verileriYukle() {
     console.log("Bağlantı hatası:", error);
   } finally {
     S.loading = false;
-    if(S.me && (S.screen==='landing'||S.screen==='login'||S.screen==='register')){
+    // Giriş yapılmış olsun ya da olmasın site her zaman anasayfada (feed) açılır.
+    // login/register ekranları artık sadece bir eyleme (paylaşım/yorum/puan/vb.) teşebbüs
+    // edildiğinde devreye girer (bkz. girisGerekli()).
+    if(S.screen==='landing'||S.screen==='login'||S.screen==='register'){
       S.screen='feed';
     }
     // Uygulamanın başladığı ekranı tarayıcı geçmişine temel (baseline) olarak yaz.
@@ -903,12 +906,20 @@ window.addEventListener('popstate', (e)=>{
     S.profileId = st.profileId ?? null;
     S.postId = st.postId ?? null;
   } else {
-    S.screen = S.me ? 'feed' : 'landing';
+    S.screen = 'feed';
     S.profileId = null;
     S.postId = null;
   }
   render();
 });
+
+// Giriş yapılmamış bir kullanıcı, giriş gerektiren bir eyleme (paylaşım/yorum/puan/tepki/
+// takip/mesaj) teşebbüs ettiğinde çağrılır. Giriş ekranına yönlendirir ve true döner
+// (çağıran taraf true dönerse asıl işlemi yapmadan durmalıdır). Zaten girişliyse false döner.
+function girisGerekli(){
+  if(!S.me){ go('login'); return true; }
+  return false;
+}
 
 // Sadece ilgili kartı günceller, sayfa kaymaz
 function refreshCard(pid){
@@ -998,7 +1009,7 @@ const A = {
     if(!user)return'Kullanıcı adı veya şifre hatalı.';
     S.me=user;save();go('feed');return null;
   },
-  logout(){S.me=null;lsSet('yo_me',null);go('landing')},
+  logout(){S.me=null;lsSet('yo_me',null);go('feed')},
 };
 
 // ── BOT PUANLAMALARI (A dışında tanımlanır) ──────────────────────────────────
@@ -1110,6 +1121,7 @@ async function botAriPuan(text) {
 
 // ── AKSİYONLAR (devam) ───────────────────────────────────────────────────────
 A.addPost = async function(pd){
+    if(!S.me) return;
     // Bot puanları hesapla (önce bots, sonra async AI)
     const botRatings={};
     const botYorumlar={};
@@ -1167,6 +1179,7 @@ A.deletePost = function(pid){
 // tur: 'like' | 'dislike' | 'heart'. like/dislike birbirini dışlar (biri seçilince öteki kalkar),
 // kalp bunlardan bağımsızdır. Aynı butona tekrar basmak tepkiyi kaldırır (toggle).
 A.react = function(pid, tur){
+    if(!S.me) return;
     const pIndex = S.posts.findIndex(p=>p.id===pid);
     if(pIndex<0) return;
     const post = S.posts[pIndex];
@@ -1191,6 +1204,7 @@ A.react = function(pid, tur){
     db.collection("posts").doc(pid).update({reactions:post.reactions}).catch(err=>console.error("Tepki hatası:",err));
 };
 A.ratePost = function(pid,score){
+    if(!S.me) return;
     const pIndex = S.posts.findIndex(p=>p.id===pid);
     if(pIndex > -1) {
       if(!S.posts[pIndex].userRatings) S.posts[pIndex].userRatings = {};
@@ -1204,6 +1218,7 @@ A.ratePost = function(pid,score){
     }
 };
 A.addComment = function(pid,text){
+    if(!S.me) return;
     const pIndex = S.posts.findIndex(p=>p.id===pid);
     if(pIndex > -1) {
       const newComment = {id:uid(),authorId:S.me.id,text,date:now()};
@@ -1228,6 +1243,7 @@ A.deleteComment = function(pid,cid){
     }
 };
 A.toggleFollow = function(tid){
+  if(!S.me) return;
   const l=S.follows[S.me.id]||[];
   const has=l.includes(tid);
   S.follows={...S.follows,[S.me.id]:has?l.filter(x=>x!==tid):[...l,tid]};
@@ -1239,6 +1255,7 @@ A.toggleFollow = function(tid){
   }
 };
 A.sendMsg = function(toId,text){
+    if(!S.me) return;
     const msg={id:uid(),fromId:S.me.id,toId,text,date:now(),read:false};
     S.msgs=[...S.msgs,msg];save();render();
     db.collection("msgs").doc(msg.id).set(msg).catch(err=>console.error("Mesaj hatası:",err));
@@ -1333,13 +1350,25 @@ function navBar(){
   return h('div',{},[
     h('div',{class:'nav-top'},[
       h('span',{style:{fontFamily:"'Playfair Display',serif",fontSize:'1.15rem',color:isAdmin?'#f59e0b':'#c084fc',cursor:'pointer'},onclick:()=>go('feed')},isAdmin?'👑 Yeni Ozanlar (Admin)' : '🪶 Yeni Ozanlar'),
-      h('div',{style:{display:'flex',gap:'8px',alignItems:'center'}},[
-        av(S.me,30,()=>go('profile',{profileId:S.me?.id})),
-        h('button',{class:'btn',style:{background:'transparent',color:'#a78bfa',fontSize:'.75rem',padding:'4px 10px',border:'1px solid #3d1f6e',borderRadius:'20px'},onclick:()=>A.logout()},'Çıkış')
-      ])
+      S.me
+        ? h('div',{style:{display:'flex',gap:'8px',alignItems:'center'}},[
+            av(S.me,30,()=>go('profile',{profileId:S.me?.id})),
+            h('button',{class:'btn',style:{background:'transparent',color:'#a78bfa',fontSize:'.75rem',padding:'4px 10px',border:'1px solid #3d1f6e',borderRadius:'20px'},onclick:()=>A.logout()},'Çıkış')
+          ])
+        : h('div',{style:{display:'flex',gap:'8px',alignItems:'center'}},[
+            h('button',{class:'btn',style:{background:'transparent',color:'#a78bfa',fontSize:'.75rem',padding:'5px 12px',border:'1px solid #3d1f6e',borderRadius:'20px'},onclick:()=>go('login')},'Giriş Yap'),
+            h('button',{class:'btn',style:{background:'linear-gradient(135deg,#7c3aed,#a855f7)',color:'#fff',fontSize:'.75rem',padding:'5px 12px',border:'none',borderRadius:'20px'},onclick:()=>go('register')},'Kayıt Ol')
+          ])
     ]),
     h('div',{class:'nav-bottom'},tabs.map(t=>{
-      const btn=h('button',{class:'btn','data-navkey':t.k,style:{background:'none',color:S.screen===t.k?'#c084fc':'#6b5b8a',display:'flex',flexDirection:'column',alignItems:'center',gap:'2px',fontSize:'.62rem',padding:'4px 6px',borderBottom:S.screen===t.k?'2px solid #c084fc':'2px solid transparent',position:'relative'},onclick:()=>go(t.k)});
+      // Mesaj ve Profil sekmeleri giriş gerektirir; misafir tıklarsa giriş ekranına yönlendirilir.
+      const korumali = (t.k==='messages'||t.k==='profile');
+      const tiklandiginda = ()=>{
+        if(korumali && !S.me){ go('login'); return; }
+        if(t.k==='profile'){ go('profile',{profileId:S.me.id}); return; }
+        go(t.k);
+      };
+      const btn=h('button',{class:'btn','data-navkey':t.k,style:{background:'none',color:S.screen===t.k?'#c084fc':'#6b5b8a',display:'flex',flexDirection:'column',alignItems:'center',gap:'2px',fontSize:'.62rem',padding:'4px 6px',borderBottom:S.screen===t.k?'2px solid #c084fc':'2px solid transparent',position:'relative'},onclick:tiklandiginda});
       const icWrap=h('span',{style:{position:'relative',display:'inline-block'}});
       icWrap.appendChild(h('span',{style:{fontSize:'1.2rem'}},t.ic));
       // Rozet, sayı 0 olsa bile DOM'da tutulur (gizli), böylece sayfa tekrar
@@ -1479,7 +1508,7 @@ function postCard(post, forceExpand=false, autoOpenComments=false){
       const s=h('button',{style:{background:'none',border:'none',cursor:'pointer',fontSize:'1.15rem',padding:'2px 3px',transition:'transform .1s',filter:n<=(myR||0)?'none':'grayscale(1) opacity(.3)',transform:n<=(myR||0)?'scale(1.2)':'scale(1)'}},n<=5?'⭐':'🌟');
       s.onmouseenter=()=>{for(let i=1;i<=10;i++){const b=stars.children[i-1];b.style.filter=i<=n?'none':'grayscale(1) opacity(.3)';b.style.transform=i<=n?'scale(1.2)':'scale(1)';}};
       s.onmouseleave=()=>{const cur=post.userRatings?.[S.me?.id]||0;for(let i=1;i<=10;i++){const b=stars.children[i-1];b.style.filter=i<=cur?'none':'grayscale(1) opacity(.3)';b.style.transform=i<=cur?'scale(1.2)':'scale(1)';}};
-      s.onclick=(e)=>{e.stopPropagation();A.ratePost(post.id,n);};
+      s.onclick=(e)=>{e.stopPropagation();if(girisGerekli())return;A.ratePost(post.id,n);};
       stars.appendChild(s);
     }
     rw.appendChild(stars);
@@ -1562,7 +1591,7 @@ function postCard(post, forceExpand=false, autoOpenComments=false){
     const benDislike=rTeps.dislike.includes(S.me?.id);
     const benHeart=rTeps.heart.includes(S.me?.id);
     const reactRow=h('div',{style:{display:'flex',gap:'8px',marginBottom:'12px'}});
-    const reactBtn=(tur,ikon,sayi,aktifMi,aktifRenk)=>h('button',{class:'btn',style:{flex:'1',display:'flex',alignItems:'center',justifyContent:'center',gap:'6px',padding:'8px',borderRadius:'10px',fontSize:'.85rem',background:aktifMi?aktifRenk+'22':'#0f0a1a',border:`1px solid ${aktifMi?aktifRenk:'#2d1b52'}`,color:aktifMi?aktifRenk:'#a78bfa'},onclick:(e)=>{e.stopPropagation();A.react(post.id,tur);}},[h('span',{},ikon),h('span',{style:{fontWeight:aktifMi?'700':'400'}},String(sayi))]);
+    const reactBtn=(tur,ikon,sayi,aktifMi,aktifRenk)=>h('button',{class:'btn',style:{flex:'1',display:'flex',alignItems:'center',justifyContent:'center',gap:'6px',padding:'8px',borderRadius:'10px',fontSize:'.85rem',background:aktifMi?aktifRenk+'22':'#0f0a1a',border:`1px solid ${aktifMi?aktifRenk:'#2d1b52'}`,color:aktifMi?aktifRenk:'#a78bfa'},onclick:(e)=>{e.stopPropagation();if(girisGerekli())return;A.react(post.id,tur);}},[h('span',{},ikon),h('span',{style:{fontWeight:aktifMi?'700':'400'}},String(sayi))]);
     reactRow.appendChild(reactBtn('like','👍',rTeps.like.length,benLike,'#34d399'));
     reactRow.appendChild(reactBtn('dislike','👎',rTeps.dislike.length,benDislike,'#f87171'));
     reactRow.appendChild(reactBtn('heart','❤️',rTeps.heart.length,benHeart,'#e879f9'));
@@ -1590,8 +1619,8 @@ function postCard(post, forceExpand=false, autoOpenComments=false){
   if(!(post.comments||[]).length) cbody.appendChild(h('p',{style:{fontSize:'.82rem',color:'#6b5b8a',fontStyle:'italic',marginBottom:'8px'}},'Ozan seni bekliyor! 🌙'));
   const ci=h('textarea',{placeholder:'Düşünceni paylaş... Şiir hakkındaki düşüncelerini, hissettirdiklerini yaz.',class:'inp',rows:'3',style:{borderRadius:'14px',flex:'1',resize:'none',lineHeight:'1.6',fontSize:'.95rem'}});
   ci.onclick=e=>e.stopPropagation();
-  ci.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();e.stopPropagation();if(!ci.value.trim())return;A.addComment(post.id,ci.value.trim());ci.value='';}})
-  cbody.appendChild(h('div',{style:{display:'flex',gap:'8px',marginTop:'6px',alignItems:'flex-end'}},[av(S.me,28),ci,h('button',{class:'pb btn',style:{padding:'8px 14px',fontSize:'.85rem',flexShrink:'0'},onclick:(e)=>{e.stopPropagation();if(!ci.value.trim())return;A.addComment(post.id,ci.value.trim());ci.value='';}}, '↩')]));
+  ci.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();e.stopPropagation();if(!ci.value.trim())return;if(girisGerekli())return;A.addComment(post.id,ci.value.trim());ci.value='';}})
+  cbody.appendChild(h('div',{style:{display:'flex',gap:'8px',marginTop:'6px',alignItems:'flex-end'}},[av(S.me,28),ci,h('button',{class:'pb btn',style:{padding:'8px 14px',fontSize:'.85rem',flexShrink:'0'},onclick:(e)=>{e.stopPropagation();if(!ci.value.trim())return;if(girisGerekli())return;A.addComment(post.id,ci.value.trim());ci.value='';}}, '↩')]));
   full.appendChild(cbtn);full.appendChild(cbody);
 
   // kapat butonu
@@ -1727,6 +1756,7 @@ function Feed(){
   const page=h('div',{class:'page'});
   page.appendChild(h('div',{style:{background:'linear-gradient(135deg,#2d1060,#1a0f3e)',border:'1px solid #5b21b6',borderRadius:'14px',padding:'12px 16px',marginBottom:'14px',display:'flex',alignItems:'center',gap:'10px'}},[h('span',{style:{fontSize:'1.3rem'}},'💡'),h('p',{style:{color:'#c4b5fd',fontSize:'.88rem',fontStyle:'italic',lineHeight:'1.5'}},'Şiirleri puanla, yorum yaz — her katkın sıralamayı şekillendirir! ⭐')]));
   const addBtn=h('button',{class:'btn',style:{width:'100%',marginBottom:'20px',background:'linear-gradient(135deg,#1e0a3e,#2d1060)',border:'2px dashed #7c3aed',borderRadius:'14px',padding:'18px',color:'#c084fc',fontFamily:"'Playfair Display',serif",fontSize:'1.05rem',display:'flex',alignItems:'center',justifyContent:'center',gap:'10px'},onclick:()=>{
+    if(girisGerekli())return;
     if(modal)return;modal=composeModal(()=>{modal&&modal.remove();modal=null;});document.body.appendChild(modal);
   }},[h('span',{style:{fontSize:'1.5rem'}},'🪶'),' + Şiir Ekle']);
   page.appendChild(addBtn);
@@ -1814,7 +1844,7 @@ function Explore(){
       if(u.bio)info.appendChild(h('p',{style:{color:'#a78bfa',fontSize:'.87rem',fontStyle:'italic',marginTop:'2px'}},u.bio));
       card.appendChild(info);
       const fl=isF(u.id);
-      const fb=h('button',{class:'btn',style:{background:fl?'#3d1f6e':'linear-gradient(135deg,#7c3aed,#a855f7)',color:'#fff',padding:'7px 16px',borderRadius:'20px',fontSize:'.85rem',border:'none'},onclick:()=>{A.toggleFollow(u.id);renderList(si.value);}},fl?'Takip Ediliyor':'Takip Et');
+      const fb=h('button',{class:'btn',style:{background:fl?'#3d1f6e':'linear-gradient(135deg,#7c3aed,#a855f7)',color:'#fff',padding:'7px 16px',borderRadius:'20px',fontSize:'.85rem',border:'none'},onclick:()=>{if(girisGerekli())return;A.toggleFollow(u.id);renderList(si.value);}},fl?'Takip Ediliyor':'Takip Et');
       card.appendChild(fb);list.appendChild(card);
     });
   }
@@ -1864,7 +1894,7 @@ function Profile(){
     card.appendChild(rStats);
   }
   if(!isMe && user.username !== ADMIN_USERNAME){
-    const fb=h('button',{class:'pb btn',onclick:()=>{A.toggleFollow(user.id);render();}},isF(user.id)?'Takibi Bırak':'Takip Et');
+    const fb=h('button',{class:'pb btn',onclick:()=>{if(girisGerekli())return;A.toggleFollow(user.id);render();}},isF(user.id)?'Takibi Bırak':'Takip Et');
     card.appendChild(fb);
   }
 
@@ -2287,18 +2317,25 @@ function render(){
     return;
   }
 
-  if(!S.me){
-    const screens={
-      landing:Landing,
-      login:()=>authPage('Hoş geldin','Hesabınla giriş yap',[{label:'Kullanıcı adı',type:'text',ph:'kullaniciadi',k:'u'},{label:'Şifre',type:'password',ph:'••••••••',k:'p'}],'Giriş Yap',v=>A.login(v.u||'',v.p||''),'Hesabın yok mu?',()=>go('register')),
-      register:()=>authPage('Katıl',"Yeni Ozanlar'a üye ol",[{label:'Kullanıcı adı',type:'text',ph:'kullaniciadi',k:'u'},{label:'Şifre',type:'password',ph:'••••••••',k:'p'},{label:'Şifre tekrar',type:'password',ph:'••••••••',k:'p2'}],'Hesap Oluştur',v=>{if(!v.u||!v.p)return'Tüm alanları doldurun.';if(v.p!==v.p2)return'Şifreler eşleşmiyor.';if((v.p||'').length<6)return'Şifre en az 6 karakter.';return A.register(v.u.trim(),v.p);},'Zaten üye misin?',()=>go('login'))
-    };
-    const Screen=screens[S.screen]||Landing;
-    app.appendChild(Screen());
-    return;
-  }
-  const screens={feed:Feed,leaderboard:Leaderboard,explore:Explore,profile:Profile,postdetail:PostDetail,messages:Messages,notifs:Notifs};
-  const Screen=screens[S.screen]||Feed;
+  // Anasayfa (feed), sıralama, keşfet, profil ve şiir detayı GİRİŞ YAPMADAN görülebilir.
+  // Şiir paylaşma, yorum yazma, puan/tepki verme, takip etme ve mesajlaşma gibi eylemler
+  // ise tıklandığı anda girisGerekli() üzerinden giriş ekranına yönlendirir.
+  // Mesajlar ekranı, giriş gerektirdiği için misafirse doğrudan login'e çevrilir.
+  let gosterilecekEkran = S.screen;
+  if(gosterilecekEkran==='messages' && !S.me) gosterilecekEkran='login';
+
+  const screens={
+    feed:Feed,
+    leaderboard:Leaderboard,
+    explore:Explore,
+    profile:Profile,
+    postdetail:PostDetail,
+    messages:Messages,
+    notifs:Notifs,
+    login:()=>authPage('Hoş geldin','Hesabınla giriş yap',[{label:'Kullanıcı adı',type:'text',ph:'kullaniciadi',k:'u'},{label:'Şifre',type:'password',ph:'••••••••',k:'p'}],'Giriş Yap',v=>A.login(v.u||'',v.p||''),'Hesabın yok mu?',()=>go('register')),
+    register:()=>authPage('Katıl',"Yeni Ozanlar'a üye ol",[{label:'Kullanıcı adı',type:'text',ph:'kullaniciadi',k:'u'},{label:'Şifre',type:'password',ph:'••••••••',k:'p'},{label:'Şifre tekrar',type:'password',ph:'••••••••',k:'p2'}],'Hesap Oluştur',v=>{if(!v.u||!v.p)return'Tüm alanları doldurun.';if(v.p!==v.p2)return'Şifreler eşleşmiyor.';if((v.p||'').length<6)return'Şifre en az 6 karakter.';return A.register(v.u.trim(),v.p);},'Zaten üye misin?',()=>go('login'))
+  };
+  const Screen=screens[gosterilecekEkran]||Feed;
   app.appendChild(Screen());
 }
 
