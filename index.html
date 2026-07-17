@@ -1,7 +1,6 @@
 <!DOCTYPE html>
 <html lang="tr">
 <head>
-  <link rel="icon" href="/logo.svg" type="image/svg+xml">
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Yeni Ozanlar 🪶</title>
@@ -30,6 +29,8 @@
     iframe{display:block;width:100%;aspect-ratio:16/9;border:none;border-radius:12px}
     .absolute-del-post{position:absolute !important;top:12px !important;right:12px !important;z-index:9999 !important;background:#ef4444 !important;color:#fff !important;border:none !important;border-radius:6px !important;padding:5px 12px !important;font-size:0.8rem !important;font-weight:bold !important;cursor:pointer !important;box-shadow:0 2px 8px rgba(0,0,0,0.5) !important}
     .absolute-del-post:hover{background:#dc2626 !important;transform:scale(1.05)}
+    .absolute-edit-post{position:absolute !important;top:12px !important;right:90px !important;z-index:9999 !important;background:#7c3aed !important;color:#fff !important;border:none !important;border-radius:6px !important;padding:5px 12px !important;font-size:0.8rem !important;font-weight:bold !important;cursor:pointer !important;box-shadow:0 2px 8px rgba(0,0,0,0.5) !important}
+    .absolute-edit-post:hover{background:#6d28d9 !important;transform:scale(1.05)}
     .comment-item{position:relative !important;display:flex;gap:8px;margin-bottom:12px;align-items:flex-start;width:100%}
     .absolute-del-comment{position:absolute !important;top:50% !important;right:12px !important;transform:translateY(-50%) !important;z-index:9999 !important;background:#ef4444 !important;color:#fff !important;border:none !important;border-radius:4px !important;padding:3px 8px !important;font-size:0.75rem !important;font-weight:bold !important;cursor:pointer !important}
     .absolute-del-comment:hover{background:#dc2626 !important}
@@ -105,7 +106,7 @@ async function verileriYukle() {
       S.msgs = msgsSnapshot.docs.length ? msgsSnapshot.docs.map(doc => doc.data()) : [];
       lsSet('yo_msgs', S.msgs);
 
-      // Bildirimleri Firebase'den yükle
+      // Bildirimleri Firebase'den yükle (ilk yükleme)
       const notifsSnapshot = await db.collection("notifs").where("toId","==",S.me.id).get().catch(() => ({ docs: [] }));
       S.notifs = notifsSnapshot.docs.length ? notifsSnapshot.docs.map(doc => doc.data()).sort((a,b)=>b.date.localeCompare(a.date)) : [];
       lsSet('yo_notifs', S.notifs);
@@ -132,7 +133,24 @@ async function verileriYukle() {
     // böylece geri tuşu bu ekrana (anasayfaya değil, gerçek önceki duruma) döner.
     history.replaceState({screen:S.screen, profileId:S.profileId, postId:S.postId}, '', '#'+S.screen);
     render();
+    bildirimDinleyiciBaslat();
   }
+}
+
+// Bildirimleri CANLI (real-time) dinler — sayfa yenilenmeden yeni bir bildirim
+// geldiği an S.notifs ve rozetler güncellenir. Böylece örn. yorumuna yanıt
+// verildiğinde, sayfayı yenilemeye gerek kalmadan rozette anında görünür.
+let bildirimDinleyiciAktifMi = false;
+function bildirimDinleyiciBaslat(){
+  if(!S.me || bildirimDinleyiciAktifMi) return;
+  bildirimDinleyiciAktifMi = true;
+  db.collection("notifs").where("toId","==",S.me.id).onSnapshot(snapshot=>{
+    S.notifs = snapshot.docs.map(doc=>doc.data()).sort((a,b)=>b.date.localeCompare(a.date));
+    lsSet('yo_notifs', S.notifs);
+    mesajBildirimRozetGuncelle();
+    // Bildirimler ekranı o an açıksa listeyi de tazele
+    if(S.screen==='notifs') render();
+  }, err=>console.error("Bildirim dinleme hatası:", err));
 }
 
 const uid=()=>Math.random().toString(36).slice(2,9);
@@ -1178,6 +1196,21 @@ A.deletePost = function(pid){
     save();render();
     db.collection("posts").doc(pid).delete().catch(err=>console.error("Silme hatası:",err));
 };
+// Şiir sahibi kendi paylaşımının başlığını/metnini/görselini/YouTube linkini düzenler.
+// AI puanı ve mevcut yorumlar korunur (yeniden değerlendirme yapılmaz), sadece
+// "(düzenlendi)" ibaresi eklenir.
+A.editPost = function(pid, updates){
+    if(!S.me) return;
+    const pIndex = S.posts.findIndex(p=>p.id===pid);
+    if(pIndex<0) return;
+    const post = S.posts[pIndex];
+    const isAdmin = S.me.username === ADMIN_USERNAME;
+    if(post.authorId !== S.me.id && !isAdmin) return;
+    S.posts[pIndex] = {...post, ...updates, edited:true};
+    save();
+    refreshCard(pid);
+    db.collection("posts").doc(pid).update({...updates, edited:true}).catch(err=>console.error("Düzenleme hatası:",err));
+};
 // tur: 'like' | 'dislike' | 'heart'. like/dislike birbirini dışlar (biri seçilince öteki kalkar),
 // kalp bunlardan bağımsızdır. Aynı butona tekrar basmak tepkiyi kaldırır (toggle).
 A.react = function(pid, tur){
@@ -1418,6 +1451,15 @@ function postCard(post, forceExpand=false, autoOpenComments=false, hedefYorumId=
     const delBtn=h('button',{class:'absolute-del-post',onclick:(e)=>{e.stopPropagation();A.deletePost(post.id);}},['Sil ✕']);
     card.appendChild(delBtn);
   }
+  // DÜZENLEME BUTONU (yalnızca şiirin sahibi düzenleyebilir)
+  if(isOwn){
+    const editBtn=h('button',{class:'absolute-edit-post',onclick:(e)=>{
+      e.stopPropagation();
+      const m=composeModal(()=>{m.remove();},post);
+      document.body.appendChild(m);
+    }},'✏️ Düzenle');
+    card.appendChild(editBtn);
+  }
 
   // ── ÖNZLEME ───────────────────────────────────────────────────────────────
   const preview=h('div',{style:{cursor:'pointer'}});
@@ -1434,7 +1476,7 @@ function postCard(post, forceExpand=false, autoOpenComments=false, hedefYorumId=
   phdr.appendChild(av(author,32,null));
   const pinfo=h('div',{style:{flex:'1',minWidth:'0'}});
   pinfo.appendChild(h('p',{style:{fontFamily:"'Playfair Display',serif",fontWeight:'700',color:'#e9d5ff',fontSize:'.9rem',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},author?.name||''));
-  pinfo.appendChild(h('p',{style:{color:'#6b5b8a',fontSize:'.72rem'}},`@${author?.username||''} · ${post.date}`));
+  pinfo.appendChild(h('p',{style:{color:'#6b5b8a',fontSize:'.72rem'}},`@${author?.username||''} · ${post.date}${post.edited?' · (düzenlendi)':''}`));
   phdr.appendChild(pinfo);
   if(avg!==null) phdr.appendChild(h('div',{class:'score-box',style:{border:`1px solid ${scoreColor(avg)}44`,minWidth:'40px',padding:'4px 6px'}},[h('p',{style:{fontSize:'1rem',fontWeight:'700',color:scoreColor(avg),lineHeight:'1'}},avg.toFixed(1)),h('p',{style:{fontSize:'.55rem',color:'#6b5b8a'}},'/10')]));
   preview.appendChild(phdr);
@@ -1463,11 +1505,11 @@ function postCard(post, forceExpand=false, autoOpenComments=false, hedefYorumId=
   const full=h('div',{class:'post-full',style:{display:'none',marginTop:'12px',borderTop:'1px solid #2d1b52',paddingTop:'12px'}});
 
   // tam header
-  const hdr=h('div',{style:{display:'flex',alignItems:'center',gap:'10px',marginBottom:'14px',paddingRight:'70px'}},[
+  const hdr=h('div',{style:{display:'flex',alignItems:'center',gap:'10px',marginBottom:'14px',paddingRight:'160px'}},[
     av(author,42,()=>go('profile',{profileId:author?.id})),
     h('div',{style:{flex:'1',minWidth:'0'}},[
       h('p',{style:{fontFamily:"'Playfair Display',serif",fontWeight:'700',color:'#e9d5ff',cursor:'pointer'},onclick:()=>go('profile',{profileId:author?.id})},author?.name||''),
-      h('p',{style:{color:'#6b5b8a',fontSize:'.78rem'}},`@${author?.username||''} · ${post.date}`)
+      h('p',{style:{color:'#6b5b8a',fontSize:'.78rem'}},`@${author?.username||''} · ${post.date}${post.edited?' · (düzenlendi)':''}`)
     ])
   ]);
   full.appendChild(hdr);
@@ -1697,19 +1739,20 @@ function postCard(post, forceExpand=false, autoOpenComments=false, hedefYorumId=
   return card;
 }
 
-function composeModal(onClose){
-  let title='',text='',ytUrl='',image=null,showYt=false;
+function composeModal(onClose, existingPost=null){
+  const duzenlemeModu = !!existingPost;
+  let title=existingPost?.title||'',text=existingPost?.text||'',ytUrl=existingPost?.youtube||'',image=existingPost?.image||null,showYt=!!existingPost?.youtube;
   const fi=h('input',{type:'file',accept:'image/*',style:{display:'none'}});
-  const prev=h('img',{style:{display:'none',width:'100%',borderRadius:'10px',maxHeight:'200px',objectFit:'cover'}});
+  const prev=h('img',{style:{display:image?'block':'none',width:'100%',borderRadius:'10px',maxHeight:'200px',objectFit:'cover'},src:image||''});
   fi.onchange=e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=ev=>{image=ev.target.result;prev.src=image;prev.style.display='block';};r.readAsDataURL(f);};
-  const yti=inp('YouTube linki yapıştır...');yti.style.display='none';yti.oninput=e=>ytUrl=e.target.value;
-  const ti=inp('Şiirin başlığı...');ti.style.border='1px solid #5b21b6';ti.style.fontFamily="'Playfair Display',serif";ti.oninput=e=>title=e.target.value;
-  const ta=h('textarea',{placeholder:'Şiirini buraya yaz... Yapay zeka anında değerlendirecek! 🤖',class:'inp',rows:'5',style:{resize:'none',lineHeight:'1.8'}});ta.oninput=e=>text=e.target.value;
-  const ytBtn=h('button',{class:'btn',style:{background:'transparent',color:'#a78bfa',padding:'7px 14px',borderRadius:'20px',border:'1px solid #3d1f6e',fontSize:'.83rem'},onclick:()=>{showYt=!showYt;yti.style.display=showYt?'block':'none';ytBtn.style.background=showYt?'#3d1f6e':'transparent';}},'▶ YouTube');
+  const yti=inp('YouTube linki yapıştır...');yti.style.display=showYt?'block':'none';yti.value=ytUrl;yti.oninput=e=>ytUrl=e.target.value;
+  const ti=inp('Şiirin başlığı...');ti.style.border='1px solid #5b21b6';ti.style.fontFamily="'Playfair Display',serif";ti.value=title;ti.oninput=e=>title=e.target.value;
+  const ta=h('textarea',{placeholder:'Şiirini buraya yaz... Yapay zeka anında değerlendirecek! 🤖',class:'inp',rows:'5',style:{resize:'none',lineHeight:'1.8'}});ta.value=text;ta.oninput=e=>text=e.target.value;
+  const ytBtn=h('button',{class:'btn',style:{background:showYt?'#3d1f6e':'transparent',color:'#a78bfa',padding:'7px 14px',borderRadius:'20px',border:'1px solid #3d1f6e',fontSize:'.83rem'},onclick:()=>{showYt=!showYt;yti.style.display=showYt?'block':'none';ytBtn.style.background=showYt?'#3d1f6e':'transparent';}},'▶ YouTube');
   const bg=h('div',{class:'modal-bg'});
   bg.onclick=e=>{if(e.target===bg)onClose();};
   bg.appendChild(h('div',{class:'modal'},[
-    h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'18px'}},[h('h3',{style:{fontFamily:"'Playfair Display',serif",color:'#e9d5ff',fontSize:'1.15rem'}},'🪶 Yeni Şiir Ekle'),h('button',{class:'btn',style:{background:'none',color:'#6b5b8a',fontSize:'1.4rem'},onclick:onClose},'✕')]),
+    h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'18px'}},[h('h3',{style:{fontFamily:"'Playfair Display',serif",color:'#e9d5ff',fontSize:'1.15rem'}},duzenlemeModu?'✏️ Şiiri Düzenle':'🪶 Yeni Şiir Ekle'),h('button',{class:'btn',style:{background:'none',color:'#6b5b8a',fontSize:'1.4rem'},onclick:onClose},'✕')]),
     h('div',{style:{display:'flex',gap:'12px'}},[
       av(S.me,40),
       h('div',{style:{flex:'1',display:'flex',flexDirection:'column',gap:'10px'}},[
@@ -1720,11 +1763,17 @@ function composeModal(onClose){
           h('button',{class:'pb btn',style:{marginLeft:'auto'},onclick:async(e)=>{
             if(!text.trim()&&!ytUrl&&!image)return;
             const btn=e.target;
-            btn.disabled=true;btn.textContent='⏳ AI değerlendiriyor...';
-            await A.addPost({title,text,youtube:ytUrl||null,image});
-            btn.disabled=false;btn.textContent='Paylaş';
-            onClose();
-          }},'Paylaş')
+            if(duzenlemeModu){
+              btn.disabled=true;btn.textContent='⏳ Kaydediliyor...';
+              A.editPost(existingPost.id,{title,text,youtube:ytUrl||null,image});
+              onClose();
+            } else {
+              btn.disabled=true;btn.textContent='⏳ AI değerlendiriyor...';
+              await A.addPost({title,text,youtube:ytUrl||null,image});
+              btn.disabled=false;btn.textContent='Paylaş';
+              onClose();
+            }
+          }},duzenlemeModu?'Kaydet':'Paylaş')
         ])
       ])
     ])
