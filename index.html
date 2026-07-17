@@ -1163,6 +1163,7 @@ A.addPost = async function(pd){
     // Claude AI değerlendirmesini async bekle
     if(pd.text&&pd.text.trim().length>10){
       const r = await scorePoem(pd.text);
+      const kullanilanModel = groqKota.sonKaynak==='groq' ? (groqKota.sonModel||'groq') : 'yerel';
       if(r){
         const idx=S.posts.findIndex(p=>p.id===np.id);
         if(idx>-1){
@@ -1170,11 +1171,12 @@ A.addPost = async function(pd){
           S.posts[idx].aiYorum=r.yorum;
           S.posts[idx].aiGuclu=r.gucluYonler;
           S.posts[idx].aiOneri=r.gelistirmeOnerisi;
+          S.posts[idx].aiModel=kullanilanModel;
           S.posts[idx].userRatings['bot_ai_yorum']=r.score;
           save();
           refreshCard(np.id);
           db.collection("posts").doc(np.id).update({
-            aiScore:r.score,aiYorum:r.yorum,aiGuclu:r.gucluYonler,aiOneri:r.gelistirmeOnerisi,
+            aiScore:r.score,aiYorum:r.yorum,aiGuclu:r.gucluYonler,aiOneri:r.gelistirmeOnerisi,aiModel:kullanilanModel,
             userRatings:S.posts[idx].userRatings
           }).catch(err=>console.error(err));
         }
@@ -1532,6 +1534,12 @@ function postCard(post, forceExpand=false, autoOpenComments=false, hedefYorumId=
     if(post.aiGuclu)tags.appendChild(h('span',{style:{background:'#052e16',border:'1px solid #166534',borderRadius:'20px',padding:'3px 10px',fontSize:'.76rem',color:'#34d399'}},`💪 ${post.aiGuclu}`));
     if(post.aiOneri)tags.appendChild(h('span',{style:{background:'#1e1b4b',border:'1px solid #4338ca',borderRadius:'20px',padding:'3px 10px',fontSize:'.76rem',color:'#a5b4fc'}},`💡 ${post.aiOneri}`));
     body.appendChild(tags);
+    if(isAdmin){
+      const modelEtiketi = post.aiModel
+        ? (post.aiModel==='yerel' ? '💻 Yerel Algoritma (Groq kullanılamadı)' : `🧠 ${post.aiModel}`)
+        : '🧠 Model bilgisi yok (eski paylaşım — yeniden değerlendirince görünür)';
+      body.appendChild(h('p',{style:{fontSize:'.7rem',color:'#6b5b8a',marginTop:'8px',paddingTop:'8px',borderTop:'1px solid #2d1b52',fontStyle:'italic'}},`Admin — Puanlayan: ${modelEtiketi}`));
+    }
     let aiOpen=false;
     const arr=h('span',{},'▼');
     const aibtn=h('button',{class:'btn',style:{background:'linear-gradient(135deg,#1e0a3e,#2d1060)',border:'1px solid #5b21b6',borderRadius:'10px',padding:'8px 14px',color:'#c084fc',fontSize:'.85rem',display:'flex',alignItems:'center',gap:'8px',width:'100%'},onclick:(e)=>{e.stopPropagation();aiOpen=!aiOpen;body.style.display=aiOpen?'block':'none';arr.textContent=aiOpen?'▲':'▼';}},[h('span',{},'🤖'),h('span',{style:{flex:'1',textAlign:'left'}},'Yapay Zeka Değerlendirmesi'),h('span',{style:{color:scoreColor(post.aiScore),fontWeight:'700'}},`${post.aiScore}/10`),arr]);
@@ -1590,6 +1598,7 @@ function postCard(post, forceExpand=false, autoOpenComments=false, hedefYorumId=
       revalStatus.style.color='#6b5b8a';
       try{
         const r=await scorePoem(post.text);
+        const kullanilanModel1 = groqKota.sonKaynak==='groq' ? (groqKota.sonModel||'groq') : 'yerel';
         revalStatus.textContent='duyu-yorum analiz ediyor...';
         const b1=await botDuyuPuan(post.text);
         await new Promise(res=>setTimeout(res,600));
@@ -1608,12 +1617,13 @@ function postCard(post, forceExpand=false, autoOpenComments=false, hedefYorumId=
           if(r){yeniRatings['bot_ai_yorum']=r.score;}
           S.posts[idx].userRatings=yeniRatings;
           S.posts[idx].botYorumlar=yeniBotYorumlar;
-          if(r){S.posts[idx].aiScore=r.score;S.posts[idx].aiYorum=r.yorum;S.posts[idx].aiGuclu=r.gucluYonler;S.posts[idx].aiOneri=r.gelistirmeOnerisi;}
+          if(r){S.posts[idx].aiScore=r.score;S.posts[idx].aiYorum=r.yorum;S.posts[idx].aiGuclu=r.gucluYonler;S.posts[idx].aiOneri=r.gelistirmeOnerisi;S.posts[idx].aiModel=kullanilanModel1;}
           save();
           await db.collection('posts').doc(post.id).update({
             userRatings:yeniRatings,botYorumlar:yeniBotYorumlar,
             aiScore:r?r.score:post.aiScore,aiYorum:r?r.yorum:post.aiYorum,
-            aiGuclu:r?r.gucluYonler:post.aiGuclu,aiOneri:r?r.gelistirmeOnerisi:post.aiOneri
+            aiGuclu:r?r.gucluYonler:post.aiGuclu,aiOneri:r?r.gelistirmeOnerisi:post.aiOneri,
+            aiModel:r?kullanilanModel1:(post.aiModel||null)
           });
           // Scroll ve genişletilmiş durumu koru
           const card=document.querySelector('[data-pid="'+post.id+'"]');
@@ -2131,6 +2141,7 @@ function Profile(){
           if(sayac>0) await new Promise(res=>setTimeout(res,2500));
           durumEl.textContent=`⏳ ${sayac+1}/${tumPostlar.length} değerlendiriliyor...`;
           const r=await scorePoem(post.text);
+          const kullanilanModelToplu = groqKota.sonKaynak==='groq' ? (groqKota.sonModel||'groq') : 'yerel';
           await new Promise(res=>setTimeout(res,800));
           const b1=await botDuyuPuan(post.text);
           await new Promise(res=>setTimeout(res,800));
@@ -2150,9 +2161,9 @@ function Profile(){
           if(idx>-1){
             S.posts[idx].userRatings=yeniRatings;
             S.posts[idx].botYorumlar=yeniBotYorumlar;
-            if(r){S.posts[idx].aiScore=r.score;S.posts[idx].aiYorum=r.yorum;S.posts[idx].aiGuclu=r.gucluYonler;S.posts[idx].aiOneri=r.gelistirmeOnerisi;}
+            if(r){S.posts[idx].aiScore=r.score;S.posts[idx].aiYorum=r.yorum;S.posts[idx].aiGuclu=r.gucluYonler;S.posts[idx].aiOneri=r.gelistirmeOnerisi;S.posts[idx].aiModel=kullanilanModelToplu;}
           }
-          try{await db.collection("posts").doc(post.id).update({userRatings:yeniRatings,botYorumlar:yeniBotYorumlar,aiScore:r?r.score:post.aiScore,aiYorum:r?r.yorum:post.aiYorum,aiGuclu:r?r.gucluYonler:post.aiGuclu,aiOneri:r?r.gelistirmeOnerisi:post.aiOneri});}catch(e){console.error(e);}
+          try{await db.collection("posts").doc(post.id).update({userRatings:yeniRatings,botYorumlar:yeniBotYorumlar,aiScore:r?r.score:post.aiScore,aiYorum:r?r.yorum:post.aiYorum,aiGuclu:r?r.gucluYonler:post.aiGuclu,aiOneri:r?r.gelistirmeOnerisi:post.aiOneri,aiModel:r?kullanilanModelToplu:(post.aiModel||null)});}catch(e){console.error(e);}
           sayac++;
           durumEl.textContent=`${sayac}/${tumPostlar.length} şiir güncellendi...`;
         }
