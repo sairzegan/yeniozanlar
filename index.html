@@ -1451,8 +1451,8 @@ function postCard(post, forceExpand=false, autoOpenComments=false, hedefYorumId=
     const delBtn=h('button',{class:'absolute-del-post',onclick:(e)=>{e.stopPropagation();A.deletePost(post.id);}},['Sil ✕']);
     card.appendChild(delBtn);
   }
-  // DÜZENLEME BUTONU (yalnızca şiirin sahibi düzenleyebilir)
-  if(isOwn){
+  // DÜZENLEME BUTONU (şiirin sahibi ya da admin düzenleyebilir)
+  if(isOwn || isAdmin){
     const editBtn=h('button',{class:'absolute-edit-post',onclick:(e)=>{
       e.stopPropagation();
       const m=composeModal(()=>{m.remove();},post);
