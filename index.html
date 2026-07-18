@@ -2315,11 +2315,33 @@ function Profile(){
         kotaGoster();
         btn.disabled=false; btn.textContent=eskiMetin;
       }
-    },'🔍 Bağlantıyı Test Et');
+    },'🔍 Groq Test Et');
+
+    const geminiTestBtn=h('button',{style:{marginTop:'8px',marginLeft:'8px',fontSize:'.7rem',padding:'4px 10px',background:'transparent',color:'#60a5fa',border:'1px solid #1e3a5f',borderRadius:'8px',cursor:'pointer'},
+      onclick:async(ev)=>{
+        const btn=ev.currentTarget;
+        btn.disabled=true; const eskiMetin=btn.textContent; btn.textContent='⏳ Test ediliyor...';
+        await scorePoemGeminiIle('Deneme şiiri:\nDeniz mavi, martı öter,\nBu satırlar sadece test eder.');
+        kotaGoster();
+        btn.disabled=false; btn.textContent=eskiMetin;
+      }
+    },'✨ Gemini Test Et');
+
+    const claudeTestBtn=h('button',{style:{marginTop:'8px',marginLeft:'8px',fontSize:'.7rem',padding:'4px 10px',background:'transparent',color:'#f0abfc',border:'1px solid #4a1d5c',borderRadius:'8px',cursor:'pointer'},
+      onclick:async(ev)=>{
+        const btn=ev.currentTarget;
+        btn.disabled=true; const eskiMetin=btn.textContent; btn.textContent='⏳ Test ediliyor...';
+        await scorePoemClaudeIle('Deneme şiiri:\nYağmur yağar, toprak kokar,\nBu satırlar sadece test eder.');
+        kotaGoster();
+        btn.disabled=false; btn.textContent=eskiMetin;
+      }
+    },'🎭 Claude Test Et');
 
     kotaDiv.appendChild(kotaIcerik);
     kotaDiv.appendChild(yenileBtn);
     kotaDiv.appendChild(testBtn);
+    kotaDiv.appendChild(geminiTestBtn);
+    kotaDiv.appendChild(claudeTestBtn);
     adminPanel.appendChild(kotaDiv);
     const durumEl=h('p',{style:{color:'#6b5b8a',fontSize:'.85rem',marginTop:'10px',fontStyle:'italic'}},'');
     const topluModelSecici=h('select',{class:'inp',style:{marginBottom:'8px',fontSize:'.82rem',padding:'8px',borderRadius:'8px'}},[
