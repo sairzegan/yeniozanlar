@@ -275,17 +275,21 @@ function groqKotaGuncelle(headers) {
 // Ham hata mesajını (sonHata) admin için anlaşılır bir teşhise çevirir.
 function groqHataTanisi(hata){
   if(!hata) return null;
+  if(/GEMINI_API_KEY tanımlı değil/i.test(hata))
+    return '🔑 GEMINI_API_KEY Vercel\'de tanımlı değil. aistudio.google.com/apikey üzerinden anahtar alıp Vercel → Settings → Environment Variables\'a ekleyip yeniden deploy edin.';
+  if(/ANTHROPIC_API_KEY tanımlı değil/i.test(hata))
+    return '🔑 ANTHROPIC_API_KEY Vercel\'de tanımlı değil. console.anthropic.com/settings/keys üzerinden anahtar alıp Vercel → Settings → Environment Variables\'a ekleyip yeniden deploy edin.';
   if(/^429:/.test(hata)) return '⏳ Gerçek kota doldu. Yukarıdaki "Yenilenme" saatini bekleyin.';
   if(/^401:/.test(hata) || /invalid.?api.?key/i.test(hata) || /invalid_api_key/i.test(hata))
-    return '🔑 API anahtarı geçersiz veya devre dışı bırakılmış. Not: API anahtarları kod içinde (ör. GitHub\'da) herkese açık paylaşılırsa Groq bunu otomatik olarak iptal edebilir. console.groq.com/keys üzerinden yeni bir anahtar oluşturup kodda güncelleyin.';
+    return '🔑 API anahtarı geçersiz veya devre dışı bırakılmış. Not: API anahtarları kod içinde (ör. GitHub\'da) herkese açık paylaşılırsa sağlayıcı bunu otomatik olarak iptal edebilir. Yeni bir anahtar oluşturup Vercel\'de güncelleyin.';
   if(/^403:/.test(hata)) return '🚫 Erişim reddedildi (403) — API anahtarının bu modele/organizasyona erişim izni olmayabilir.';
   if(/model_decommissioned/i.test(hata) || /has been decommissioned/i.test(hata))
     return '🔁 Kullanılan model artık desteklenmiyor. Kodda model adını güncel bir modelle (ör. openai/gpt-oss-120b) değiştirin.';
-  if(/^400:/.test(hata)) return '⚠️ İstek hatalı (400) — model adı, parametreler veya istek formatı Groq tarafından reddedildi.';
+  if(/^400:/.test(hata)) return '⚠️ İstek hatalı (400) — model adı, parametreler veya istek formatı reddedildi.';
   if(/^JSON_HATASI/.test(hata)) return '🤖 Yapay zeka geçerli JSON formatında yanıt vermedi (genelde geçici bir model tutarsızlığı) — tekrar denendiğinde genelde düzelir.';
-  if(/^BOS_YANIT/.test(hata)) return '📭 Groq boş içerik döndürdü — tekrar deneyin.';
+  if(/^BOS_YANIT/.test(hata)) return '📭 Model boş içerik döndürdü — tekrar deneyin.';
   if(/Failed to fetch|NetworkError|TypeError/i.test(hata))
-    return '🌐 Groq\'a bağlanılamadı — ağ engeli, CORS kısıtlaması veya internet bağlantı sorunu olabilir.';
+    return '🌐 Bağlanılamadı — ağ engeli, CORS kısıtlaması veya internet bağlantı sorunu olabilir.';
   return null;
 }
 
@@ -338,11 +342,55 @@ function groqKota429Isaretle(headers, mesaj){
 // bir sonraki modele geçiyoruz. Toplamda çok daha yüksek bir günlük kapasiteye
 // (yaklaşık 800.000 token/gün) ulaşmış oluyoruz — yeni anahtar veya yeni sağlayıcı gerekmez.
 // Sıralama: önce en kaliteli/dengeli model, en son en yüksek kotalı ama daha basit model.
+// Admin panelinden "Yeniden Değerlendir" öncesi seçilen yapay zeka sağlayıcısı.
+// 'auto' = mevcut Groq model kademesi (varsayılan, kullanıcı paylaşımlarında hep bu kullanılır).
+// Admin bunu 'gemini' veya 'claude' yaparsa, yeniden değerlendirmeler o sağlayıcıyla yapılır.
+let adminSecilenSaglayici = 'auto';
+
 const GROQ_MODEL_KADEMESI = [
   'openai/gpt-oss-120b',      // ~200.000 token/gün — kaliteli, iyi bir denge
   'llama-3.3-70b-versatile',  // ~100.000 token/gün — önceki varsayılan model
   'llama-3.1-8b-instant',     // ~500.000 token/gün — daha basit ama en yüksek kota
 ];
+
+// ── Hece (syllable) ön-hesaplaması ─────────────────────────────────────────
+// Büyük dil modelleri Türkçe hece ölçüsünü (özellikle openai/gpt-oss-120b gibi
+// modeller) sıkça yanlış sayıyor. Bunu modele bırakmak yerine, Türkçenin büyük
+// ölçüde sesli harf = hece kuralına dayanarak KOD İÇİNDE kesin olarak hesaplayıp
+// prompt'a "ön-hesaplanmış, değiştirilemez gerçek" olarak veriyoruz. Model artık
+// saymıyor, sadece bu hazır veriyi yorumluyor — hata payı ortadan kalkıyor.
+const TURKCE_UNLULER = 'aeıioöuüAEIİOÖUÜ';
+function heceSay(kelime){
+  let sayac=0;
+  for(const harf of kelime){ if(TURKCE_UNLULER.includes(harf)) sayac++; }
+  return Math.max(sayac,1);
+}
+function siirHeceOzetiOlustur(text){
+  const satirlar = text.split('\n').map(s=>s.trim()).filter(Boolean);
+  if(!satirlar.length) return '';
+  const ozetSatirlari = satirlar.slice(0,24).map((satir,i)=>{
+    const hece = satir.split(/\s+/).filter(Boolean).reduce((t,k)=>t+heceSay(k),0);
+    return `${i+1}. dize (${hece} hece): "${satir}"`;
+  });
+  return `\n\n[HECE ÖLÇÜSÜ — programatik olarak kesin hesaplanmıştır, KENDİN TEKRAR SAYMA, olduğu gibi kullan]\n${ozetSatirlari.join('\n')}`;
+}
+
+const AI_SISTEM_PROMPTU = 'Sen deneyimli bir Türk edebiyat eleştirmenisin. Şiirleri derinlemesine analiz eder, doğrudan söylenmese bile ima edilen duygu ve anlatıyı kavrayabilirsin. Yanıtlarını SADECE geçerli JSON formatında verirsin.';
+
+function aiKullaniciPromptuOlustur(text){
+  const heceBilgisi = siirHeceOzetiOlustur(text);
+  return `Aşağıdaki şiiri analiz et:\n\n"""\n${text}\n"""\n${heceBilgisi}\n\nDikkat et:\n- Aynı kelimenin tekrarını kafiye sayma\n- Kısa ve tekrarlı şiirlere düşük puan ver\n- Doğrudan söylenmese bile ima edilen duyguyu, temayı, anlatıyı kavra\n- Şiirden gerçek dize alıntısı yap\n- Hece ölçüsü hakkında konuşurken YUKARIDA VERİLEN sayıları kullan, kendi başına sayma\n- Günlük konuşma dili ve klişelere eksi puan ver\n\nSADECE şu JSON ile yanıtla, başka hiçbir şey yazma:\n{\n  "score": <2.0-9.8 arası gerçekçi puan>,\n  "yorum": "<5-7 cümle: şiirden ne anlaşıldığı, tema, imge, dil kalitesi, ses uyumu>",\n  "gucluYonler": "<tek cümle, şiirden somut örnek>",\n  "gelistirmeOnerisi": "<tek cümle, somut ve uygulanabilir>"\n}`;
+}
+
+// Ham model çıktısından (olası ```json çitleri, olası ekstra metinle birlikte) JSON'u ayıklar ve doğrular
+function jsonAyikla(raw){
+  const clean = raw.replace(/```json|```/g,'').trim();
+  const jsonStr = clean.slice(clean.indexOf('{'), clean.lastIndexOf('}')+1);
+  const result = JSON.parse(jsonStr);
+  result.score = Math.min(9.8, Math.max(2.0, parseFloat(result.score)));
+  result.score = Math.round(result.score * 10) / 10;
+  return result;
+}
 
 async function scorePoemTekModel(text, model){
   // openai/gpt-oss-* modelleri "akıl yürütme" (reasoning) modelleridir; varsayılan
@@ -355,13 +403,10 @@ async function scorePoemTekModel(text, model){
     max_tokens: 1024,
     temperature: 0.7,
     response_format: { type: 'json_object' },
-    messages: [{
-      role: 'system',
-      content: 'Sen deneyimli bir Türk edebiyat eleştirmenisin. Şiirleri derinlemesine analiz eder, doğrudan söylenmese bile ima edilen duygu ve anlatıyı kavrayabilirsin. Yanıtlarını SADECE geçerli JSON formatında verirsin.'
-    },{
-      role: 'user',
-      content: `Aşağıdaki şiiri analiz et:\n\n"""\n${text}\n"""\n\nDikkat et:\n- Aynı kelimenin tekrarını kafiye sayma\n- Kısa ve tekrarlı şiirlere düşük puan ver\n- Doğrudan söylenmese bile ima edilen duyguyu, temayı, anlatıyı kavra\n- Şiirden gerçek dize alıntısı yap\n- Hece ölçüsünü doğru tespit et\n- Günlük konuşma dili ve klişelere eksi puan ver\n\nSADECE şu JSON ile yanıtla, başka hiçbir şey yazma:\n{\n  "score": <2.0-9.8 arası gerçekçi puan>,\n  "yorum": "<5-7 cümle: şiirden ne anlaşıldığı, tema, imge, dil kalitesi, ses uyumu>",\n  "gucluYonler": "<tek cümle, şiirden somut örnek>",\n  "gelistirmeOnerisi": "<tek cümle, somut ve uygulanabilir>"\n}`
-    }]
+    messages: [
+      { role: 'system', content: AI_SISTEM_PROMPTU },
+      { role: 'user', content: aiKullaniciPromptuOlustur(text) }
+    ]
   };
   if(model.startsWith('openai/gpt-oss')){
     govde.reasoning_effort = 'low';
@@ -397,21 +442,88 @@ async function scorePoemTekModel(text, model){
   const data = await res.json();
   if(!data.choices?.[0]?.message?.content) throw new Error('BOS_YANIT: Groq içerik döndürmedi');
   const raw = data.choices[0].message.content.trim();
-  const clean = raw.replace(/```json|```/g,'').trim();
-  const jsonStr = clean.slice(clean.indexOf('{'), clean.lastIndexOf('}')+1);
-  let result;
   try{
-    result = JSON.parse(jsonStr);
+    return jsonAyikla(raw);
   } catch(parseErr){
     throw new Error('JSON_HATASI: Yapay zeka geçersiz format döndürdü → "'+raw.slice(0,150)+(raw.length>150?'...':'')+'"');
   }
-  result.score = Math.min(9.8, Math.max(2.0, parseFloat(result.score)));
-  result.score = Math.round(result.score * 10) / 10;
-  return result;
 }
 
-async function scorePoem(text){
+// ── Gemini ile puanlama (admin tarafından seçildiğinde kullanılır) ─────────
+async function scorePoemGeminiIle(text){
+  try{
+    const res = await fetch('/api/gemini', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gemini-3.5-flash',
+        max_tokens: 1024,
+        temperature: 0.7,
+        messages: [
+          { role: 'system', content: AI_SISTEM_PROMPTU },
+          { role: 'user', content: aiKullaniciPromptuOlustur(text) }
+        ]
+      })
+    });
+    if(!res.ok){
+      let mesaj = '';
+      try{ const errBody = await res.json(); mesaj = errBody?.error?.message || ''; }catch(_){}
+      throw new Error(res.status+': '+(mesaj || 'Gemini hatası'));
+    }
+    const data = await res.json();
+    const raw = data.choices?.[0]?.message?.content?.trim();
+    if(!raw) throw new Error('BOS_YANIT: Gemini içerik döndürmedi');
+    let result;
+    try{ result = jsonAyikla(raw); }
+    catch(parseErr){ throw new Error('JSON_HATASI: Gemini geçersiz format döndürdü → "'+raw.slice(0,150)+(raw.length>150?'...':'')+'"'); }
+    groqKota.sonKaynak='gemini'; groqKota.sonModel='gemini-3.5-flash'; groqKota.sonHata=null;
+    return result;
+  } catch(e){
+    console.warn('Gemini hatası, yerel algoritma kullanılıyor:', e.message);
+    groqKota.sonKaynak='yerel'; groqKota.sonHata='Gemini: '+e.message;
+    return scorePoemYerel(text);
+  }
+}
+
+// ── Claude ile puanlama (admin tarafından seçildiğinde kullanılır) ─────────
+async function scorePoemClaudeIle(text){
+  try{
+    const res = await fetch('/api/claude', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-5',
+        max_tokens: 1024,
+        system: AI_SISTEM_PROMPTU,
+        messages: [
+          { role: 'user', content: aiKullaniciPromptuOlustur(text) }
+        ]
+      })
+    });
+    if(!res.ok){
+      let mesaj = '';
+      try{ const errBody = await res.json(); mesaj = errBody?.error?.message || ''; }catch(_){}
+      throw new Error(res.status+': '+(mesaj || 'Claude hatası'));
+    }
+    const data = await res.json();
+    const raw = data.content?.[0]?.text?.trim();
+    if(!raw) throw new Error('BOS_YANIT: Claude içerik döndürmedi');
+    let result;
+    try{ result = jsonAyikla(raw); }
+    catch(parseErr){ throw new Error('JSON_HATASI: Claude geçersiz format döndürdü → "'+raw.slice(0,150)+(raw.length>150?'...':'')+'"'); }
+    groqKota.sonKaynak='claude'; groqKota.sonModel='claude-sonnet-5'; groqKota.sonHata=null;
+    return result;
+  } catch(e){
+    console.warn('Claude hatası, yerel algoritma kullanılıyor:', e.message);
+    groqKota.sonKaynak='yerel'; groqKota.sonHata='Claude: '+e.message;
+    return scorePoemYerel(text);
+  }
+}
+
+async function scorePoem(text, saglayici='auto'){
   if(!text||text.trim().length<3)return null;
+  if(saglayici==='gemini') return await scorePoemGeminiIle(text);
+  if(saglayici==='claude') return await scorePoemClaudeIle(text);
   let sonHataMesaji = null;
   for(const model of GROQ_MODEL_KADEMESI){
     try{
@@ -1163,7 +1275,7 @@ A.addPost = async function(pd){
     // Claude AI değerlendirmesini async bekle
     if(pd.text&&pd.text.trim().length>10){
       const r = await scorePoem(pd.text);
-      const kullanilanModel = groqKota.sonKaynak==='groq' ? (groqKota.sonModel||'groq') : 'yerel';
+      const kullanilanModel = groqKota.sonKaynak==='yerel' ? 'yerel' : (groqKota.sonModel||groqKota.sonKaynak);
       if(r){
         const idx=S.posts.findIndex(p=>p.id===np.id);
         if(idx>-1){
@@ -1587,6 +1699,14 @@ function postCard(post, forceExpand=false, autoOpenComments=false, hedefYorumId=
   // ADMIN: Tekil yeniden değerlendir butonu
   if(isAdmin && post.text && post.text.trim().length>10){
     const revalDiv=h('div',{style:{marginBottom:'12px'}});
+    const modelSecici=h('select',{class:'inp',style:{marginBottom:'6px',fontSize:'.78rem',padding:'6px',borderRadius:'8px'}},[
+      h('option',{value:'auto'},'🔀 Groq (otomatik kademe)'),
+      h('option',{value:'gemini'},'✨ Google Gemini'),
+      h('option',{value:'claude'},'🎭 Anthropic Claude')
+    ]);
+    modelSecici.value=adminSecilenSaglayici;
+    modelSecici.onclick=e=>e.stopPropagation();
+    modelSecici.onchange=e=>{adminSecilenSaglayici=e.target.value;};
     const revalBtn2=h('button',{class:'btn',style:{width:'100%',background:'linear-gradient(135deg,#1e1040,#2d1b52)',color:'#a78bfa',border:'1px solid #5b21b6',fontSize:'.8rem',padding:'8px'}}, '🤖 Yapay Zeka ile Yeniden Değerlendir');
     const revalStatus=h('p',{class:'reval-status',style:{fontSize:'.75rem',color:'#6b5b8a',marginTop:'6px',textAlign:'center',display:'none'}});
     revalBtn2.onclick=async(e)=>{
@@ -1597,8 +1717,8 @@ function postCard(post, forceExpand=false, autoOpenComments=false, hedefYorumId=
       revalStatus.textContent='Ana AI çalışıyor...';
       revalStatus.style.color='#6b5b8a';
       try{
-        const r=await scorePoem(post.text);
-        const kullanilanModel1 = groqKota.sonKaynak==='groq' ? (groqKota.sonModel||'groq') : 'yerel';
+        const r=await scorePoem(post.text, adminSecilenSaglayici);
+        const kullanilanModel1 = groqKota.sonKaynak==='yerel' ? 'yerel' : (groqKota.sonModel||groqKota.sonKaynak);
         revalStatus.textContent='duyu-yorum analiz ediyor...';
         const b1=await botDuyuPuan(post.text);
         await new Promise(res=>setTimeout(res,600));
@@ -1646,6 +1766,7 @@ function postCard(post, forceExpand=false, autoOpenComments=false, hedefYorumId=
       revalBtn2.disabled=false;
       revalBtn2.textContent='🤖 Yapay Zeka ile Yeniden Değerlendir';
     };
+    revalDiv.appendChild(modelSecici);
     revalDiv.appendChild(revalBtn2);
     revalDiv.appendChild(revalStatus);
     full.appendChild(revalDiv);
@@ -2128,6 +2249,14 @@ function Profile(){
     kotaDiv.appendChild(testBtn);
     adminPanel.appendChild(kotaDiv);
     const durumEl=h('p',{style:{color:'#6b5b8a',fontSize:'.85rem',marginTop:'10px',fontStyle:'italic'}},'');
+    const topluModelSecici=h('select',{class:'inp',style:{marginBottom:'8px',fontSize:'.82rem',padding:'8px',borderRadius:'8px'}},[
+      h('option',{value:'auto'},'🔀 Groq (otomatik kademe)'),
+      h('option',{value:'gemini'},'✨ Google Gemini'),
+      h('option',{value:'claude'},'🎭 Anthropic Claude')
+    ]);
+    topluModelSecici.value=adminSecilenSaglayici;
+    topluModelSecici.onchange=e=>{adminSecilenSaglayici=e.target.value;};
+    adminPanel.appendChild(topluModelSecici);
     const revalBtn=h('button',{class:'pb btn',style:{width:'100%',background:'linear-gradient(135deg,#5b21b6,#7c3aed)',fontSize:'.9rem'},
       onclick:async()=>{
         revalBtn.disabled=true;
@@ -2140,8 +2269,8 @@ function Profile(){
           // Her şiir arasında 2.5 sn bekle — Groq rate limit (30 istek/dk) için
           if(sayac>0) await new Promise(res=>setTimeout(res,2500));
           durumEl.textContent=`⏳ ${sayac+1}/${tumPostlar.length} değerlendiriliyor...`;
-          const r=await scorePoem(post.text);
-          const kullanilanModelToplu = groqKota.sonKaynak==='groq' ? (groqKota.sonModel||'groq') : 'yerel';
+          const r=await scorePoem(post.text, adminSecilenSaglayici);
+          const kullanilanModelToplu = groqKota.sonKaynak==='yerel' ? 'yerel' : (groqKota.sonModel||groqKota.sonKaynak);
           await new Promise(res=>setTimeout(res,800));
           const b1=await botDuyuPuan(post.text);
           await new Promise(res=>setTimeout(res,800));
