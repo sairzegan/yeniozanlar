@@ -454,6 +454,10 @@ async function scorePoemTekModel(text, model){
 
 // ── Gemini ile puanlama (admin tarafından seçildiğinde kullanılır) ─────────
 async function scorePoemGeminiIle(text){
+  // Groq'a özel groqKotaGuncelle() burada işe yaramaz (Gemini farklı header'lar döner),
+  // ama panelin "Henüz API isteği yapılmadı" yazmaması için bu iki alanı elle güncelliyoruz.
+  groqKota.sonGuncelleme = new Date().toLocaleTimeString('tr-TR');
+  groqKota.toplamIstek++;
   try{
     const res = await fetch('/api/gemini', {
       method: 'POST',
@@ -479,7 +483,7 @@ async function scorePoemGeminiIle(text){
     let result;
     try{ result = jsonAyikla(raw); }
     catch(parseErr){ throw new Error('JSON_HATASI: Gemini geçersiz format döndürdü → "'+raw.slice(0,150)+(raw.length>150?'...':'')+'"'); }
-    groqKota.sonKaynak='gemini'; groqKota.sonModel='gemini-2.5-flash'; groqKota.sonHata=null;
+    groqKota.sonKaynak='gemini'; groqKota.sonModel='gemini-2.5-flash'; groqKota.sonHata=null; groqKota.kotaDolduMu=false;
     return result;
   } catch(e){
     console.warn('Gemini hatası, yerel algoritma kullanılıyor:', e.message);
@@ -490,6 +494,8 @@ async function scorePoemGeminiIle(text){
 
 // ── Claude ile puanlama (admin tarafından seçildiğinde kullanılır) ─────────
 async function scorePoemClaudeIle(text){
+  groqKota.sonGuncelleme = new Date().toLocaleTimeString('tr-TR');
+  groqKota.toplamIstek++;
   try{
     const res = await fetch('/api/claude', {
       method: 'POST',
@@ -514,7 +520,7 @@ async function scorePoemClaudeIle(text){
     let result;
     try{ result = jsonAyikla(raw); }
     catch(parseErr){ throw new Error('JSON_HATASI: Claude geçersiz format döndürdü → "'+raw.slice(0,150)+(raw.length>150?'...':'')+'"'); }
-    groqKota.sonKaynak='claude'; groqKota.sonModel='claude-sonnet-5'; groqKota.sonHata=null;
+    groqKota.sonKaynak='claude'; groqKota.sonModel='claude-sonnet-5'; groqKota.sonHata=null; groqKota.kotaDolduMu=false;
     return result;
   } catch(e){
     console.warn('Claude hatası, yerel algoritma kullanılıyor:', e.message);
@@ -2252,9 +2258,11 @@ function Profile(){
           kotaIcerik.appendChild(satir('Kalan token (dk.):',groqKota.kalanToken+' / '+(groqKota.limitToken??'?')));
         if(groqKota.tokenSifirlanmaSn!==null)
           kotaIcerik.appendChild(satir('Token kotası yenilenme:',groqSaatFormatla(groqKota.tokenSifirlanmaSn)+' ('+groqSureFormatla(groqKota.tokenSifirlanmaSn)+' sonra)'));
-        kotaIcerik.appendChild(satir('Son yorumun kaynağı:',
-          groqKota.sonKaynak==='groq'?`🤖 Groq AI${groqKota.sonModel?' ('+groqKota.sonModel+')':''}`:groqKota.sonKaynak==='yerel'?'💻 Yerel algoritma':'—',
-          groqKota.sonKaynak==='groq'?'#34d399':groqKota.sonKaynak==='yerel'?'#fbbf24':'#e2e8f0'));
+        {
+          const kaynakEtiket = {groq:`🤖 Groq AI${groqKota.sonModel?' ('+groqKota.sonModel+')':''}`, gemini:'✨ Google Gemini', claude:'🎭 Anthropic Claude', yerel:'💻 Yerel algoritma'}[groqKota.sonKaynak] || '—';
+          const kaynakRenk = {groq:'#34d399', gemini:'#60a5fa', claude:'#f0abfc', yerel:'#fbbf24'}[groqKota.sonKaynak] || '#e2e8f0';
+          kotaIcerik.appendChild(satir('Son yorumun kaynağı:', kaynakEtiket, kaynakRenk));
+        }
         if(groqKota.sonHata){
           kotaIcerik.appendChild(satir('Son hata:',groqKota.sonHata,'#fbbf24'));
           const tanisi = groqHataTanisi(groqKota.sonHata);
