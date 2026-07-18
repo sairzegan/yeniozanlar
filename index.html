@@ -459,7 +459,7 @@ async function scorePoemGeminiIle(text){
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'gemini-3.5-flash',
+        model: 'gemini-2.5-flash',
         max_tokens: 1024,
         temperature: 0.7,
         messages: [
@@ -479,7 +479,7 @@ async function scorePoemGeminiIle(text){
     let result;
     try{ result = jsonAyikla(raw); }
     catch(parseErr){ throw new Error('JSON_HATASI: Gemini geçersiz format döndürdü → "'+raw.slice(0,150)+(raw.length>150?'...':'')+'"'); }
-    groqKota.sonKaynak='gemini'; groqKota.sonModel='gemini-3.5-flash'; groqKota.sonHata=null;
+    groqKota.sonKaynak='gemini'; groqKota.sonModel='gemini-2.5-flash'; groqKota.sonHata=null;
     return result;
   } catch(e){
     console.warn('Gemini hatası, yerel algoritma kullanılıyor:', e.message);
