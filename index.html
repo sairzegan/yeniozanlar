@@ -346,6 +346,9 @@ function groqKota429Isaretle(headers, mesaj){
 // 'auto' = mevcut Groq model kademesi (varsayılan, kullanıcı paylaşımlarında hep bu kullanılır).
 // Admin bunu 'gemini' veya 'claude' yaparsa, yeniden değerlendirmeler o sağlayıcıyla yapılır.
 let adminSecilenSaglayici = 'auto';
+// groqBotCall bir kademe (cascade) çalıştırıp başarılı olduğunda, hangi modelin
+// işe yaradığını burada tutar — böylece art arda çağrılan botlar aynı modeli paylaşabilir.
+let sonBasariliBotModeli = null;
 
 const GROQ_MODEL_KADEMESI = [
   'openai/gpt-oss-120b',      // ~200.000 token/gün — kaliteli, iyi bir denge
@@ -1222,12 +1225,30 @@ async function groqBotCallTekModel(systemPrompt, userPrompt, model) {
   }
 }
 
-async function groqBotCall(systemPrompt, userPrompt) {
+// zorunluModel verilirse (ör. ana AI'ın kullandığı model), kademe/cascade DEVREYE GİRMEZ,
+// sadece o tek model denenir. Bu sayede aynı şiiri değerlendiren 3 bot + ana AI hepsi
+// AYNI modeli kullanır — art arda atılan istekler yüzünden birinin akıllı modele,
+// diğerinin zayıf modele düşüp tutarsız yorum vermesi önlenmiş olur.
+async function groqBotCall(systemPrompt, userPrompt, zorunluModel=null) {
+  if(zorunluModel){
+    try{
+      const result = await groqBotCallTekModel(systemPrompt, userPrompt, zorunluModel);
+      groqKota.sonHata = null;
+      sonBasariliBotModeli = zorunluModel;
+      return result;
+    } catch(e){
+      console.warn(`groqBotCall (zorunlu: ${zorunluModel}) başarısız:`, e.message);
+      groqKota.sonHata = e.message;
+      sonBasariliBotModeli = null;
+      return null;
+    }
+  }
   let sonHataMesaji = null;
   for(const model of GROQ_MODEL_KADEMESI){
     try{
       const result = await groqBotCallTekModel(systemPrompt, userPrompt, model);
       groqKota.sonHata = null;
+      sonBasariliBotModeli = model;
       return result;
     } catch(e){
       sonHataMesaji = e.message;
@@ -1236,36 +1257,37 @@ async function groqBotCall(systemPrompt, userPrompt) {
   }
   console.warn('groqBotCall: tüm Groq modelleri başarısız oldu:', sonHataMesaji);
   groqKota.sonHata = sonHataMesaji;
+  sonBasariliBotModeli = null;
   return null;
 }
 
-async function botDuyuPuan(text) {
+async function botDuyuPuan(text, zorunluModel=null) {
   if (!text || text.trim().length < 5) return null;
   const system = 'Sen "duyu-yorum" adlı bir şiir eleştirmensin. YALNIZCA şiirin duygusallığını, duygu yoğunluğunu ve duygusal etkisini değerlendirirsin. Teknik unsurları değil, sadece duyguyu analiz et. Yanıtlarını SADECE JSON formatında ver.';
   const user = 'Şu şiirin duygusallığını değerlendir:\n\n"""\n' + text + '\n"""\n\nSADECE şu JSON ile yanıtla:\n{"puan": <2.0-9.5 arasi sayi>, "yorum": "<2-3 cumle duygu analizi>"}';
-  const result = await groqBotCall(system, user);
+  const result = await groqBotCall(system, user, zorunluModel);
   if (!result) return botDuyuPuanYerel(text);
   let p = Math.min(9.5, Math.max(2.0, parseFloat(result.puan)));
   p = Math.round(p * 10) / 10;
   return { puan: p, yorum: result.yorum, kullanici: 'bot_duyu_yorum', ad: 'duyu-yorum' };
 }
 
-async function botKatliPuan(text) {
+async function botKatliPuan(text, zorunluModel=null) {
   if (!text || text.trim().length < 5) return null;
   const system = 'Sen "katlı-yorum" adlı bir şiir eleştirmensin. YALNIZCA şiirin ses uyumunu, kafiye düzenini, hece ölçüsünü ve ritim yapısını değerlendirirsin. Duyguya değil, sese odaklan. Yanıtlarını SADECE JSON formatında ver.';
   const user = 'Şu şiirin ses uyumunu ve kafiyesini değerlendir:\n\n"""\n' + text + '\n"""\n\nSADECE şu JSON ile yanıtla:\n{"puan": <2.0-9.5 arasi sayi>, "yorum": "<2-3 cumle ses analizi>"}';
-  const result = await groqBotCall(system, user);
+  const result = await groqBotCall(system, user, zorunluModel);
   if (!result) return botKatliPuanYerel(text);
   let p = Math.min(9.5, Math.max(2.0, parseFloat(result.puan)));
   p = Math.round(p * 10) / 10;
   return { puan: p, yorum: result.yorum, kullanici: 'bot_katli_yorum', ad: 'katlı-yorum' };
 }
 
-async function botAriPuan(text) {
+async function botAriPuan(text, zorunluModel=null) {
   if (!text || text.trim().length < 5) return null;
   const system = 'Sen "arı-yorum" adlı bir şiir eleştirmensin. YALNIZCA şiirdeki imgeleri, metaforları, özgünlüğü ve şiire verilen emeği değerlendirirsin. Ne kadar işlenmiş, ne kadar özgün olduğuna bak. Yanıtlarını SADECE JSON formatında ver.';
   const user = 'Şu şiirin imgelerini, metaforlarını ve özgünlüğünü değerlendir:\n\n"""\n' + text + '\n"""\n\nSADECE şu JSON ile yanıtla:\n{"puan": <2.0-9.5 arasi sayi>, "yorum": "<2-3 cumle imge analizi>"}';
-  const result = await groqBotCall(system, user);
+  const result = await groqBotCall(system, user, zorunluModel);
   if (!result) return botAriPuanYerel(text);
   let p = Math.min(9.5, Math.max(2.0, parseFloat(result.puan)));
   p = Math.round(p * 10) / 10;
@@ -1279,7 +1301,16 @@ A.addPost = async function(pd){
     const botRatings={};
     const botYorumlar={};
     const hasText=pd.text&&pd.text.trim().length>10;
-    const [b1,b2,b3]=hasText ? await Promise.all([botDuyuPuan(pd.text),botKatliPuan(pd.text),botAriPuan(pd.text)]) : [null,null,null];
+    let b1=null,b2=null,b3=null,ortakModel=null;
+    if(hasText){
+      // İlk botu 'auto' kademeyle çalıştırıp hangi modelin başarılı olduğunu öğreniyoruz,
+      // sonra diğer 2 botu VE ana AI'ı aynı modele zorluyoruz — böylece 4 değerlendirme
+      // de (3 bot + ana AI) her zaman aynı modeli kullanır, birbirinden farklı
+      // modellere düşüp tutarsız yorum vermezler.
+      b1 = await botDuyuPuan(pd.text);
+      ortakModel = sonBasariliBotModeli;
+      [b2,b3] = await Promise.all([botKatliPuan(pd.text, ortakModel), botAriPuan(pd.text, ortakModel)]);
+    }
     if(b1){botRatings[b1.kullanici]=b1.puan;botYorumlar[b1.kullanici]={yorum:b1.yorum,ad:b1.ad};}
     if(b2){botRatings[b2.kullanici]=b2.puan;botYorumlar[b2.kullanici]={yorum:b2.yorum,ad:b2.ad};}
     if(b3){botRatings[b3.kullanici]=b3.puan;botYorumlar[b3.kullanici]={yorum:b3.yorum,ad:b3.ad};}
@@ -1295,7 +1326,10 @@ A.addPost = async function(pd){
 
     // Claude AI değerlendirmesini async bekle
     if(pd.text&&pd.text.trim().length>10){
-      const r = await scorePoem(pd.text);
+      // Botlar hangi Groq modelini kullandıysa (ortakModel), ana AI da AYNI modeli
+      // kullansın — tutarlılık için. Botlar tamamen başarısız olup yerel algoritmaya
+      // düştüyse (ortakModel=null), ana AI kendi 'auto' kademesini normal şekilde dener.
+      const r = await scorePoem(pd.text, ortakModel ? ('groq:'+ortakModel) : 'auto');
       const kullanilanModel = groqKota.sonKaynak==='yerel' ? 'yerel' : (groqKota.sonModel||groqKota.sonKaynak);
       if(r){
         const idx=S.posts.findIndex(p=>p.id===np.id);
@@ -1667,11 +1701,13 @@ function postCard(post, forceExpand=false, autoOpenComments=false, hedefYorumId=
     if(post.aiGuclu)tags.appendChild(h('span',{style:{background:'#052e16',border:'1px solid #166534',borderRadius:'20px',padding:'3px 10px',fontSize:'.76rem',color:'#34d399'}},`💪 ${post.aiGuclu}`));
     if(post.aiOneri)tags.appendChild(h('span',{style:{background:'#1e1b4b',border:'1px solid #4338ca',borderRadius:'20px',padding:'3px 10px',fontSize:'.76rem',color:'#a5b4fc'}},`💡 ${post.aiOneri}`));
     body.appendChild(tags);
-    if(isAdmin){
+    {
       const modelEtiketi = post.aiModel
-        ? (post.aiModel==='yerel' ? '💻 Yerel Algoritma (Groq kullanılamadı)' : `🧠 ${post.aiModel}`)
-        : '🧠 Model bilgisi yok (eski paylaşım — yeniden değerlendirince görünür)';
-      body.appendChild(h('p',{style:{fontSize:'.7rem',color:'#6b5b8a',marginTop:'8px',paddingTop:'8px',borderTop:'1px solid #2d1b52',fontStyle:'italic'}},`Admin — Puanlayan: ${modelEtiketi}`));
+        ? (post.aiModel==='yerel' ? '💻 Yerel Algoritma' : `🧠 ${post.aiModel}`)
+        : null;
+      if(modelEtiketi){
+        body.appendChild(h('p',{style:{fontSize:'.7rem',color:'#6b5b8a',marginTop:'8px',paddingTop:'8px',borderTop:'1px solid #2d1b52',fontStyle:'italic'}},`Puanlayan: ${modelEtiketi}`));
+      }
     }
     let aiOpen=false;
     const arr=h('span',{},'▼');
@@ -1743,14 +1779,19 @@ function postCard(post, forceExpand=false, autoOpenComments=false, hedefYorumId=
       try{
         const r=await scorePoem(post.text, adminSecilenSaglayici);
         const kullanilanModel1 = groqKota.sonKaynak==='yerel' ? 'yerel' : (groqKota.sonModel||groqKota.sonKaynak);
+        // Botları da ana AI ile AYNI modele zorla (Groq kullanıldıysa) — böylece
+        // 3 bot ile ana değerlendirme birbirinden farklı modellere düşüp tutarsız
+        // yorum vermez. Ana AI Gemini/Claude kullandıysa botlar kendi Groq
+        // kademesini (auto) kullanır.
+        const botZorunluModel = groqKota.sonKaynak==='groq' ? groqKota.sonModel : null;
         revalStatus.textContent='duyu-yorum analiz ediyor...';
-        const b1=await botDuyuPuan(post.text);
+        const b1=await botDuyuPuan(post.text, botZorunluModel);
         await new Promise(res=>setTimeout(res,600));
         revalStatus.textContent='katlı-yorum analiz ediyor...';
-        const b2=await botKatliPuan(post.text);
+        const b2=await botKatliPuan(post.text, botZorunluModel);
         await new Promise(res=>setTimeout(res,600));
         revalStatus.textContent='arı-yorum analiz ediyor...';
-        const b3=await botAriPuan(post.text);
+        const b3=await botAriPuan(post.text, botZorunluModel);
         const idx=S.posts.findIndex(p=>p.id===post.id);
         if(idx>-1){
           const yeniRatings={...(S.posts[idx].userRatings||{})};
@@ -2298,12 +2339,13 @@ function Profile(){
           durumEl.textContent=`⏳ ${sayac+1}/${tumPostlar.length} değerlendiriliyor...`;
           const r=await scorePoem(post.text, adminSecilenSaglayici);
           const kullanilanModelToplu = groqKota.sonKaynak==='yerel' ? 'yerel' : (groqKota.sonModel||groqKota.sonKaynak);
+          const botZorunluModelToplu = groqKota.sonKaynak==='groq' ? groqKota.sonModel : null;
           await new Promise(res=>setTimeout(res,800));
-          const b1=await botDuyuPuan(post.text);
+          const b1=await botDuyuPuan(post.text, botZorunluModelToplu);
           await new Promise(res=>setTimeout(res,800));
-          const b2=await botKatliPuan(post.text);
+          const b2=await botKatliPuan(post.text, botZorunluModelToplu);
           await new Promise(res=>setTimeout(res,800));
-          const b3=await botAriPuan(post.text);
+          const b3=await botAriPuan(post.text, botZorunluModelToplu);
           const yeniRatings={...(post.userRatings||{})};
           if(b1)yeniRatings[b1.kullanici]=b1.puan;
           if(b2)yeniRatings[b2.kullanici]=b2.puan;
