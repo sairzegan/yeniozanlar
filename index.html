@@ -524,6 +524,27 @@ async function scorePoem(text, saglayici='auto'){
   if(!text||text.trim().length<3)return null;
   if(saglayici==='gemini') return await scorePoemGeminiIle(text);
   if(saglayici==='claude') return await scorePoemClaudeIle(text);
+  // 'groq:model-adi' formatı: admin, Groq kademesindeki belirli bir modeli zorlar
+  // (kademe/cascade devreye girmez, sadece o tek model denenir).
+  if(saglayici && saglayici.startsWith('groq:')){
+    const secilenModel = saglayici.slice(5);
+    try{
+      const result = await scorePoemTekModel(text, secilenModel);
+      groqKota.sonKaynak = 'groq';
+      groqKota.sonModel = secilenModel;
+      groqKota.sonHata = null;
+      groqGunlukArttir(true);
+      return result;
+    } catch(e){
+      console.warn(`Groq (${secilenModel}) başarısız:`, e.message);
+      groqKota.sonKaynak = 'yerel';
+      groqKota.sonModel = null;
+      groqKota.sonHata = e.message;
+      groqGunlukArttir(false);
+      return scorePoemYerel(text);
+    }
+  }
+  // 'auto': mevcut kademe (openai/gpt-oss-120b → llama-3.3-70b-versatile → llama-3.1-8b-instant)
   let sonHataMesaji = null;
   for(const model of GROQ_MODEL_KADEMESI){
     try{
@@ -1700,7 +1721,10 @@ function postCard(post, forceExpand=false, autoOpenComments=false, hedefYorumId=
   if(isAdmin && post.text && post.text.trim().length>10){
     const revalDiv=h('div',{style:{marginBottom:'12px'}});
     const modelSecici=h('select',{class:'inp',style:{marginBottom:'6px',fontSize:'.78rem',padding:'6px',borderRadius:'8px'}},[
-      h('option',{value:'auto'},'🔀 Groq (otomatik kademe)'),
+      h('option',{value:'auto'},'🔀 Groq — otomatik kademe (kota dolarsa sıradakine geçer)'),
+      h('option',{value:'groq:openai/gpt-oss-120b'},'🟢 Groq: openai/gpt-oss-120b'),
+      h('option',{value:'groq:llama-3.3-70b-versatile'},'🟢 Groq: llama-3.3-70b-versatile'),
+      h('option',{value:'groq:llama-3.1-8b-instant'},'🟢 Groq: llama-3.1-8b-instant'),
       h('option',{value:'gemini'},'✨ Google Gemini'),
       h('option',{value:'claude'},'🎭 Anthropic Claude')
     ]);
@@ -2250,7 +2274,10 @@ function Profile(){
     adminPanel.appendChild(kotaDiv);
     const durumEl=h('p',{style:{color:'#6b5b8a',fontSize:'.85rem',marginTop:'10px',fontStyle:'italic'}},'');
     const topluModelSecici=h('select',{class:'inp',style:{marginBottom:'8px',fontSize:'.82rem',padding:'8px',borderRadius:'8px'}},[
-      h('option',{value:'auto'},'🔀 Groq (otomatik kademe)'),
+      h('option',{value:'auto'},'🔀 Groq — otomatik kademe (kota dolarsa sıradakine geçer)'),
+      h('option',{value:'groq:openai/gpt-oss-120b'},'🟢 Groq: openai/gpt-oss-120b'),
+      h('option',{value:'groq:llama-3.3-70b-versatile'},'🟢 Groq: llama-3.3-70b-versatile'),
+      h('option',{value:'groq:llama-3.1-8b-instant'},'🟢 Groq: llama-3.1-8b-instant'),
       h('option',{value:'gemini'},'✨ Google Gemini'),
       h('option',{value:'claude'},'🎭 Anthropic Claude')
     ]);
