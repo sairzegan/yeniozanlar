@@ -452,39 +452,47 @@ async function scorePoemTekModel(text, model){
   }
 }
 
-// ── Gemini ile puanlama (admin tarafından seçildiğinde kullanılır) ─────────
-async function scorePoemGeminiIle(text){
+// ── Gemini çekirdek çağrısı ─────────────────────────────────────────────────
+// Başarısız olursa yerel algoritmaya DÜŞMEZ, hatayı olduğu gibi fırlatır.
+// Böylece hem admin'in doğrudan "gemini" seçimi hem de Groq cascade'inin
+// yedek (fallback) katmanı aynı çekirdeği kullanabilir.
+async function scorePoemGeminiCore(text){
   // Groq'a özel groqKotaGuncelle() burada işe yaramaz (Gemini farklı header'lar döner),
   // ama panelin "Henüz API isteği yapılmadı" yazmaması için bu iki alanı elle güncelliyoruz.
   groqKota.sonGuncelleme = new Date().toLocaleTimeString('tr-TR');
   groqKota.toplamIstek++;
+  const res = await fetch('/api/gemini', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'gemini-2.5-flash',
+      max_tokens: 1024,
+      temperature: 0.7,
+      messages: [
+        { role: 'system', content: AI_SISTEM_PROMPTU },
+        { role: 'user', content: aiKullaniciPromptuOlustur(text) }
+      ]
+    })
+  });
+  if(!res.ok){
+    let mesaj = '';
+    try{ const errBody = await res.json(); mesaj = errBody?.error?.message || ''; }catch(_){}
+    throw new Error(res.status+': '+(mesaj || 'Gemini hatası'));
+  }
+  const data = await res.json();
+  const raw = data.choices?.[0]?.message?.content?.trim();
+  if(!raw) throw new Error('BOS_YANIT: Gemini içerik döndürmedi');
+  let result;
+  try{ result = jsonAyikla(raw); }
+  catch(parseErr){ throw new Error('JSON_HATASI: Gemini geçersiz format döndürdü → "'+raw.slice(0,150)+(raw.length>150?'...':'')+'"'); }
+  groqKota.sonKaynak='gemini'; groqKota.sonModel='gemini-2.5-flash'; groqKota.sonHata=null; groqKota.kotaDolduMu=false;
+  return result;
+}
+
+// ── Gemini ile puanlama (admin panelinden doğrudan seçildiğinde kullanılır) ─
+async function scorePoemGeminiIle(text){
   try{
-    const res = await fetch('/api/gemini', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'gemini-2.5-flash',
-        max_tokens: 1024,
-        temperature: 0.7,
-        messages: [
-          { role: 'system', content: AI_SISTEM_PROMPTU },
-          { role: 'user', content: aiKullaniciPromptuOlustur(text) }
-        ]
-      })
-    });
-    if(!res.ok){
-      let mesaj = '';
-      try{ const errBody = await res.json(); mesaj = errBody?.error?.message || ''; }catch(_){}
-      throw new Error(res.status+': '+(mesaj || 'Gemini hatası'));
-    }
-    const data = await res.json();
-    const raw = data.choices?.[0]?.message?.content?.trim();
-    if(!raw) throw new Error('BOS_YANIT: Gemini içerik döndürmedi');
-    let result;
-    try{ result = jsonAyikla(raw); }
-    catch(parseErr){ throw new Error('JSON_HATASI: Gemini geçersiz format döndürdü → "'+raw.slice(0,150)+(raw.length>150?'...':'')+'"'); }
-    groqKota.sonKaynak='gemini'; groqKota.sonModel='gemini-2.5-flash'; groqKota.sonHata=null; groqKota.kotaDolduMu=false;
-    return result;
+    return await scorePoemGeminiCore(text);
   } catch(e){
     console.warn('Gemini hatası, yerel algoritma kullanılıyor:', e.message);
     groqKota.sonKaynak='yerel'; groqKota.sonHata='Gemini: '+e.message;
@@ -545,12 +553,18 @@ async function scorePoem(text, saglayici='auto'){
       groqGunlukArttir(true);
       return result;
     } catch(e){
-      console.warn(`Groq (${secilenModel}) başarısız:`, e.message);
-      groqKota.sonKaynak = 'yerel';
-      groqKota.sonModel = null;
-      groqKota.sonHata = e.message;
+      console.warn(`Groq (${secilenModel}) başarısız, Gemini yedek olarak deneniyor:`, e.message);
       groqGunlukArttir(false);
-      return scorePoemYerel(text);
+      try{
+        const geminiSonuc = await scorePoemGeminiCore(text);
+        return geminiSonuc;
+      } catch(ge){
+        console.warn('Gemini de başarısız, yerel algoritma kullanılıyor:', ge.message);
+        groqKota.sonKaynak = 'yerel';
+        groqKota.sonModel = null;
+        groqKota.sonHata = `Groq: ${e.message} | Gemini: ${ge.message}`;
+        return scorePoemYerel(text);
+      }
     }
   }
   // 'auto': mevcut kademe (openai/gpt-oss-120b → llama-3.3-70b-versatile → llama-3.1-8b-instant)
@@ -569,12 +583,18 @@ async function scorePoem(text, saglayici='auto'){
       // sıradaki modele geç
     }
   }
-  console.warn('Tüm Groq modelleri başarısız oldu, yerel algoritma kullanılıyor:', sonHataMesaji);
-  groqKota.sonKaynak = 'yerel';
-  groqKota.sonModel = null;
-  groqKota.sonHata = sonHataMesaji;
+  console.warn('Tüm Groq modelleri başarısız oldu, Gemini yedek olarak deneniyor:', sonHataMesaji);
   groqGunlukArttir(false);
-  return scorePoemYerel(text);
+  try{
+    const geminiSonuc = await scorePoemGeminiCore(text);
+    return geminiSonuc;
+  } catch(ge){
+    console.warn('Gemini de başarısız, yerel algoritma kullanılıyor:', ge.message);
+    groqKota.sonKaynak = 'yerel';
+    groqKota.sonModel = null;
+    groqKota.sonHata = `Groq: ${sonHataMesaji} | Gemini: ${ge.message}`;
+    return scorePoemYerel(text);
+  }
 }
 
 function scorePoemYerel(text){
