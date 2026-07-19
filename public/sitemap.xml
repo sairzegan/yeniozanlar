@@ -16,4 +16,8 @@
     <loc>https://yeniozanlar.vercel.app/#profile/</loc>
     <priority>0.8</priority>
   </url>
+  <url>
+    <loc>https://yeniozanlar.vercel.app/#feed/</loc>
+    <priority>0.8</priority>
+  </url>
 </urlset>
