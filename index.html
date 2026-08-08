@@ -4,6 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Yeni Ozanlar 🪶</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght=0,400;0,700;1,400&family=Crimson+Text:ital,wght=0,400;0,600;1,400&display=swap" rel="stylesheet">
   <style>
     *{box-sizing:border-box;margin:0;padding:0}
@@ -37,11 +39,15 @@
     .password-wrapper{position:relative !important;width:100% !important}
     .password-toggle-btn{position:absolute !important;right:12px !important;top:50% !important;transform:translateY(-50%) !important;background:none !important;border:none !important;font-size:1.3rem !important;cursor:pointer !important;color:#a78bfa !important;z-index:100 !important}
   </style>
-  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
+
 </head>
 <body>
-<div id="app"></div>
+<div id="app"><div style="min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#0f0a1a">
+  <div style="font-size:32px">🪶</div>
+  <p style="color:#a78bfa;margin-top:12px;font-style:italic;font-size:1rem;font-family:Georgia,serif">Ozanlar Meclisi Yükleniyor...</p>
+</div></div>
+<script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
 <script>
 // Firebase Ayarları
 const firebaseConfig = {
