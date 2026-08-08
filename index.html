@@ -97,14 +97,18 @@ let S = {
   loading: !(_cacheUsers.length || _cachePosts.length)
 };
 
+const parseDate=d=>{if(!d)return 0;try{const p=d.split(' ');const dmy=p[0].split('.');const hms=p[1]?.split(':');return new Date(dmy[2],dmy[1]-1,dmy[0],hms?.[0]||0,hms?.[1]||0,hms?.[2]||0).getTime();}catch{return 0;}};
+const postSirala = arr => arr.sort((a,b)=>(b.ts||parseDate(b.date))-(a.ts||parseDate(a.date)));
+
 async function verileriYukle() {
   try {
-    // Kullanıcıları ve şiirleri SIRAYLA değil AYNI ANDA (paralel) çekiyoruz.
-    // Önceden her biri ayrı ayrı beklendiği için toplam süre ikisinin toplamı kadardı;
-    // paralel çekince toplam süre ikisinin en yavaşı kadar oluyor (açılış belirgin hızlanır).
-    const [usersSnapshot, postsSnapshot] = await Promise.all([
+    // 1. AŞAMA — HIZLI AÇILIŞ: kullanıcıları ve yalnızca EN YENİ ~30 şiiri çekiyoruz.
+    // Önceden TÜM şiirler (içlerindeki tüm resimlerle birlikte) her açılışta tek seferde
+    // indiriliyordu; paylaşım sayısı arttıkça bu süre giderek uzuyordu. Artık akış,
+    // en güncel içerikle saniyeler içinde doluyor; eski şiirler arka planda gelir.
+    const [usersSnapshot, sonPostsSnapshot] = await Promise.all([
       db.collection("users").get().catch(() => ({ docs: [] })),
-      db.collection("posts").get().catch(() => ({ docs: [] }))
+      db.collection("posts").orderBy("ts","desc").limit(30).get().catch(() => null)
     ]);
 
     S.users = usersSnapshot.docs.length ? usersSnapshot.docs.map(doc => doc.data()) : [];
@@ -112,24 +116,11 @@ async function verileriYukle() {
     if (!S.users.find(u => u.username === ADMIN_USERNAME)) {
       S.users.push(adminProfileObj);
     }
-
-    const tumPostlar = postsSnapshot.docs.length ? postsSnapshot.docs.map(doc => doc.data()) : [];
-    const parseDate=d=>{if(!d)return 0;try{const p=d.split(' ');const dmy=p[0].split('.');const hms=p[1]?.split(':');return new Date(dmy[2],dmy[1]-1,dmy[0],hms?.[0]||0,hms?.[1]||0,hms?.[2]||0).getTime();}catch{return 0;}};
-    S.posts = tumPostlar.sort((a,b)=>(b.ts||parseDate(b.date))-(a.ts||parseDate(a.date)));
     lsSet('yo_users', S.users);
-    lsSet('yo_posts', S.posts);
 
-    // Mesajları ve bildirimleri de paralel çekiyoruz.
-    if(S.me) {
-      const [msgsSnapshot, notifsSnapshot] = await Promise.all([
-        db.collection("msgs").get().catch(() => ({ docs: [] })),
-        db.collection("notifs").where("toId","==",S.me.id).get().catch(() => ({ docs: [] }))
-      ]);
-      S.msgs = msgsSnapshot.docs.length ? msgsSnapshot.docs.map(doc => doc.data()) : [];
-      lsSet('yo_msgs', S.msgs);
-
-      S.notifs = notifsSnapshot.docs.length ? notifsSnapshot.docs.map(doc => doc.data()).sort((a,b)=>b.date.localeCompare(a.date)) : [];
-      lsSet('yo_notifs', S.notifs);
+    if (sonPostsSnapshot && sonPostsSnapshot.docs.length) {
+      S.posts = postSirala(sonPostsSnapshot.docs.map(doc => doc.data()));
+      lsSet('yo_posts', S.posts);
     }
 
     if (S.me && S.me.username === ADMIN_USERNAME) {
@@ -154,6 +145,38 @@ async function verileriYukle() {
     history.replaceState({screen:S.screen, profileId:S.profileId, postId:S.postId}, '', '#'+S.screen);
     render();
     bildirimDinleyiciBaslat();
+    // 2. AŞAMA — kullanıcı akışı görmeye başladıktan SONRA, arka planda geri kalan
+    // (eski) şiirleri, mesajları ve bildirimleri sessizce tamamlıyoruz. Bu aşama
+    // sıralama/keşfet gibi TÜM şiirlere ihtiyaç duyan ekranların doğruluğu içindir.
+    tumVeriyiArkaplandaTamamla();
+  }
+}
+
+async function tumVeriyiArkaplandaTamamla(){
+  try {
+    const [postsSnapshot, msgsSnapshot, notifsSnapshot] = await Promise.all([
+      db.collection("posts").get().catch(() => ({ docs: [] })),
+      S.me ? db.collection("msgs").get().catch(() => ({ docs: [] })) : Promise.resolve(null),
+      S.me ? db.collection("notifs").where("toId","==",S.me.id).get().catch(() => ({ docs: [] })) : Promise.resolve(null)
+    ]);
+
+    const tumPostlar = postsSnapshot.docs.length ? postsSnapshot.docs.map(doc => doc.data()) : [];
+    if(tumPostlar.length){
+      S.posts = postSirala(tumPostlar);
+      lsSet('yo_posts', S.posts);
+    }
+
+    if(msgsSnapshot){
+      S.msgs = msgsSnapshot.docs.length ? msgsSnapshot.docs.map(doc => doc.data()) : [];
+      lsSet('yo_msgs', S.msgs);
+    }
+    if(notifsSnapshot){
+      S.notifs = notifsSnapshot.docs.length ? notifsSnapshot.docs.map(doc => doc.data()).sort((a,b)=>b.date.localeCompare(a.date)) : [];
+      lsSet('yo_notifs', S.notifs);
+    }
+    render();
+  } catch(error) {
+    console.log("Arkaplan senkron hatası:", error);
   }
 }
 
