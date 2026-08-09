@@ -190,8 +190,8 @@ async function verileriYukle() {
     // Bundan sonraki her go() çağrısı bunun üzerine "ileri" doğru geçmiş kaydı ekler,
     // böylece geri tuşu bu ekrana (anasayfaya değil, gerçek önceki duruma) döner.
     {
-      const baslangicHash = (S.screen==='postdetail' && S.postId) ? '/#postdetail-'+S.postId : '/#'+S.screen;
-      history.replaceState({screen:S.screen, profileId:S.profileId, postId:S.postId}, '', baslangicHash);
+      const baslangicYolu = (S.screen==='postdetail' && S.postId) ? postYolu(S.postId) : '/#'+S.screen;
+      history.replaceState({screen:S.screen, profileId:S.profileId, postId:S.postId}, '', baslangicYolu);
     }
     render();
     bildirimDinleyiciBaslat();
@@ -277,15 +277,21 @@ function slugOlustur(metin){
   return s || 'siir';
 }
 
-// Bir şiirin paylaşım linkini üretir. Link artık ...vercel.app/post/{baslik-slug}-{id}
-// biçiminde: uzantı (path'in son parçası) doğrudan şiirin başlığından türetiliyor,
-// sondaki {id} ise linkin her zaman tek/geçerli bir şiiri gösterebilmesi için eklenen
-// (aynı başlıklı iki şiirin linklerinin çakışmaması için gerekli) teknik bir ektir.
-function paylasimLinki(postId){
+// Bir şiirin, "/post/{baslik-slug}-{id}" biçimindeki yolunu (path) üretir — bu yol hem
+// paylaşım linkinde hem de tarayıcının adres çubuğunda (uygulama içi gezinirken) kullanılır.
+// Uzantı (path'in son parçası) doğrudan şiirin başlığından türetiliyor; sondaki {id} ise
+// linkin her zaman tek/geçerli bir şiiri gösterebilmesi için eklenen (aynı başlıklı iki
+// şiirin linklerinin çakışmaması için gerekli) teknik bir ektir.
+function postYolu(postId){
   const post = (S.posts||[]).find(p=>p.id===postId);
   const baslikKaynagi = post ? (post.title || post.text || '') : '';
   const slug = slugOlustur(baslikKaynagi);
-  return PAYLASIM_SUNUCUSU + '/post/' + slug + '-' + postId;
+  return '/post/' + slug + '-' + postId;
+}
+
+// Bir şiirin, başka sitelerde paylaşılabilecek TAM linkini üretir (domain dahil).
+function paylasimLinki(postId){
+  return PAYLASIM_SUNUCUSU + postYolu(postId);
 }
 
 // Küçük, kendiliğinden kaybolan bir bildirim balonu gösterir (ör. "Link kopyalandı").
@@ -1241,8 +1247,8 @@ function go(screen,extra={}){
   S.profileId = 'profileId' in extra ? extra.profileId : null;
   S.postId = 'postId' in extra ? extra.postId : null;
   render();
-  const hash = (screen==='postdetail' && S.postId) ? '#postdetail-'+S.postId : '#'+screen;
-  history.pushState({screen:S.screen, profileId:S.profileId, postId:S.postId}, '', hash);
+  const yol = (screen==='postdetail' && S.postId) ? postYolu(S.postId) : '#'+screen;
+  history.pushState({screen:S.screen, profileId:S.profileId, postId:S.postId}, '', yol);
 }
 window.addEventListener('popstate', (e)=>{
   const st = e.state;
