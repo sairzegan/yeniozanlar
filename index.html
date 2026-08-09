@@ -113,16 +113,22 @@ let S = {
 };
 
 // Paylaşım linkiyle gelindiyse, uygulama açılır açılmaz doğrudan o şiirin
-// sayfasına gider. İki format da desteklenir:
-//  - /post/ID   → yeni, paylaşılan (sunucu tarafından da görülebilen) format
-//  - #postdetail-ID → uygulama içi gezinmede kullanılan eski/dahili format
+// sayfasına gider. Üç format da desteklenir:
+//  - /post/baslik-slug-ID → yeni, başlık uzantılı paylaşım formatı (bkz. paylasimLinki())
+//  - /post/ID             → eski paylaşım formatı (geçmişte paylaşılmış linkler kırılmasın diye)
+//  - #postdetail-ID       → uygulama içi gezinmede kullanılan eski/dahili format
+// ID'nin kendisi (uid()) yalnızca rakam/küçük harften oluşur, tire içermez; bu yüzden
+// "slug-ID" birleşiminde gerçek ID, son "-" işaretinden sonraki kısımdır.
 (function(){
   const yolEslesme = location.pathname.match(/^\/post\/([^/]+)/);
   const hashEslesme = location.hash.match(/^#postdetail-(.+)$/);
-  const id = yolEslesme ? yolEslesme[1] : (hashEslesme ? hashEslesme[1] : null);
+  let id = yolEslesme ? yolEslesme[1] : (hashEslesme ? hashEslesme[1] : null);
   if(id){
+    id = decodeURIComponent(id);
+    const sonTireIndex = id.lastIndexOf('-');
+    if(sonTireIndex !== -1) id = id.slice(sonTireIndex + 1);
     S.screen = 'postdetail';
-    S.postId = decodeURIComponent(id);
+    S.postId = id;
   }
 })();
 
@@ -257,8 +263,29 @@ function lsSet(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch{}}
 // projenizin ana sayfasında bu adresi göreceksiniz.
 const PAYLASIM_SUNUCUSU = "https://yeniozanlar.vercel.app";
 
+// Bir metni, linklerde kullanılabilecek sade bir "slug"a çevirir:
+// Türkçe karakterleri sadeleştirir, küçük harfe çevirir, boşlukları tire yapar,
+// izin verilmeyen karakterleri temizler. Örn: "Güneş Batarken!" -> "gunes-batarken"
+function slugOlustur(metin){
+  const trMap = {'ç':'c','Ç':'c','ğ':'g','Ğ':'g','ı':'i','İ':'i','ö':'o','Ö':'o','ş':'s','Ş':'s','ü':'u','Ü':'u'};
+  let s = (metin||'').toString().trim();
+  s = s.replace(/[çÇğĞıİöÖşŞüÜ]/g, ch => trMap[ch]);
+  s = s.toLowerCase();
+  s = s.replace(/[^a-z0-9\s-]/g,'');
+  s = s.trim().replace(/\s+/g,'-').replace(/-+/g,'-').replace(/^-+|-+$/g,'');
+  if(s.length>60) s = s.slice(0,60).replace(/-+$/,'');
+  return s || 'siir';
+}
+
+// Bir şiirin paylaşım linkini üretir. Link artık ...vercel.app/post/{baslik-slug}-{id}
+// biçiminde: uzantı (path'in son parçası) doğrudan şiirin başlığından türetiliyor,
+// sondaki {id} ise linkin her zaman tek/geçerli bir şiiri gösterebilmesi için eklenen
+// (aynı başlıklı iki şiirin linklerinin çakışmaması için gerekli) teknik bir ektir.
 function paylasimLinki(postId){
-  return PAYLASIM_SUNUCUSU + '/api/postPreview?id=' + postId;
+  const post = (S.posts||[]).find(p=>p.id===postId);
+  const baslikKaynagi = post ? (post.title || post.text || '') : '';
+  const slug = slugOlustur(baslikKaynagi);
+  return PAYLASIM_SUNUCUSU + '/post/' + slug + '-' + postId;
 }
 
 // Küçük, kendiliğinden kaybolan bir bildirim balonu gösterir (ör. "Link kopyalandı").
