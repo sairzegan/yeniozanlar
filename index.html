@@ -247,13 +247,18 @@ function lsGet(k,d){try{const v=localStorage.getItem(k);return v?JSON.parse(v):d
 function lsSet(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch{}}
 
 // Bir şiirin, başka sitelerde/uygulamalarda paylaşılabilecek özel linkini üretir.
-// KASITLI OLARAK yol (path) tabanlı: "/post/ID" — "#postdetail-ID" değil.
-// Çünkü '#' ile başlayan kısım TARAYICI DIŞINA (sunucuya) hiç gönderilmez; Facebook,
-// WhatsApp gibi sitelerin önizleme botları onu asla göremez. "/post/ID" ise gerçek
-// bir sunucu isteğidir — önizleme (başlık/görsel) üretebilmemiz ancak bu sayede
-// mümkün olur (bkz. functions/index.js).
+// Facebook/WhatsApp gibi sitelerin önizleme botları JavaScript çalıştırmaz; bu
+// yüzden şiirin başlığını/görselini görebilmeleri için bu link, Vercel'de
+// yayınladığınız küçük bir fonksiyona (api/postPreview.js) gider. O fonksiyon,
+// bot ise önizleme kartı üretir, gerçek kullanıcıysa doğrudan uygulamaya yönlendirir.
+//
+// ⚠️ AŞAĞIDAKİ ADRESİ, Vercel size verdiği kendi adresinizle DEĞİŞTİRİN
+// (örn. "https://yeniozanlar.vercel.app"). Vercel'e deploy ettikten sonra
+// projenizin ana sayfasında bu adresi göreceksiniz.
+const PAYLASIM_SUNUCUSU = "https://yeniozanlar.vercel.app";
+
 function paylasimLinki(postId){
-  return location.origin + '/post/' + postId;
+  return PAYLASIM_SUNUCUSU + '/api/postPreview?id=' + postId;
 }
 
 // Küçük, kendiliğinden kaybolan bir bildirim balonu gösterir (ör. "Link kopyalandı").
