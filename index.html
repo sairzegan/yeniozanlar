@@ -4,6 +4,21 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Yeni Ozanlar 🪶</title>
+
+  <!-- Varsayılan paylaşım kartı (Facebook/WhatsApp/Twitter/Discord vb.) —
+       bir şiire özel önizleme için bkz. functions/index.js ve DEPLOY_TALIMATLARI.md.
+       Bu etiketler, o Cloud Function devreye alınana kadar TÜM linkler için (site
+       linki dahil) gösterilecek genel/varsayılan kart bilgisidir. -->
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Yeni Ozanlar">
+  <meta property="og:title" content="Yeni Ozanlar 🪶">
+  <meta property="og:description" content="Şiirlerini paylaş, oku, puanla.">
+  <meta property="og:image" content="https://yeniozanlar-68b49.web.app/og-image.png">
+  <meta property="og:url" content="https://yeniozanlar-68b49.web.app/">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Yeni Ozanlar 🪶">
+  <meta name="twitter:description" content="Şiirlerini paylaş, oku, puanla.">
+  <meta name="twitter:image" content="https://yeniozanlar-68b49.web.app/og-image.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght=0,400;0,700;1,400&family=Crimson+Text:ital,wght=0,400;0,600;1,400&display=swap" rel="stylesheet">
@@ -97,13 +112,17 @@ let S = {
   loading: !(_cacheUsers.length || _cachePosts.length)
 };
 
-// Paylaşım linkiyle (#postdetail-POSTID) gelindiyse, uygulama açılır açılmaz
-// doğrudan o şiirin sayfasına gider (bkz. paylasimLinki() ve linkiKopyala()).
+// Paylaşım linkiyle gelindiyse, uygulama açılır açılmaz doğrudan o şiirin
+// sayfasına gider. İki format da desteklenir:
+//  - /post/ID   → yeni, paylaşılan (sunucu tarafından da görülebilen) format
+//  - #postdetail-ID → uygulama içi gezinmede kullanılan eski/dahili format
 (function(){
-  const eslesme = location.hash.match(/^#postdetail-(.+)$/);
-  if(eslesme){
+  const yolEslesme = location.pathname.match(/^\/post\/([^/]+)/);
+  const hashEslesme = location.hash.match(/^#postdetail-(.+)$/);
+  const id = yolEslesme ? yolEslesme[1] : (hashEslesme ? hashEslesme[1] : null);
+  if(id){
     S.screen = 'postdetail';
-    S.postId = decodeURIComponent(eslesme[1]);
+    S.postId = decodeURIComponent(id);
   }
 })();
 
@@ -165,7 +184,7 @@ async function verileriYukle() {
     // Bundan sonraki her go() çağrısı bunun üzerine "ileri" doğru geçmiş kaydı ekler,
     // böylece geri tuşu bu ekrana (anasayfaya değil, gerçek önceki duruma) döner.
     {
-      const baslangicHash = (S.screen==='postdetail' && S.postId) ? '#postdetail-'+S.postId : '#'+S.screen;
+      const baslangicHash = (S.screen==='postdetail' && S.postId) ? '/#postdetail-'+S.postId : '/#'+S.screen;
       history.replaceState({screen:S.screen, profileId:S.profileId, postId:S.postId}, '', baslangicHash);
     }
     render();
@@ -228,10 +247,13 @@ function lsGet(k,d){try{const v=localStorage.getItem(k);return v?JSON.parse(v):d
 function lsSet(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch{}}
 
 // Bir şiirin, başka sitelerde/uygulamalarda paylaşılabilecek özel linkini üretir.
-// Bu linki açan kişi, doğrudan o şiirin sayfasına düşer (bkz. dosya sonundaki
-// "paylaşım linki ile açılış" kontrolü).
+// KASITLI OLARAK yol (path) tabanlı: "/post/ID" — "#postdetail-ID" değil.
+// Çünkü '#' ile başlayan kısım TARAYICI DIŞINA (sunucuya) hiç gönderilmez; Facebook,
+// WhatsApp gibi sitelerin önizleme botları onu asla göremez. "/post/ID" ise gerçek
+// bir sunucu isteğidir — önizleme (başlık/görsel) üretebilmemiz ancak bu sayede
+// mümkün olur (bkz. functions/index.js).
 function paylasimLinki(postId){
-  return location.origin + location.pathname + '#postdetail-' + postId;
+  return location.origin + '/post/' + postId;
 }
 
 // Küçük, kendiliğinden kaybolan bir bildirim balonu gösterir (ör. "Link kopyalandı").
