@@ -294,6 +294,21 @@ function paylasimLinki(postId){
   return PAYLASIM_SUNUCUSU + postYolu(postId);
 }
 
+// Şiir paylaşıldığında/düzenlendiğinde, Facebook'un o linke ait önizleme önbelleğini
+// arka planda otomatik tazeler (bkz. api/facebookScrape.js). Böylece kimse Facebook
+// Sharing Debugger'a girip elle "Scrape Again" yapmak zorunda kalmaz; ilk paylaşımdan
+// itibaren doğru başlık/görsel görünür. Hata olursa (ör. henüz FB_APP_ID/SECRET
+// tanımlanmadıysa) sessizce yutulur — paylaşım akışını asla engellemez.
+function facebookOnizlemeyiTazele(postId){
+  try{
+    fetch('/api/facebookScrape', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ url: paylasimLinki(postId) })
+    }).catch(()=>{});
+  }catch{}
+}
+
 // Küçük, kendiliğinden kaybolan bir bildirim balonu gösterir (ör. "Link kopyalandı").
 function toastGoster(mesaj){
   const eski=document.getElementById('yo-toast');
@@ -1545,6 +1560,7 @@ A.addPost = async function(pd){
       }
     }
     db.collection("posts").doc(np.id).set(np).catch(err=>console.error("Kaydetme hatası:",err));
+    facebookOnizlemeyiTazele(np.id);
 
     // Takipçilere yeni paylaşım bildirimi gönder
     const takipciler = Object.keys(S.follows).filter(uid => (S.follows[uid]||[]).includes(S.me.id));
@@ -1574,6 +1590,7 @@ A.editPost = function(pid, updates){
     save();
     refreshCard(pid);
     db.collection("posts").doc(pid).update({...updates, edited:true}).catch(err=>console.error("Düzenleme hatası:",err));
+    facebookOnizlemeyiTazele(pid);
 };
 // tur: 'like' | 'dislike' | 'heart'. like/dislike birbirini dışlar (biri seçilince öteki kalkar),
 // kalp bunlardan bağımsızdır. Aynı butona tekrar basmak tepkiyi kaldırır (toggle).
