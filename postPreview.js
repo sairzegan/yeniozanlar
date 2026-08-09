@@ -1,102 +1,92 @@
 // api/postPreview.js
 //
-// Vercel bu dosyayı OTOMATİK olarak şu adreste yayınlar:
-//   https://SIZIN-PROJENIZ.vercel.app/api/postPreview?id=ŞİİR_ID
+// /post/{baslik-slug}-{id} adresine bir istek geldiğinde (vercel.json'daki rewrite
+// sayesinde) bu fonksiyon çalışır. Facebook/WhatsApp/Twitter/Discord gibi platformların
+// önizleme botları JavaScript ÇALIŞTIRMAZ; bu yüzden şiire özel başlık, kısaltılmış metin
+// ve varsa görseli, sayfanın <head> kısmındaki <meta og:...> etiketlerine gömerek,
+// normal uygulamanın (index.html) HTML'i içinde döndürüyoruz.
 //
-// Hiçbir ek kurulum/kütüphane gerekmez — Firestore'a düz bir HTTP isteğiyle (REST API)
-// bağlanır. Bir bot (Facebook/WhatsApp/Twitter önizleme botu) geldiğinde şiirin
-// başlığını/bir bölümünü/görselini gösteren bir kart üretir. Gerçek ziyaretçiyi ise
-// doğrudan uygulamaya yönlendirir.
+// Gerçek kullanıcılar için de dönen HTML birebir aynı uygulamadır — tek fark meta
+// etiketlerinin artık o şiire özel olmasıdır. JS her zamanki gibi devreye girip
+// (index.html'deki yönlendirme kodu) doğru şiiri açar; kullanıcı hiçbir fark görmez.
 
-// ⚠️ Bu iki değeri kendi projenize göre değiştirin gerekirse:
-const SITE_URL = "https://yeniozanlar-68b49.web.app"; // sitenizin gerçek adresi
-const PROJECT_ID = "yeniozanlar-68b49"; // Firebase proje ID'niz
-const API_KEY = "AIzaSyC6sshBjUU7xZf_KgjwW2yWuvE1ZG9oZWY"; // zaten uygulamanızda (client'ta) herkese açık olan aynı anahtar
+const FIREBASE_PROJECT_ID = "yeniozanlar-68b49";
+const VARSAYILAN_GORSEL = "https://yeniozanlar-68b49.web.app/og-image.png";
 
-const BOT_UA_REGEX = /facebookexternalhit|Facebot|Twitterbot|Slackbot|LinkedInBot|WhatsApp|TelegramBot|Discordbot|Googlebot|Pinterest|redditbot|SkypeUriPreview|vkShare|Applebot/i;
+// Şiirin metnini önizleme kartına sığacak kısalıkta, kelime ortasından kesmeden kırpar.
+function metniKisalt(metin, uzunluk = 160) {
+  if (!metin) return "Şiirlerini paylaş, oku, puanla.";
+  const temiz = metin.replace(/\s+/g, ' ').trim();
+  if (temiz.length <= uzunluk) return temiz;
+  const kirpilmis = temiz.slice(0, uzunluk);
+  const sonBosluk = kirpilmis.lastIndexOf(' ');
+  return (sonBosluk > 0 ? kirpilmis.slice(0, sonBosluk) : kirpilmis).trim() + '…';
+}
 
-function escapeHtml(str) {
-  return String(str || "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
+function htmlKac(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// Firestore REST API'sinden tek bir şiiri (id ile) çeker. Koleksiyon herkese açık
+// okunabilir olduğu için (uygulama zaten client tarafında aynı şekilde okuyor) ayrı
+// bir kimlik doğrulamaya gerek yok.
+async function postGetir(id) {
+  const url = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/posts/${encodeURIComponent(id)}`;
+  const res = await fetch(url);
+  if (!res.ok) return null;
+  const data = await res.json();
+  const f = data.fields || {};
+  return {
+    id,
+    title: f.title?.stringValue || '',
+    text: f.text?.stringValue || '',
+    image: f.image?.stringValue || '',
+  };
 }
 
 module.exports = async (req, res) => {
-  const postId = req.query.id;
-  const ua = req.headers["user-agent"] || "";
-  const isBot = BOT_UA_REGEX.test(ua);
+  const baseUrl = `https://${req.headers.host}`;
 
-  if (!postId) {
-    res.writeHead(302, { Location: SITE_URL });
-    return res.end();
-  }
-
-  // GERÇEK KULLANICI: doğrudan uygulamaya (ilgili şiire) yönlendir.
-  if (!isBot) {
-    res.writeHead(302, { Location: `${SITE_URL}/#postdetail-${encodeURIComponent(postId)}` });
-    return res.end();
-  }
-
-  // BOT: şiiri Firestore REST API'siyle oku, önizleme HTML'i üret.
   try {
-    const firestoreUrl = `https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents/posts/${encodeURIComponent(postId)}?key=${API_KEY}`;
-    const r = await fetch(firestoreUrl);
-    if (!r.ok) {
-      res.writeHead(302, { Location: SITE_URL });
-      return res.end();
-    }
-    const data = await r.json();
-    const fields = data.fields || {};
+    // vercel.json, /post/:slug isteklerini buraya /api/postPreview?slug=:slug olarak yönlendiriyor.
+    const slug = (req.query.slug || '').toString();
+    const id = slug.includes('-') ? slug.slice(slug.lastIndexOf('-') + 1) : slug;
+    const post = id ? await postGetir(id) : null;
 
-    const postTitle = fields.title?.stringValue || "";
-    const postText = fields.text?.stringValue || "";
-    const postImage = fields.image?.stringValue || "";
+    // Uygulamanın kendi index.html'ini aynı deploy üzerinden çekip, sadece meta
+    // etiketlerini şiire özel bilgiyle değiştiriyoruz. Böylece uygulamanın geri kalanı
+    // (Firebase config, tüm ekranlar, JS) elle kopyalanmadan/bozulmadan aynen kalır.
+    const htmlRes = await fetch(`${baseUrl}/index.html`);
+    let html = await htmlRes.text();
 
-    const baslik = postTitle ? `"${postTitle}" — Yeni Ozanlar` : "Yeni Ozanlar'da bir şiir";
-    const hamMetin = postText.replace(/\s+/g, " ").trim();
-    const aciklama = hamMetin.length > 160
-      ? hamMetin.slice(0, 157) + "…"
-      : (hamMetin || "Yeni Ozanlar'da paylaşılan bir şiir.");
+    const baslik = post && post.title ? `"${post.title}" — Yeni Ozanlar 🪶` : 'Yeni Ozanlar 🪶';
+    const aciklama = post ? metniKisalt(post.text) : 'Şiirlerini paylaş, oku, puanla.';
+    const gorsel = post && post.image ? post.image : VARSAYILAN_GORSEL;
+    const sayfaUrl = `${baseUrl}/post/${slug}`;
 
-    // Resim base64 (data:image/...;base64,...) olduğu için og:image için gerçek bir
-    // HTTP adresine çeviren postImage fonksiyonuna yönlendiriyoruz.
-    const tabanAdres = `https://${req.headers.host}`;
-    const gorsel = postImage
-      ? `${tabanAdres}/api/postImage?id=${encodeURIComponent(postId)}`
-      : `${SITE_URL}/og-image.png`;
+    html = html
+      .replace(/<meta property="og:title" content="[^"]*">/, `<meta property="og:title" content="${htmlKac(baslik)}">`)
+      .replace(/<meta property="og:description" content="[^"]*">/, `<meta property="og:description" content="${htmlKac(aciklama)}">`)
+      .replace(/<meta property="og:image" content="[^"]*">/, `<meta property="og:image" content="${htmlKac(gorsel)}">`)
+      .replace(/<meta property="og:url" content="[^"]*">/, `<meta property="og:url" content="${htmlKac(sayfaUrl)}">`)
+      .replace(/<meta name="twitter:title" content="[^"]*">/, `<meta name="twitter:title" content="${htmlKac(baslik)}">`)
+      .replace(/<meta name="twitter:description" content="[^"]*">/, `<meta name="twitter:description" content="${htmlKac(aciklama)}">`)
+      .replace(/<meta name="twitter:image" content="[^"]*">/, `<meta name="twitter:image" content="${htmlKac(gorsel)}">`);
 
-    const uygulamaLinki = `${SITE_URL}/#postdetail-${encodeURIComponent(postId)}`;
-
-    const html = `<!DOCTYPE html>
-<html lang="tr">
-<head>
-<meta charset="UTF-8">
-<title>${escapeHtml(baslik)}</title>
-<meta property="og:type" content="article">
-<meta property="og:site_name" content="Yeni Ozanlar">
-<meta property="og:title" content="${escapeHtml(baslik)}">
-<meta property="og:description" content="${escapeHtml(aciklama)}">
-<meta property="og:image" content="${escapeHtml(gorsel)}">
-<meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="${escapeHtml(baslik)}">
-<meta name="twitter:description" content="${escapeHtml(aciklama)}">
-<meta name="twitter:image" content="${escapeHtml(gorsel)}">
-<meta http-equiv="refresh" content="0; url=${escapeHtml(uygulamaLinki)}">
-</head>
-<body>
-<p>Yönlendiriliyor… <a href="${escapeHtml(uygulamaLinki)}">Şiiri görüntülemek için tıklayın</a></p>
-</body>
-</html>`;
-
-    res.setHeader("Content-Type", "text/html; charset=utf-8");
-    res.setHeader("Cache-Control", "public, max-age=300, s-maxage=600");
-    return res.status(200).send(html);
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    // Kısa bir CDN cache: her paylaşım isteğinde Firestore'a gitmesin, ama şiir
+    // güncellenirse de 5 dakika içinde önizleme tazelensin.
+    res.setHeader('Cache-Control', 's-maxage=300, stale-while-revalidate=600');
+    res.status(200).send(html);
   } catch (err) {
-    console.error("postPreview hata:", err);
-    res.writeHead(302, { Location: SITE_URL });
-    return res.end();
+    console.error('postPreview hatası:', err);
+    // Bir şeyler ters giderse en azından uygulamanın normal açılmasını sağla.
+    try {
+      const htmlRes = await fetch(`${baseUrl}/index.html`);
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.status(200).send(await htmlRes.text());
+    } catch {
+      res.status(500).send('Bir hata oluştu.');
+    }
   }
 };
