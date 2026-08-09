@@ -11,6 +11,17 @@
     }
   ],
   "rewrites": [
-    { "source": "/post/(.*)", "destination": "/index.html" }
+    {
+      "source": "/post/:slug",
+      "has": [
+        {
+          "type": "header",
+          "key": "user-agent",
+          "value": "(?i).*(facebookexternalhit|facebot|twitterbot|slackbot|whatsapp|linkedinbot|telegrambot|discordbot|googlebot|pinterest|redditbot|vkshare|w3c_validator|skypeuripreview).*"
+        }
+      ],
+      "destination": "/api/postPreview?slug=:slug"
+    },
+    { "source": "/post/:slug", "destination": "/index.html" }
   ]
 }
