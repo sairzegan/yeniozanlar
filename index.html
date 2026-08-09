@@ -97,6 +97,16 @@ let S = {
   loading: !(_cacheUsers.length || _cachePosts.length)
 };
 
+// Paylaşım linkiyle (#postdetail-POSTID) gelindiyse, uygulama açılır açılmaz
+// doğrudan o şiirin sayfasına gider (bkz. paylasimLinki() ve linkiKopyala()).
+(function(){
+  const eslesme = location.hash.match(/^#postdetail-(.+)$/);
+  if(eslesme){
+    S.screen = 'postdetail';
+    S.postId = decodeURIComponent(eslesme[1]);
+  }
+})();
+
 const parseDate=d=>{if(!d)return 0;try{const p=d.split(' ');const dmy=p[0].split('.');const hms=p[1]?.split(':');return new Date(dmy[2],dmy[1]-1,dmy[0],hms?.[0]||0,hms?.[1]||0,hms?.[2]||0).getTime();}catch{return 0;}};
 const postSirala = arr => arr.sort((a,b)=>(b.ts||parseDate(b.date))-(a.ts||parseDate(a.date)));
 
@@ -123,6 +133,18 @@ async function verileriYukle() {
       lsSet('yo_posts', S.posts);
     }
 
+    // Paylaşım linkiyle açılan şiir, en yeni 30 şiir arasında değilse
+    // (örn. eski bir şiirse) onu doğrudan ID'siyle tekil olarak çekiyoruz.
+    if (S.postId && !S.posts.find(p => p.id === S.postId)) {
+      try {
+        const dogPost = await db.collection("posts").doc(S.postId).get();
+        if (dogPost.exists) {
+          S.posts = postSirala([...S.posts, dogPost.data()]);
+          lsSet('yo_posts', S.posts);
+        }
+      } catch {}
+    }
+
     if (S.me && S.me.username === ADMIN_USERNAME) {
       S.me = adminProfileObj;
     } else if (S.me && S.users.length) {
@@ -142,7 +164,10 @@ async function verileriYukle() {
     // Uygulamanın başladığı ekranı tarayıcı geçmişine temel (baseline) olarak yaz.
     // Bundan sonraki her go() çağrısı bunun üzerine "ileri" doğru geçmiş kaydı ekler,
     // böylece geri tuşu bu ekrana (anasayfaya değil, gerçek önceki duruma) döner.
-    history.replaceState({screen:S.screen, profileId:S.profileId, postId:S.postId}, '', '#'+S.screen);
+    {
+      const baslangicHash = (S.screen==='postdetail' && S.postId) ? '#postdetail-'+S.postId : '#'+S.screen;
+      history.replaceState({screen:S.screen, profileId:S.profileId, postId:S.postId}, '', baslangicHash);
+    }
     render();
     bildirimDinleyiciBaslat();
     // 2. AŞAMA — kullanıcı akışı görmeye başladıktan SONRA, arka planda geri kalan
@@ -201,6 +226,44 @@ const now=()=>new Date().toLocaleString('tr-TR');
 const ytId=url=>{const m=url?.match(/(?:youtu\.be\/|v=|embed\/)([A-Za-z0-9_-]{11})/);return m?m[1]:null};
 function lsGet(k,d){try{const v=localStorage.getItem(k);return v?JSON.parse(v):d}catch{return d}}
 function lsSet(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch{}}
+
+// Bir şiirin, başka sitelerde/uygulamalarda paylaşılabilecek özel linkini üretir.
+// Bu linki açan kişi, doğrudan o şiirin sayfasına düşer (bkz. dosya sonundaki
+// "paylaşım linki ile açılış" kontrolü).
+function paylasimLinki(postId){
+  return location.origin + location.pathname + '#postdetail-' + postId;
+}
+
+// Küçük, kendiliğinden kaybolan bir bildirim balonu gösterir (ör. "Link kopyalandı").
+function toastGoster(mesaj){
+  const eski=document.getElementById('yo-toast');
+  if(eski) eski.remove();
+  const t=h('div',{id:'yo-toast',style:{position:'fixed',bottom:'24px',left:'50%',transform:'translateX(-50%)',background:'linear-gradient(135deg,#2d1060,#1e0a3e)',border:'1px solid #7c3aed',color:'#e9d5ff',padding:'10px 18px',borderRadius:'999px',fontSize:'.85rem',zIndex:'9999',boxShadow:'0 4px 20px rgba(0,0,0,.4)',opacity:'0',transition:'opacity .25s'}},mesaj);
+  document.body.appendChild(t);
+  requestAnimationFrame(()=>{t.style.opacity='1';});
+  setTimeout(()=>{t.style.opacity='0';setTimeout(()=>t.remove(),300);},2200);
+}
+
+// Şiirin linkini panoya kopyalar (modern tarayıcılarda navigator.clipboard,
+// desteklenmiyorsa eski yöntemle geçici bir <textarea> üzerinden kopyalar).
+async function linkiKopyala(postId){
+  const link=paylasimLinki(postId);
+  try{
+    if(navigator.clipboard && window.isSecureContext){
+      await navigator.clipboard.writeText(link);
+    } else {
+      const ta=document.createElement('textarea');
+      ta.value=link;ta.style.position='fixed';ta.style.opacity='0';
+      document.body.appendChild(ta);ta.select();
+      document.execCommand('copy');
+      ta.remove();
+    }
+    toastGoster('🔗 Şiirin linki kopyalandı!');
+  }catch{
+    toastGoster('Link kopyalanamadı, tarayıcı izin vermedi.');
+  }
+}
+
 // Bot kullanıcı ID'leri
 const BOT_IDS = ['bot_duyu_yorum','bot_katli_yorum','bot_ari_yorum'];
 
@@ -1124,7 +1187,8 @@ function go(screen,extra={}){
   S.profileId = 'profileId' in extra ? extra.profileId : null;
   S.postId = 'postId' in extra ? extra.postId : null;
   render();
-  history.pushState({screen:S.screen, profileId:S.profileId, postId:S.postId}, '', '#'+screen);
+  const hash = (screen==='postdetail' && S.postId) ? '#postdetail-'+S.postId : '#'+screen;
+  history.pushState({screen:S.screen, profileId:S.profileId, postId:S.postId}, '', hash);
 }
 window.addEventListener('popstate', (e)=>{
   const st = e.state;
@@ -1736,6 +1800,8 @@ function postCard(post, forceExpand=false, autoOpenComments=false, hedefYorumId=
   if((rTeps.dislike||[]).length>0) pfoot.appendChild(h('span',{style:{fontSize:'.75rem',color:'#6b5b8a'}},`👎 ${rTeps.dislike.length}`));
   if((rTeps.heart||[]).length>0) pfoot.appendChild(h('span',{style:{fontSize:'.75rem',color:'#6b5b8a'}},`❤️ ${rTeps.heart.length}`));
   if(avg!==null) pfoot.appendChild(h('span',{style:{fontSize:'.75rem',color:scoreColor(avg)}},scoreBadge(avg)));
+  const shareIcon=h('span',{title:'Linki kopyala',style:{fontSize:'.85rem',cursor:'pointer',marginLeft:'8px'},onclick:(e)=>{e.stopPropagation();linkiKopyala(post.id);}},'🔗');
+  pfoot.appendChild(shareIcon);
   const expandLabel=h('span',{style:{fontSize:'.75rem',color:'#7c3aed',marginLeft:'auto'}},'Devamını gör ▼');
   pfoot.appendChild(expandLabel);
   preview.appendChild(pfoot);
@@ -1921,6 +1987,8 @@ function postCard(post, forceExpand=false, autoOpenComments=false, hedefYorumId=
     reactRow.appendChild(reactBtn('like','👍',rTeps.like.length,benLike,'#34d399'));
     reactRow.appendChild(reactBtn('dislike','👎',rTeps.dislike.length,benDislike,'#f87171'));
     reactRow.appendChild(reactBtn('heart','❤️',rTeps.heart.length,benHeart,'#e879f9'));
+    const linkBtn=h('button',{class:'btn',title:'Bu şiirin linkini kopyala',style:{flex:'0 0 auto',display:'flex',alignItems:'center',justifyContent:'center',gap:'6px',padding:'8px 12px',borderRadius:'10px',fontSize:'.85rem',background:'#0f0a1a',border:'1px solid #2d1b52',color:'#a78bfa'},onclick:(e)=>{e.stopPropagation();linkiKopyala(post.id);}},[h('span',{},'🔗')]);
+    reactRow.appendChild(linkBtn);
     full.appendChild(reactRow);
   }
 
