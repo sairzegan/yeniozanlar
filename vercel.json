@@ -11,6 +11,6 @@
     }
   ],
   "rewrites": [
-    { "source": "/post/:slug", "destination": "/api/postPreview?slug=:slug" }
+    { "source": "/post/(.*)", "destination": "/index.html" }
   ]
 }
