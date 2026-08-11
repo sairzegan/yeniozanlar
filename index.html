@@ -261,7 +261,7 @@ function lsSet(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch{}}
 // ⚠️ AŞAĞIDAKİ ADRESİ, Vercel size verdiği kendi adresinizle DEĞİŞTİRİN
 // (örn. "https://yeniozanlar.vercel.app"). Vercel'e deploy ettikten sonra
 // projenizin ana sayfasında bu adresi göreceksiniz.
-const PAYLASIM_SUNUCUSU = "https://yeniozanlar.vercel.app";
+const PAYLASIM_SUNUCUSU = window.location.origin;
 
 // Bir metni, linklerde kullanılabilecek sade bir "slug"a çevirir:
 // Türkçe karakterleri sadeleştirir, küçük harfe çevirir, boşlukları tire yapar,
