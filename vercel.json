@@ -11,17 +11,11 @@
     }
   ],
   "rewrites": [
-    {
-      "source": "/post/:slug",
-      "has": [
-        {
-          "type": "header",
-          "key": "user-agent",
-          "value": ".*(facebookexternalhit|Facebot|Twitterbot|Slackbot|WhatsApp|LinkedInBot|TelegramBot|Discordbot|Googlebot|Pinterest|redditbot|vkShare|SkypeUriPreview|W3C_Validator).*"
-        }
-      ],
-      "destination": "/api/postPreview?slug=:slug"
-    },
-    { "source": "/post/:slug", "destination": "/index.html" }
-  ]
+    { "source": "/post/:slug", "destination": "/api/postPreview?slug=:slug" }
+  ],
+  "functions": {
+    "api/postPreview.js": {
+      "includeFiles": "index.html"
+    }
+  }
 }
