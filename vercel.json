@@ -12,10 +12,5 @@
   ],
   "rewrites": [
     { "source": "/post/:slug", "destination": "/api/postPreview?slug=:slug" }
-  ],
-  "functions": {
-    "api/postPreview.js": {
-      "includeFiles": "index.html"
-    }
-  }
+  ]
 }

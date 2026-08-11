@@ -1,18 +1,16 @@
 // api/postPreview.js
 //
 // vercel.json'daki kural sayesinde /post/{baslik-slug}-{id} adresine gelen HER istek
-// (bot ya da gerçek kullanıcı, ayrım yapmadan) bu fonksiyona düşer. Fonksiyon:
-//   1) URL'deki ID ile Firestore'dan ilgili şiiri çeker,
-//   2) uygulamanın kendi index.html dosyasını DİSKTEN (ağ üzerinden tekrar
-//      indirmeden — önceki sürümdeki kırılganlığın kaynağı buydu) okur,
-//   3) sadece <meta og:...>/<meta twitter:...> etiketlerini o şiire özel bilgiyle
-//      değiştirip aynı HTML'i (yani UYGULAMANIN TAMAMINI) geri döndürür.
-// Böylece Facebook/WhatsApp/Twitter botu ilk uğradığı anda zaten doğru bilgiyi görür
-// (elle "yeniden tara" yapmaya hiç gerek kalmaz) ve gerçek kullanıcı da her zamanki
-// çalışan uygulamayı görmeye devam eder — ikisi de AYNI yanıtı alır.
-
-const fs = require('fs');
-const path = require('path');
+// bu fonksiyona düşer. Dosya sistemine veya ağ üzerinden index.html'i tekrar çekmeye
+// hiç ihtiyaç duymadan çalışır (önceki sürümlerdeki kırılganlığın kaynağı buydu):
+//
+//   1) URL'deki ID ile Firestore'dan ilgili şiiri çeker.
+//   2) O şiire özel <meta og:...>/<meta twitter:...> etiketlerini içeren, KÜÇÜK VE
+//      BAĞIMSIZ bir HTML üretir. Facebook/WhatsApp/Twitter botları zaten sadece bu
+//      etiketleri okur, JavaScript çalıştırmaz — bu yüzden botlar için bu kadarı yeterli.
+//   3) Gerçek bir tarayıcıya (insan) ise, bu sayfa anında (<meta refresh> ile,
+//      görünmeyecek kadar hızlı) uygulamanın kendisine (index.html'e, #postdetail-ID
+//      ile) yönlendirir — orada uygulama zaten çalışan, test edilmiş kodla şiiri açar.
 
 const FIREBASE_PROJECT_ID = "yeniozanlar-68b49";
 const VARSAYILAN_GORSEL = "https://yeniozanlar-68b49.web.app/og-image.png";
@@ -60,19 +58,6 @@ module.exports = async (req, res) => {
   const slug = (req.query.slug || '').toString();
   const id = slug.includes('-') ? slug.slice(slug.lastIndexOf('-') + 1) : slug;
 
-  // Uygulamanın gerçek index.html'i — deploy'a dahil edildiğinden emin olmak için
-  // vercel.json'da "includeFiles": "index.html" tanımlı olmalı.
-  let html;
-  try {
-    html = fs.readFileSync(path.join(process.cwd(), 'index.html'), 'utf-8');
-  } catch (err) {
-    // index.html hiç okunamazsa (beklenmedik bir durum), en azından hata vermeden
-    // kullanıcıyı uygulamanın kök adresine yönlendir.
-    res.writeHead(302, { Location: baseUrl + '/' });
-    res.end();
-    return;
-  }
-
   const post = id ? await postGetir(id) : null;
 
   const baslik = post && post.title ? `"${post.title}" — Yeni Ozanlar 🪶` : 'Yeni Ozanlar 🪶';
@@ -85,16 +70,34 @@ module.exports = async (req, res) => {
     if (yid) gorsel = `https://img.youtube.com/vi/${yid}/hqdefault.jpg`;
   }
   const sayfaUrl = `${baseUrl}/post/${slug}`;
+  // Gerçek kullanıcı buraya (uygulamanın çalışan haline) yönlendirilir.
+  const uygulamaUrl = `${baseUrl}/index.html#postdetail-${encodeURIComponent(id)}`;
 
-  html = html
-    .replace(/<title>[^<]*<\/title>/, `<title>${htmlKac(baslik)}</title>`)
-    .replace(/<meta property="og:title" content="[^"]*">/, `<meta property="og:title" content="${htmlKac(baslik)}">`)
-    .replace(/<meta property="og:description" content="[^"]*">/, `<meta property="og:description" content="${htmlKac(aciklama)}">`)
-    .replace(/<meta property="og:image" content="[^"]*">/, `<meta property="og:image" content="${htmlKac(gorsel)}">`)
-    .replace(/<meta property="og:url" content="[^"]*">/, `<meta property="og:url" content="${htmlKac(sayfaUrl)}">`)
-    .replace(/<meta name="twitter:title" content="[^"]*">/, `<meta name="twitter:title" content="${htmlKac(baslik)}">`)
-    .replace(/<meta name="twitter:description" content="[^"]*">/, `<meta name="twitter:description" content="${htmlKac(aciklama)}">`)
-    .replace(/<meta name="twitter:image" content="[^"]*">/, `<meta name="twitter:image" content="${htmlKac(gorsel)}">`);
+  const html = `<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>${htmlKac(baslik)}</title>
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="Yeni Ozanlar">
+<meta property="og:title" content="${htmlKac(baslik)}">
+<meta property="og:description" content="${htmlKac(aciklama)}">
+<meta property="og:image" content="${htmlKac(gorsel)}">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:url" content="${htmlKac(sayfaUrl)}">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="${htmlKac(baslik)}">
+<meta name="twitter:description" content="${htmlKac(aciklama)}">
+<meta name="twitter:image" content="${htmlKac(gorsel)}">
+<meta http-equiv="refresh" content="0; url=${htmlKac(uygulamaUrl)}">
+<script>location.replace(${JSON.stringify(uygulamaUrl)});</script>
+</head>
+<body>
+<p><a href="${htmlKac(uygulamaUrl)}">${htmlKac(baslik)}</a></p>
+</body>
+</html>`;
 
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.setHeader('Cache-Control', 's-maxage=300, stale-while-revalidate=600');
