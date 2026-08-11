@@ -113,22 +113,16 @@ let S = {
 };
 
 // Paylaşım linkiyle gelindiyse, uygulama açılır açılmaz doğrudan o şiirin
-// sayfasına gider. Üç format da desteklenir:
-//  - /post/baslik-slug-ID → yeni, başlık uzantılı paylaşım formatı (bkz. paylasimLinki())
-//  - /post/ID             → eski paylaşım formatı (geçmişte paylaşılmış linkler kırılmasın diye)
-//  - #postdetail-ID       → uygulama içi gezinmede kullanılan eski/dahili format
-// ID'nin kendisi (uid()) yalnızca rakam/küçük harften oluşur, tire içermez; bu yüzden
-// "slug-ID" birleşiminde gerçek ID, son "-" işaretinden sonraki kısımdır.
+// sayfasına gider. İki format da desteklenir:
+//  - /post/ID   → yeni, paylaşılan (sunucu tarafından da görülebilen) format
+//  - #postdetail-ID → uygulama içi gezinmede kullanılan eski/dahili format
 (function(){
   const yolEslesme = location.pathname.match(/^\/post\/([^/]+)/);
   const hashEslesme = location.hash.match(/^#postdetail-(.+)$/);
-  let id = yolEslesme ? yolEslesme[1] : (hashEslesme ? hashEslesme[1] : null);
+  const id = yolEslesme ? yolEslesme[1] : (hashEslesme ? hashEslesme[1] : null);
   if(id){
-    id = decodeURIComponent(id);
-    const sonTireIndex = id.lastIndexOf('-');
-    if(sonTireIndex !== -1) id = id.slice(sonTireIndex + 1);
     S.screen = 'postdetail';
-    S.postId = id;
+    S.postId = decodeURIComponent(id);
   }
 })();
 
@@ -190,8 +184,8 @@ async function verileriYukle() {
     // Bundan sonraki her go() çağrısı bunun üzerine "ileri" doğru geçmiş kaydı ekler,
     // böylece geri tuşu bu ekrana (anasayfaya değil, gerçek önceki duruma) döner.
     {
-      const baslangicYolu = (S.screen==='postdetail' && S.postId) ? postYolu(S.postId) : '/#'+S.screen;
-      history.replaceState({screen:S.screen, profileId:S.profileId, postId:S.postId}, '', baslangicYolu);
+      const baslangicHash = (S.screen==='postdetail' && S.postId) ? '/#postdetail-'+S.postId : '/#'+S.screen;
+      history.replaceState({screen:S.screen, profileId:S.profileId, postId:S.postId}, '', baslangicHash);
     }
     render();
     bildirimDinleyiciBaslat();
@@ -263,50 +257,8 @@ function lsSet(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch{}}
 // projenizin ana sayfasında bu adresi göreceksiniz.
 const PAYLASIM_SUNUCUSU = "https://yeniozanlar.vercel.app";
 
-// Bir metni, linklerde kullanılabilecek sade bir "slug"a çevirir:
-// Türkçe karakterleri sadeleştirir, küçük harfe çevirir, boşlukları tire yapar,
-// izin verilmeyen karakterleri temizler. Örn: "Güneş Batarken!" -> "gunes-batarken"
-function slugOlustur(metin){
-  const trMap = {'ç':'c','Ç':'c','ğ':'g','Ğ':'g','ı':'i','İ':'i','ö':'o','Ö':'o','ş':'s','Ş':'s','ü':'u','Ü':'u'};
-  let s = (metin||'').toString().trim();
-  s = s.replace(/[çÇğĞıİöÖşŞüÜ]/g, ch => trMap[ch]);
-  s = s.toLowerCase();
-  s = s.replace(/[^a-z0-9\s-]/g,'');
-  s = s.trim().replace(/\s+/g,'-').replace(/-+/g,'-').replace(/^-+|-+$/g,'');
-  if(s.length>60) s = s.slice(0,60).replace(/-+$/,'');
-  return s || 'siir';
-}
-
-// Bir şiirin, "/post/{baslik-slug}-{id}" biçimindeki yolunu (path) üretir — bu yol hem
-// paylaşım linkinde hem de tarayıcının adres çubuğunda (uygulama içi gezinirken) kullanılır.
-// Uzantı (path'in son parçası) doğrudan şiirin başlığından türetiliyor; sondaki {id} ise
-// linkin her zaman tek/geçerli bir şiiri gösterebilmesi için eklenen (aynı başlıklı iki
-// şiirin linklerinin çakışmaması için gerekli) teknik bir ektir.
-function postYolu(postId){
-  const post = (S.posts||[]).find(p=>p.id===postId);
-  const baslikKaynagi = post ? (post.title || post.text || '') : '';
-  const slug = slugOlustur(baslikKaynagi);
-  return '/post/' + slug + '-' + postId;
-}
-
-// Bir şiirin, başka sitelerde paylaşılabilecek TAM linkini üretir (domain dahil).
 function paylasimLinki(postId){
-  return PAYLASIM_SUNUCUSU + postYolu(postId);
-}
-
-// Şiir paylaşıldığında/düzenlendiğinde, Facebook'un o linke ait önizleme önbelleğini
-// arka planda otomatik tazeler (bkz. api/facebookScrape.js). Böylece kimse Facebook
-// Sharing Debugger'a girip elle "Scrape Again" yapmak zorunda kalmaz; ilk paylaşımdan
-// itibaren doğru başlık/görsel görünür. Hata olursa (ör. henüz FB_APP_ID/SECRET
-// tanımlanmadıysa) sessizce yutulur — paylaşım akışını asla engellemez.
-function facebookOnizlemeyiTazele(postId){
-  try{
-    fetch('/api/facebookScrape', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ url: paylasimLinki(postId) })
-    }).catch(()=>{});
-  }catch{}
+  return PAYLASIM_SUNUCUSU + '/api/postPreview?id=' + postId;
 }
 
 // Küçük, kendiliğinden kaybolan bir bildirim balonu gösterir (ör. "Link kopyalandı").
@@ -1262,8 +1214,8 @@ function go(screen,extra={}){
   S.profileId = 'profileId' in extra ? extra.profileId : null;
   S.postId = 'postId' in extra ? extra.postId : null;
   render();
-  const yol = (screen==='postdetail' && S.postId) ? postYolu(S.postId) : '#'+screen;
-  history.pushState({screen:S.screen, profileId:S.profileId, postId:S.postId}, '', yol);
+  const hash = (screen==='postdetail' && S.postId) ? '#postdetail-'+S.postId : '#'+screen;
+  history.pushState({screen:S.screen, profileId:S.profileId, postId:S.postId}, '', hash);
 }
 window.addEventListener('popstate', (e)=>{
   const st = e.state;
@@ -1560,7 +1512,6 @@ A.addPost = async function(pd){
       }
     }
     db.collection("posts").doc(np.id).set(np).catch(err=>console.error("Kaydetme hatası:",err));
-    facebookOnizlemeyiTazele(np.id);
 
     // Takipçilere yeni paylaşım bildirimi gönder
     const takipciler = Object.keys(S.follows).filter(uid => (S.follows[uid]||[]).includes(S.me.id));
@@ -1590,7 +1541,6 @@ A.editPost = function(pid, updates){
     save();
     refreshCard(pid);
     db.collection("posts").doc(pid).update({...updates, edited:true}).catch(err=>console.error("Düzenleme hatası:",err));
-    facebookOnizlemeyiTazele(pid);
 };
 // tur: 'like' | 'dislike' | 'heart'. like/dislike birbirini dışlar (biri seçilince öteki kalkar),
 // kalp bunlardan bağımsızdır. Aynı butona tekrar basmak tepkiyi kaldırır (toggle).
