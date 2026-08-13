@@ -1,0 +1,17 @@
+# Yeni Ozanlar Facebook Önizleme
+
+Bu paket, Facebook/WhatsApp gibi botlara gerçek şiir başlığını, şiirin kısa bölümünü
+ve şiirdeki görseli server-side olarak verir.
+
+1. Bu klasörü GitHub projenize koyun.
+2. Terminalde bu klasöre girin.
+3. `firebase login`
+4. `npm install --prefix functions`
+5. `firebase deploy --only functions`
+
+Firebase Cloud Functions Firestore'a Admin SDK ile erişir; Vercel tarafında
+service-account JSON veya ek secret gerekmez.
+
+Vercel tarafında `vercel.json` `/post/*` isteklerini Firebase `postPreview`
+fonksiyonuna gönderir. Normal ziyaretçiler SPA detayına, Facebook botları ise
+OG etiketli HTML'e ulaşır.

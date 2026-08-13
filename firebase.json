@@ -1,11 +1,6 @@
 {
-  "hosting": {
-    "public": ".",
-    "ignore": ["firebase.json", "**/.*", "**/node_modules/**", "functions/**"],
-    "rewrites": [
-      { "source": "/post/**", "function": "postPreview" },
-      { "source": "/post-image/**", "function": "postImage" },
-      { "source": "**", "destination": "/index.html" }
-    ]
+  "functions": {
+    "source": "functions",
+    "runtime": "nodejs22"
   }
 }
