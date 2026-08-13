@@ -1,4 +1,10 @@
 {
+  "rewrites": [
+    {
+      "source": "/post/:slug",
+      "destination": "/api/postPreview?slug=:slug"
+    }
+  ],
   "headers": [
     {
       "source": "/(.*)",
@@ -8,12 +14,6 @@
           "value": "default-src * 'unsafe-inline' 'unsafe-eval' data: blob:;"
         }
       ]
-    }
-  ],
-  "rewrites": [
-    {
-      "source": "/post/:slug",
-      "destination": "/api/postPreview?slug=:slug"
     }
   ]
 }

@@ -261,7 +261,7 @@ function lsSet(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch{}}
 // ⚠️ AŞAĞIDAKİ ADRESİ, Vercel size verdiği kendi adresinizle DEĞİŞTİRİN
 // (örn. "https://yeniozanlar.vercel.app"). Vercel'e deploy ettikten sonra
 // projenizin ana sayfasında bu adresi göreceksiniz.
-const PAYLASIM_SUNUCUSU = window.location.origin;
+const PAYLASIM_SUNUCUSU = "https://yeniozanlar.vercel.app";
 
 // Bir metni, linklerde kullanılabilecek sade bir "slug"a çevirir:
 // Türkçe karakterleri sadeleştirir, küçük harfe çevirir, boşlukları tire yapar,
@@ -291,7 +291,9 @@ function postYolu(postId){
 
 // Bir şiirin, başka sitelerde paylaşılabilecek TAM linkini üretir (domain dahil).
 function paylasimLinki(postId){
-  return PAYLASIM_SUNUCUSU + postYolu(postId);
+  const post = (S.posts||[]).find(p=>p.id===postId);
+  const version = post?.ts || 0;
+  return PAYLASIM_SUNUCUSU + postYolu(postId) + (version ? ('?v=' + encodeURIComponent(version)) : '');
 }
 
 // Şiir paylaşıldığında/düzenlendiğinde, Facebook'un o linke ait önizleme önbelleğini
