@@ -1,105 +1,144 @@
-// api/postPreview.js
-//
-// vercel.json'daki kural sayesinde /post/{baslik-slug}-{id} adresine gelen HER istek
-// bu fonksiyona düşer. Dosya sistemine veya ağ üzerinden index.html'i tekrar çekmeye
-// hiç ihtiyaç duymadan çalışır (önceki sürümlerdeki kırılganlığın kaynağı buydu):
-//
-//   1) URL'deki ID ile Firestore'dan ilgili şiiri çeker.
-//   2) O şiire özel <meta og:...>/<meta twitter:...> etiketlerini içeren, KÜÇÜK VE
-//      BAĞIMSIZ bir HTML üretir. Facebook/WhatsApp/Twitter botları zaten sadece bu
-//      etiketleri okur, JavaScript çalıştırmaz — bu yüzden botlar için bu kadarı yeterli.
-//   3) Gerçek bir tarayıcıya (insan) ise, bu sayfa anında (<meta refresh> ile,
-//      görünmeyecek kadar hızlı) uygulamanın kendisine (index.html'e, #postdetail-ID
-//      ile) yönlendirir — orada uygulama zaten çalışan, test edilmiş kodla şiiri açar.
+const PROJECT_ID = 'yeniozanlar-68b49';
+const FIRESTORE_URL = `https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents/posts/`;
 
-const FIREBASE_PROJECT_ID = "yeniozanlar-68b49";
-const VARSAYILAN_GORSEL = "https://yeniozanlar-68b49.web.app/og-image.png";
-
-function metniKisalt(metin, uzunluk = 160) {
-  if (!metin) return "Şiirlerini paylaş, oku, puanla.";
-  const temiz = metin.replace(/\s+/g, ' ').trim();
-  if (temiz.length <= uzunluk) return temiz;
-  const kirpilmis = temiz.slice(0, uzunluk);
-  const sonBosluk = kirpilmis.lastIndexOf(' ');
-  return (sonBosluk > 0 ? kirpilmis.slice(0, sonBosluk) : kirpilmis).trim() + '…';
+function firestoreValue(v) {
+  if (!v) return null;
+  if (v.stringValue !== undefined) return v.stringValue;
+  if (v.integerValue !== undefined) return Number(v.integerValue);
+  if (v.doubleValue !== undefined) return Number(v.doubleValue);
+  if (v.booleanValue !== undefined) return v.booleanValue;
+  if (v.timestampValue !== undefined) return v.timestampValue;
+  if (v.nullValue !== undefined) return null;
+  if (v.arrayValue) return (v.arrayValue.values || []).map(firestoreValue);
+  if (v.mapValue) {
+    const out = {};
+    for (const [key, value] of Object.entries(v.mapValue.fields || {})) {
+      out[key] = firestoreValue(value);
+    }
+    return out;
+  }
+  return null;
 }
 
-function htmlKac(s) {
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+async function getPost(id) {
+  const response = await fetch(FIRESTORE_URL + encodeURIComponent(id));
+  if (!response.ok) return null;
+
+  const data = await response.json();
+  const post = {};
+  for (const [key, value] of Object.entries(data.fields || {})) {
+    post[key] = firestoreValue(value);
+  }
+  return post;
 }
 
-// index.html'deki ytId() ile aynı mantık: bir YouTube linkinden video ID'sini çıkarır.
-function ytIdBul(url) {
-  const m = url?.match(/(?:youtu\.be\/|v=|embed\/)([A-Za-z0-9_-]{11})/);
-  return m ? m[1] : null;
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
-async function postGetir(id) {
+function extractId(slug) {
+  const match = String(slug || '').match(/-([A-Za-z0-9]{7})$/);
+  return match ? match[1] : null;
+}
+
+function youtubeId(url) {
+  const match = String(url || '').match(
+    /(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|shorts\/))([A-Za-z0-9_-]{11})/
+  );
+  return match ? match[1] : null;
+}
+
+function excerpt(text) {
+  const clean = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!clean) return 'Yeni Ozanlar’da bir şiir.';
+  return clean.length <= 300
+    ? clean
+    : clean.slice(0, 297).replace(/\s+\S*$/, '') + '…';
+}
+
+function isCrawler(req) {
+  const ua = String(req.headers['user-agent'] || '').toLowerCase();
+  return /facebookexternalhit|facebot|twitterbot|linkedinbot|whatsapp|telegrambot|pinterest|slackbot|discordbot|googlebot/i.test(ua);
+}
+
+function getOrigin(req) {
+  const proto = req.headers['x-forwarded-proto'] || 'https';
+  const host = req.headers['x-forwarded-host'] || req.headers.host;
+  return `${proto}://${host}`;
+}
+
+module.exports = async function handler(req, res) {
   try {
-    const url = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/posts/${encodeURIComponent(id)}`;
-    const res = await fetch(url);
-    if (!res.ok) return null;
-    const data = await res.json();
-    const f = data.fields || {};
-    return {
-      id,
-      title: f.title?.stringValue || '',
-      text: f.text?.stringValue || '',
-      image: f.image?.stringValue || '',
-      youtube: f.youtube?.stringValue || '',
-    };
-  } catch {
-    return null;
-  }
-}
+    const slug = String((req.query && req.query.slug) || '');
+    const id = extractId(slug);
 
-module.exports = async (req, res) => {
-  const baseUrl = `https://${req.headers.host}`;
-  const slug = (req.query.slug || '').toString();
-  const id = slug.includes('-') ? slug.slice(slug.lastIndexOf('-') + 1) : slug;
+    if (!id) return res.status(404).send('Şiir bulunamadı.');
 
-  const post = id ? await postGetir(id) : null;
+    // Normal ziyaretçi: hash adresine dön. Böylece /post/... rewrite döngüsüne girmez.
+    if (!isCrawler(req)) {
+      return res.redirect(302, `/#postdetail-${encodeURIComponent(id)}`);
+    }
 
-  const baslik = post && post.title ? `"${post.title}" — Yeni Ozanlar 🪶` : 'Yeni Ozanlar 🪶';
-  const aciklama = post ? metniKisalt(post.text) : 'Şiirlerini paylaş, oku, puanla.';
-  let gorsel = VARSAYILAN_GORSEL;
-  if (post?.image) {
-    gorsel = post.image;
-  } else if (post?.youtube) {
-    const yid = ytIdBul(post.youtube);
-    if (yid) gorsel = `https://img.youtube.com/vi/${yid}/hqdefault.jpg`;
-  }
-  const sayfaUrl = `${baseUrl}/post/${slug}`;
-  // Gerçek kullanıcı buraya (uygulamanın çalışan haline) yönlendirilir.
-  const uygulamaUrl = `${baseUrl}/index.html#postdetail-${encodeURIComponent(id)}`;
+    const post = await getPost(id);
+    if (!post) return res.status(404).send('Şiir bulunamadı.');
 
-  const html = `<!DOCTYPE html>
+    const origin = getOrigin(req);
+    const canonical = `${origin}/post/${encodeURIComponent(slug)}`;
+    const title = post.title || 'Yeni Ozanlar';
+    const description = excerpt(post.text);
+
+    let image = null;
+    if (post.image) {
+      const rawImage = String(post.image);
+      if (/^data:image\//i.test(rawImage)) {
+        image = `${origin}/api/postImage?id=${encodeURIComponent(id)}`;
+      } else if (/^https?:\/\//i.test(rawImage)) {
+        image = rawImage;
+      }
+    }
+
+    const yt = youtubeId(post.youtube);
+    if (!image && yt) {
+      image = `https://img.youtube.com/vi/${yt}/hqdefault.jpg`;
+    }
+
+    const html = `<!doctype html>
 <html lang="tr">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>${htmlKac(baslik)}</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${escapeHtml(title)}</title>
+<meta name="description" content="${escapeHtml(description)}">
 <meta property="og:type" content="article">
 <meta property="og:site_name" content="Yeni Ozanlar">
-<meta property="og:title" content="${htmlKac(baslik)}">
-<meta property="og:description" content="${htmlKac(aciklama)}">
-<meta property="og:image" content="${htmlKac(gorsel)}">
-<meta property="og:image:width" content="1200">
-<meta property="og:image:height" content="630">
-<meta property="og:url" content="${htmlKac(sayfaUrl)}">
-<meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="${htmlKac(baslik)}">
-<meta name="twitter:description" content="${htmlKac(aciklama)}">
-<meta name="twitter:image" content="${htmlKac(gorsel)}">
-<meta http-equiv="refresh" content="0; url=${htmlKac(uygulamaUrl)}">
-<script>location.replace(${JSON.stringify(uygulamaUrl)});</script>
+<meta property="og:url" content="${escapeHtml(canonical)}">
+<meta property="og:title" content="${escapeHtml(title)}">
+<meta property="og:description" content="${escapeHtml(description)}">
+${image ? `<meta property="og:image" content="${escapeHtml(image)}">` : ''}
+${image ? `<meta property="og:image:secure_url" content="${escapeHtml(image)}">` : ''}
+${image ? `<meta property="og:image:alt" content="${escapeHtml(title)}">` : ''}
+<meta name="twitter:card" content="${image ? 'summary_large_image' : 'summary'}">
+<meta name="twitter:title" content="${escapeHtml(title)}">
+<meta name="twitter:description" content="${escapeHtml(description)}">
+${image ? `<meta name="twitter:image" content="${escapeHtml(image)}">` : ''}
 </head>
 <body>
-<p><a href="${htmlKac(uygulamaUrl)}">${htmlKac(baslik)}</a></p>
+<h1>${escapeHtml(title)}</h1>
+<p>${escapeHtml(description)}</p>
+${image ? `<img src="${escapeHtml(image)}" alt="${escapeHtml(title)}">` : ''}
 </body>
 </html>`;
 
-  res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  res.setHeader('Cache-Control', 's-maxage=300, stale-while-revalidate=600');
-  res.status(200).send(html);
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.setHeader('Cache-Control', 'public, s-maxage=300, stale-while-revalidate=86400');
+    return res.status(200).send(html);
+  } catch (error) {
+    console.error('postPreview error:', error);
+    return res.status(500).send('Önizleme oluşturulamadı.');
+  }
 };
