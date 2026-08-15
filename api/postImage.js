@@ -1,40 +1,57 @@
-const PROJECT_ID = 'yeniozanlar-68b49';
-const FIREBASE_API_KEY = 'AIzaSyC6sshBjUU7xZf_KgjwW2yWuvE1ZG9oZWY';
-const FIRESTORE_BASE = `https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents/posts/`;
+const { cert, getApps, initializeApp } = require("firebase-admin/app");
+const { getFirestore } = require("firebase-admin/firestore");
 
-function decodeFirestoreValue(v) {
-  if (!v) return null;
-  if (Object.prototype.hasOwnProperty.call(v, 'stringValue')) return v.stringValue;
-  if (Object.prototype.hasOwnProperty.call(v, 'integerValue')) return Number(v.integerValue);
-  if (Object.prototype.hasOwnProperty.call(v, 'doubleValue')) return Number(v.doubleValue);
-  if (Object.prototype.hasOwnProperty.call(v, 'booleanValue')) return v.booleanValue;
-  return null;
+const PROJECT_ID = "yeniozanlar-68b49";
+
+function firebaseAdmin() {
+  if (getApps().length) return getApps()[0];
+
+  const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+  if (!raw) {
+    throw new Error("FIREBASE_SERVICE_ACCOUNT_JSON Vercel ortam değişkeni tanımlı değil.");
+  }
+
+  return initializeApp({
+    credential: cert(JSON.parse(raw)),
+    projectId: PROJECT_ID,
+  });
 }
 
 module.exports = async function handler(req, res) {
   try {
-    const id = String(req.query?.id || '');
-    if (!/^[A-Za-z0-9]{7}$/.test(id)) return res.status(400).send('Geçersiz ID.');
+    firebaseAdmin();
 
-    const response = await fetch(FIRESTORE_BASE + encodeURIComponent(id) + '?key=' + encodeURIComponent(FIREBASE_API_KEY), {
-      headers: { accept: 'application/json' },
-    });
-    if (!response.ok) return res.status(404).send('Görsel bulunamadı.');
+    const id = String(req.query?.id || "");
 
-    const data = await response.json();
-    const dataUrl = decodeFirestoreValue(data.fields?.image);
-    const match = String(dataUrl || '').match(/^data:(image\/[A-Za-z0-9.+-]+);base64,([A-Za-z0-9+/=\r\n]+)$/s);
-    if (!match) return res.status(404).send('Görsel bulunamadı.');
+    if (!/^[A-Za-z0-9]{7}$/.test(id)) {
+      return res.status(400).send("Geçersiz ID.");
+    }
 
-    const buffer = Buffer.from(match[2].replace(/\s/g, ''), 'base64');
-    if (!buffer.length) return res.status(404).send('Görsel bulunamadı.');
+    const snap = await getFirestore().collection("posts").doc(id).get();
 
-    res.setHeader('Content-Type', match[1]);
-    res.setHeader('Content-Length', String(buffer.length));
-    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    if (!snap.exists) {
+      return res.status(404).send("Görsel bulunamadı.");
+    }
+
+    const dataUrl = String(snap.data()?.image || "");
+
+    const match = dataUrl.match(
+      /^data:(image\/[A-Za-z0-9.+-]+);base64,([A-Za-z0-9+/=\s]+)$/
+    );
+
+    if (!match) {
+      return res.status(404).send("Görsel bulunamadı.");
+    }
+
+    const buffer = Buffer.from(match[2].replace(/\s/g, ""), "base64");
+
+    res.setHeader("Content-Type", match[1]);
+    res.setHeader("Content-Length", String(buffer.length));
+    res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+
     return res.status(200).send(buffer);
   } catch (error) {
-    console.error('postImage:', error);
-    return res.status(500).send('Görsel alınamadı.');
+    console.error("postImage:", error);
+    return res.status(500).send("Görsel alınamadı.");
   }
 };

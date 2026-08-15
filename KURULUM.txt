@@ -1,17 +1,23 @@
-# Yeni Ozanlar Facebook Önizleme
+KURULUM — Firebase CLI GEREKMEZ
 
-Bu paket, Facebook/WhatsApp gibi botlara gerçek şiir başlığını, şiirin kısa bölümünü
-ve şiirdeki görseli server-side olarak verir.
+1) Firebase Console:
+   Ayarlar → Hizmet hesapları → Yeni özel anahtar oluştur.
+   İndirilen JSON dosyasını aç ve tamamını kopyala.
 
-1. Bu klasörü GitHub projenize koyun.
-2. Terminalde bu klasöre girin.
-3. `firebase login`
-4. `npm install --prefix functions`
-5. `firebase deploy --only functions`
+2) Vercel:
+   Project → Settings → Environment Variables
+   Name:
+   FIREBASE_SERVICE_ACCOUNT_JSON
 
-Firebase Cloud Functions Firestore'a Admin SDK ile erişir; Vercel tarafında
-service-account JSON veya ek secret gerekmez.
+   Value:
+   Firebase'den indirdiğin JSON'un TAMAMI.
 
-Vercel tarafında `vercel.json` `/post/*` isteklerini Firebase `postPreview`
-fonksiyonuna gönderir. Normal ziyaretçiler SPA detayına, Facebook botları ise
-OG etiketli HTML'e ulaşır.
+   Production, Preview ve Development seçeneklerini işaretle.
+
+3) GitHub:
+   Bu paketteki index.html, vercel.json, package.json ve api klasörünü
+   mevcut projenin köküne koy.
+
+4) Vercel otomatik deploy eder.
+
+Firebase CLI, Node kurulumu veya Firebase Functions deploy işlemi gerekmez.
