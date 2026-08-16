@@ -511,11 +511,40 @@ function instagramHikayeModal(post){
   const kapat=()=>bg.remove();
   bg.onclick=e=>{if(e.target===bg)kapat();};
 
+  // Şiirin linkini hemen panoya kopyalar (Instagram'ın hikayelerdeki "Link"
+  // etiketine yapıştırılabilsin diye — Instagram, web'den doğrudan/otomatik
+  // tıklanabilir link eklemeye izin vermiyor; kullanıcı Link etiketini ekleyip
+  // panodaki bu linki yapıştırarak hikayesine tıklanabilir link koyabiliyor).
+  const igLink = paylasimLinki(post.id);
+  let linkKopyalandi = false;
+  const linkiPanoyaKopyala = async ()=>{
+    try{
+      if(navigator.clipboard && window.isSecureContext){
+        await navigator.clipboard.writeText(igLink);
+      } else {
+        const ta=document.createElement('textarea');
+        ta.value=igLink; ta.style.position='fixed'; ta.style.opacity='0';
+        document.body.appendChild(ta); ta.select();
+        document.execCommand('copy'); ta.remove();
+      }
+      linkKopyalandi=true;
+      return true;
+    }catch{ return false; }
+  };
+  linkiPanoyaKopyala().then(basarili=>{
+    if(basarili) toastGoster('🔗 Şiirin linki kopyalandı — hikayede "Link" etiketine yapıştırabilirsin!');
+  });
+
   const modal=h('div',{class:'modal',style:{maxWidth:'380px'}});
   modal.appendChild(h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'14px'}},[
     h('h3',{style:{fontFamily:"'Playfair Display',serif",color:'#e9d5ff',fontSize:'1.05rem'}},'📸 Hikayede Paylaş'),
     h('button',{class:'btn',style:{background:'none',color:'#6b5b8a',fontSize:'1.4rem'},onclick:kapat},'✕')
   ]));
+  const linkChip=h('div',{style:{display:'flex',alignItems:'center',gap:'8px',background:'#0f0a1a',border:'1px solid #3d1f6e',borderRadius:'10px',padding:'8px 10px',marginBottom:'14px'}});
+  linkChip.appendChild(h('span',{style:{fontSize:'.78rem',color:'#a78bfa',flex:'1',lineHeight:'1.4'}},'🔗 Linki kopyaladık. Hikayede "Link" etiketini ekleyip panodakini yapıştır — böylece tıklanabilir olur.'));
+  const tekrarKopyalaBtn=h('button',{class:'btn',style:{background:'transparent',color:'#c084fc',border:'1px solid #5b21b6',borderRadius:'8px',padding:'6px 10px',fontSize:'.72rem',flexShrink:'0'},onclick:async()=>{const ok=await linkiPanoyaKopyala();toastGoster(ok?'🔗 Tekrar kopyalandı!':'Kopyalanamadı, tarayıcı izin vermedi.');}},'Kopyala');
+  linkChip.appendChild(tekrarKopyalaBtn);
+  modal.appendChild(linkChip);
   const yukleniyor=h('p',{style:{color:'#a78bfa',fontSize:'.85rem',textAlign:'center',padding:'40px 0'}},'⏳ Hazırlanıyor...');
   modal.appendChild(yukleniyor);
   bg.appendChild(modal);
@@ -528,6 +557,7 @@ function instagramHikayeModal(post){
       yukleniyor.textContent='😕 Görsel oluşturulamadı, lütfen tekrar deneyin.';
       return;
     }
+
     yukleniyor.remove();
 
     const hasMedia = !!post.image || !!ytId(post.youtube);
@@ -590,23 +620,26 @@ function instagramHikayeModal(post){
     const indirBtn=h('button',{class:'btn',style:{flex:'1',background:'transparent',color:'#a78bfa',border:'1px solid #3d1f6e',borderRadius:'10px',padding:'10px'}},'⬇️ İndir');
 
     indirBtn.onclick=async()=>{
+      await linkiPanoyaKopyala();
       const blob=await gorseliBlobaCevir();
       if(!blob){toastGoster('Görsel oluşturulamadı.');return;}
       const url=URL.createObjectURL(blob);
       const a=document.createElement('a'); a.href=url; a.download=`hikaye-${post.id}.png`;
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(()=>URL.revokeObjectURL(url),4000);
-      toastGoster('⬇️ Görsel indirildi! Instagram\'ı açıp hikayene ekleyebilirsin.');
+      toastGoster('⬇️ Görsel indirildi, link panoda! Instagram\'da hikayeye ekle → "Link" etiketine yapıştır.');
     };
 
     paylasBtn.onclick=async()=>{
+      await linkiPanoyaKopyala();
       paylasBtn.disabled=true; paylasBtn.textContent='⏳...';
       try{
         const blob=await gorseliBlobaCevir();
         if(!blob) throw new Error('blob yok');
         const dosya=new File([blob], `hikaye-${post.id}.png`, {type:'image/png'});
         if(navigator.canShare && navigator.canShare({files:[dosya]})){
-          await navigator.share({files:[dosya], title: post.title||'Şiir', text:'Yeni Ozanlar 🪶'});
+          await navigator.share({files:[dosya], title: post.title||'Şiir', text:`${post.title?('"'+post.title+'"'):'Bir şiir'} · Yeni Ozanlar 🪶 — ${igLink}`});
+          toastGoster('🔗 Link panoda — hikayede "Link" etiketine yapıştırmayı unutma!');
           kapat();
         } else {
           indirBtn.click();
@@ -619,6 +652,7 @@ function instagramHikayeModal(post){
     };
 
     btnRow.appendChild(paylasBtn); btnRow.appendChild(indirBtn);
+
 
     modal.appendChild(previewWrap);
     modal.appendChild(slider);
@@ -2190,9 +2224,9 @@ function postCard(post, forceExpand=false, autoOpenComments=false, hedefYorumId=
   if(avg!==null) pfoot.appendChild(h('span',{style:{fontSize:'.75rem',color:scoreColor(avg)}},scoreBadge(avg)));
   const shareIcon=h('span',{title:'Linki kopyala',style:{fontSize:'.85rem',cursor:'pointer',marginLeft:'8px'},onclick:(e)=>{e.stopPropagation();linkiKopyala(post.id);}},'🔗');
   pfoot.appendChild(shareIcon);
-  const igIcon=h('span',{title:'Hikayede paylaş',style:{cursor:'pointer',marginLeft:'8px',display:'inline-flex',alignItems:'center',verticalAlign:'middle'},onclick:(e)=>{e.stopPropagation();document.body.appendChild(instagramHikayeModal(post));}});
-  igIcon.innerHTML=igIkonSVG(post.id,18);
-  pfoot.appendChild(igIcon);
+  const igBtn=h('button',{class:'btn',title:'Hikayede paylaş',style:{display:'inline-flex',alignItems:'center',gap:'5px',marginLeft:'8px',background:'linear-gradient(135deg,#4f5bd5,#962fbf,#d62976,#fa7e1e,#feda75)',border:'none',borderRadius:'20px',padding:'4px 10px',color:'#fff',fontSize:'.7rem',fontWeight:'700',lineHeight:'1'},onclick:(e)=>{e.stopPropagation();document.body.appendChild(instagramHikayeModal(post));}});
+  igBtn.innerHTML=igIkonSVG(post.id,15)+'<span style="margin-left:5px">Hikaye</span>';
+  pfoot.appendChild(igBtn);
   const expandLabel=h('span',{style:{fontSize:'.75rem',color:'#7c3aed',marginLeft:'auto'}},'Devamını gör ▼');
   pfoot.appendChild(expandLabel);
   preview.appendChild(pfoot);
@@ -2215,6 +2249,11 @@ function postCard(post, forceExpand=false, autoOpenComments=false, hedefYorumId=
   if(post.text) full.appendChild(h('p',{style:{fontFamily:"'Crimson Text',serif",fontSize:'1.05rem',color:'#ddd6fe',lineHeight:'1.9',whiteSpace:'pre-wrap',marginBottom:'14px'}},post.text));
   if(post.image) full.appendChild(h('img',{src:post.image,style:{width:'100%',height:'auto',borderRadius:'12px',marginBottom:'14px',display:'block'}}));
   if(vid){const w=h('div',{style:{borderRadius:'12px',overflow:'hidden',marginBottom:'14px'}});w.innerHTML=`<iframe src="https://www.youtube.com/embed/${vid}" allowfullscreen style="width:100%;aspect-ratio:16/9;border:none;border-radius:12px"></iframe>`;full.appendChild(w);}
+
+  // Instagram Hikayede paylaş (tam görünümde, gözden kaçmasın diye tam genişlik buton)
+  const igFullBtn=h('button',{class:'btn',style:{display:'flex',alignItems:'center',justifyContent:'center',gap:'8px',width:'100%',background:'linear-gradient(135deg,#4f5bd5,#962fbf,#d62976,#fa7e1e,#feda75)',border:'none',borderRadius:'12px',padding:'11px',color:'#fff',fontSize:'.88rem',fontWeight:'700',marginBottom:'14px'},onclick:(e)=>{e.stopPropagation();document.body.appendChild(instagramHikayeModal(post));}});
+  igFullBtn.innerHTML=igIkonSVG('full-'+post.id,20)+'<span>Instagram Hikayede Paylaş</span>';
+  full.appendChild(igFullBtn);
 
   // AI
   if(post.aiScore!==null&&post.aiScore!==undefined){
