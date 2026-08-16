@@ -341,6 +341,315 @@ async function linkiKopyala(postId){
   }
 }
 
+// ═══════════════════════ INSTAGRAM HİKAYE PAYLAŞIMI ═══════════════════════
+// Bir şiiri, Instagram Hikaye'de paylaşılabilecek bir görsele dönüştürür.
+// Genişlik sabit (1080px, hikaye standardı); uzunluk şiirin tamamını
+// kapsayacak şekilde dinamik hesaplanır. Kullanıcı, açılan modalde bu "en
+// uzun" görselin ne kadarının paylaşılacağını sürükleyerek/kaydırarak seçer.
+
+const IG_W = 1080;          // Instagram hikayesi standart genişliği
+const IG_PAD = 72;          // yatay iç boşluk
+const IG_MEDIA_H = 1080;    // üstteki görsel/video alanı (kare)
+const IG_LINE_H = 62;       // şiir satır yüksekliği
+
+// Kullanılan özel fontların (Playfair Display / Crimson Text) canvas'a
+// çizilmeden önce tarayıcı tarafından yüklenmiş olmasını garantiler;
+// aksi halde ilk çizimde geçici olarak sistem fontuyla (yamuk) çizilebilir.
+async function igFontlariHazirla(){
+  try{
+    await Promise.all([
+      document.fonts.load("italic 700 46px 'Playfair Display'"),
+      document.fonts.load("700 40px 'Playfair Display'"),
+      document.fonts.load("44px 'Crimson Text'"),
+      document.fonts.load("30px 'Crimson Text'")
+    ]);
+    await document.fonts.ready;
+  }catch{}
+}
+
+// Verilen metni, satır satır maxWidth'i aşmayacak şekilde böler (kelime bazlı
+// kaydırma). Boş satırlar (kıta araları) korunur.
+function igSatirlaraBol(ctx, text, maxWidth){
+  const lines=[];
+  String(text||'').split('\n').forEach(paragraf=>{
+    if(paragraf.trim()===''){lines.push('');return;}
+    const kelimeler=paragraf.split(' ');
+    let satir='';
+    kelimeler.forEach(k=>{
+      const deneme = satir ? satir+' '+k : k;
+      if(ctx.measureText(deneme).width>maxWidth && satir){
+        lines.push(satir); satir=k;
+      } else satir=deneme;
+    });
+    lines.push(satir);
+  });
+  return lines;
+}
+
+// object-fit:cover mantığıyla bir görseli hedef dikdörtgene sığdırıp çizer.
+function igCoverCiz(ctx,img,dx,dy,dw,dh){
+  const ir=img.width/img.height, dr=dw/dh;
+  let sx,sy,sw,sh;
+  if(ir>dr){ sh=img.height; sw=sh*dr; sx=(img.width-sw)/2; sy=0; }
+  else { sw=img.width; sh=sw/dr; sx=0; sy=(img.height-sh)/2; }
+  ctx.drawImage(img,sx,sy,sw,sh,dx,dy,dw,dh);
+}
+
+// Şiirin başından sonuna kadar TÜM içeriği içeren, sabit genişlikte, uzun bir
+// "hikaye" canvas'ı üretir. Kullanıcı bunun bir kısmını (üstten itibaren)
+// seçip paylaşacaktır. Video şiirlerde CORS nedeniyle YouTube küçük resmini
+// canvas'a gömmek dışa aktarımı bozabildiğinden, marka uyumlu bir video
+// rozeti çiziyoruz.
+async function igHikayeCanvasOlustur(post, author){
+  await igFontlariHazirla();
+  const hasMedia = !!post.image;
+  const isVideo = !hasMedia && !!ytId(post.youtube);
+  const MEDIA_H = (hasMedia||isVideo) ? IG_MEDIA_H : 0;
+
+  const olcCanvas=document.createElement('canvas');
+  const olcCtx=olcCanvas.getContext('2d');
+  const genislik=IG_W-IG_PAD*2;
+
+  olcCtx.font="italic 700 46px 'Playfair Display'";
+  const baslikSatirlari = post.title ? igSatirlaraBol(olcCtx, `"${post.title}"`, genislik) : [];
+
+  olcCtx.font="44px 'Crimson Text'";
+  const siirSatirlari = post.text ? igSatirlaraBol(olcCtx, post.text, genislik) : [];
+
+  let headerH = 56 + 44*2 + 30; // üst boşluk + avatar bloğu
+  if(baslikSatirlari.length) headerH += baslikSatirlari.length*54 + 34;
+  headerH += 54; // ayraç çizgisi ve altı
+
+  const totalH = MEDIA_H + headerH + siirSatirlari.length*IG_LINE_H + 90;
+
+  const canvas=document.createElement('canvas');
+  canvas.width=IG_W; canvas.height=Math.max(totalH, 600);
+  const ctx=canvas.getContext('2d');
+
+  const grad=ctx.createLinearGradient(0,0,0,canvas.height);
+  grad.addColorStop(0,'#1a0f2e'); grad.addColorStop(1,'#0f0a1a');
+  ctx.fillStyle=grad; ctx.fillRect(0,0,IG_W,canvas.height);
+
+  let y=0;
+  if(hasMedia){
+    try{
+      await new Promise((res,rej)=>{
+        const img=new Image();
+        img.onload=()=>{ igCoverCiz(ctx,img,0,0,IG_W,MEDIA_H); res(); };
+        img.onerror=rej;
+        img.src=post.image;
+      });
+    }catch{
+      // görsel yüklenemezse boş bırakma, yerine kibar bir yer tutucu koy
+      ctx.fillStyle='#2d1b52'; ctx.fillRect(0,0,IG_W,MEDIA_H);
+    }
+    y=MEDIA_H;
+  } else if(isVideo){
+    const g2=ctx.createLinearGradient(0,0,IG_W,MEDIA_H);
+    g2.addColorStop(0,'#2d1060'); g2.addColorStop(1,'#0a0718');
+    ctx.fillStyle=g2; ctx.fillRect(0,0,IG_W,MEDIA_H);
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.font='140px sans-serif'; ctx.fillStyle='#fff';
+    ctx.fillText('▶️', IG_W/2, MEDIA_H/2-10);
+    ctx.font="36px 'Crimson Text'"; ctx.fillStyle='#c4b5fd';
+    ctx.fillText('🎵 Video Şiir', IG_W/2, MEDIA_H/2+120);
+    ctx.textAlign='left'; ctx.textBaseline='alphabetic';
+    y=MEDIA_H;
+  }
+
+  if(hasMedia||isVideo){
+    ctx.save();
+    ctx.font="600 30px 'Crimson Text'";
+    ctx.fillStyle='rgba(255,255,255,.88)';
+    ctx.shadowColor='rgba(0,0,0,.55)'; ctx.shadowBlur=10;
+    ctx.fillText('🪶 Yeni Ozanlar', 36, 60);
+    ctx.restore();
+  }
+
+  y+=56;
+  const avR=44, avX=IG_PAD+avR, avY=y+avR;
+  ctx.beginPath(); ctx.arc(avX,avY,avR,0,Math.PI*2); ctx.closePath();
+  const avGrad=ctx.createLinearGradient(avX-avR,avY-avR,avX+avR,avY+avR);
+  const isAdm = author?.username === ADMIN_USERNAME;
+  avGrad.addColorStop(0, isAdm?'#f59e0b':(author?.color||'#7c3aed'));
+  avGrad.addColorStop(1, isAdm?'#d97706':'#a855f7');
+  ctx.fillStyle=avGrad; ctx.fill();
+  ctx.fillStyle='#fff'; ctx.font='700 34px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText(isAdm?'👑':(author?.avatar||author?.name?.slice(0,2).toUpperCase()||'?'), avX, avY+2);
+  ctx.textAlign='left'; ctx.textBaseline='alphabetic';
+
+  const textX=avX+avR+24;
+  ctx.fillStyle='#e9d5ff'; ctx.font="700 40px 'Playfair Display'";
+  ctx.fillText(author?.name||'', textX, y+38);
+  ctx.fillStyle='#a78bfa'; ctx.font="30px 'Crimson Text'";
+  ctx.fillText(`@${author?.username||''}`, textX, y+78);
+  y += avR*2+30;
+
+  if(baslikSatirlari.length){
+    ctx.fillStyle='#e9d5ff'; ctx.font="italic 700 46px 'Playfair Display'";
+    baslikSatirlari.forEach(satir=>{ y+=54; ctx.fillText(satir, IG_PAD, y); });
+    y+=34;
+  }
+
+  ctx.strokeStyle='rgba(124,58,237,.35)'; ctx.lineWidth=2;
+  ctx.beginPath(); ctx.moveTo(IG_PAD,y); ctx.lineTo(IG_W-IG_PAD,y); ctx.stroke();
+  y+=54;
+
+  ctx.fillStyle='#ddd6fe'; ctx.font="44px 'Crimson Text'";
+  siirSatirlari.forEach(satir=>{ y+=IG_LINE_H; ctx.fillText(satir, IG_PAD, y); });
+
+  return canvas;
+}
+
+// Instagram Hikaye paylaşım modalini açar: şiirin en uzun/tam halini içeren
+// canvas'ı arka planda oluşturur, sabit genişlikte bir önizleme gösterir ve
+// kullanıcının önizlemeyi sürükleyerek (veya kaydırıcıyla) ne kadarının dahil
+// edileceğini seçmesini sağlar.
+function instagramHikayeModal(post){
+  const author=byId(post.authorId);
+  const bg=h('div',{class:'modal-bg'});
+  const kapat=()=>bg.remove();
+  bg.onclick=e=>{if(e.target===bg)kapat();};
+
+  const modal=h('div',{class:'modal',style:{maxWidth:'380px'}});
+  modal.appendChild(h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'14px'}},[
+    h('h3',{style:{fontFamily:"'Playfair Display',serif",color:'#e9d5ff',fontSize:'1.05rem'}},'📸 Hikayede Paylaş'),
+    h('button',{class:'btn',style:{background:'none',color:'#6b5b8a',fontSize:'1.4rem'},onclick:kapat},'✕')
+  ]));
+  const yukleniyor=h('p',{style:{color:'#a78bfa',fontSize:'.85rem',textAlign:'center',padding:'40px 0'}},'⏳ Hazırlanıyor...');
+  modal.appendChild(yukleniyor);
+  bg.appendChild(modal);
+
+  (async()=>{
+    let kaynakCanvas;
+    try{
+      kaynakCanvas = await igHikayeCanvasOlustur(post, author);
+    }catch(err){
+      yukleniyor.textContent='😕 Görsel oluşturulamadı, lütfen tekrar deneyin.';
+      return;
+    }
+    yukleniyor.remove();
+
+    const hasMedia = !!post.image || !!ytId(post.youtube);
+    const MEDIA_H = hasMedia?IG_MEDIA_H:0;
+    let minCut = Math.min(kaynakCanvas.height, MEDIA_H+280);
+    let maxCut = kaynakCanvas.height;
+    if(minCut>=maxCut) minCut=Math.max(0,maxCut-40);
+    let cutY = Math.min(maxCut, Math.round(minCut+(maxCut-minCut)*0.4));
+
+    const DISPLAY_W = 260; // ekranda gösterilecek sabit genişlik
+    const olcek = DISPLAY_W/IG_W;
+
+    const previewWrap=h('div',{style:{position:'relative',width:DISPLAY_W+'px',margin:'0 auto',border:'2px solid #3d1f6e',borderRadius:'14px',overflow:'hidden',background:'#0a0718',touchAction:'none',cursor:'ns-resize'}});
+    const outCanvas=h('canvas',{width:String(IG_W),height:String(cutY)});
+    outCanvas.style.width=DISPLAY_W+'px';
+    outCanvas.style.height=(cutY*olcek)+'px';
+    outCanvas.style.display='block';
+    previewWrap.appendChild(outCanvas);
+    const surukleIpucu=h('div',{style:{position:'absolute',bottom:'8px',left:'50%',transform:'translateX(-50%)',background:'rgba(15,10,26,.75)',color:'#e9d5ff',fontSize:'.65rem',padding:'4px 10px',borderRadius:'20px',pointerEvents:'none'}},'⇕ sürükle');
+    previewWrap.appendChild(surukleIpucu);
+
+    const slider=h('input',{type:'range',min:String(minCut),max:String(maxCut),step:'10',style:{width:'100%',marginTop:'12px'}});
+    const yuzde=h('p',{style:{textAlign:'center',fontSize:'.7rem',color:'#6b5b8a',marginTop:'4px'}});
+
+    function ciz(){
+      outCanvas.width=IG_W; outCanvas.height=cutY;
+      outCanvas.style.height=(cutY*olcek)+'px';
+      const cctx=outCanvas.getContext('2d');
+      cctx.drawImage(kaynakCanvas,0,0,IG_W,cutY,0,0,IG_W,cutY);
+      slider.value=String(cutY);
+      const yuzdeVal = maxCut>minCut ? Math.round(((cutY-minCut)/(maxCut-minCut))*100) : 100;
+      yuzde.textContent = `Şiirin ~%${yuzdeVal}'i görünüyor`;
+    }
+    slider.value=String(cutY);
+    slider.oninput=e=>{cutY=Number(e.target.value); ciz();};
+
+    let basY=null, basCut=cutY;
+    previewWrap.addEventListener('pointerdown',e=>{basY=e.clientY;basCut=cutY;try{previewWrap.setPointerCapture(e.pointerId);}catch{}});
+    previewWrap.addEventListener('pointermove',e=>{
+      if(basY==null)return;
+      const delta=(e.clientY-basY)/olcek;
+      cutY=Math.max(minCut,Math.min(maxCut,Math.round(basCut+delta)));
+      ciz();
+    });
+    const bitir=()=>{basY=null;};
+    previewWrap.addEventListener('pointerup',bitir);
+    previewWrap.addEventListener('pointercancel',bitir);
+    previewWrap.addEventListener('pointerleave',bitir);
+
+    ciz();
+
+    const ipucu=h('p',{style:{textAlign:'center',fontSize:'.72rem',color:'#7c6b9a',margin:'10px 0 2px'}},'👆 Önizlemeyi sürükle ya da kaydırıcıyı kullan: şiirin hangi kıtaya kadar görüneceğini sen seç.');
+
+    async function gorseliBlobaCevir(){
+      return new Promise(resolve=>outCanvas.toBlob(b=>resolve(b),'image/png',0.95));
+    }
+
+    const btnRow=h('div',{style:{display:'flex',gap:'10px',marginTop:'16px'}});
+    const paylasBtn=h('button',{class:'pb btn',style:{flex:'1'}},'📤 Paylaş');
+    const indirBtn=h('button',{class:'btn',style:{flex:'1',background:'transparent',color:'#a78bfa',border:'1px solid #3d1f6e',borderRadius:'10px',padding:'10px'}},'⬇️ İndir');
+
+    indirBtn.onclick=async()=>{
+      const blob=await gorseliBlobaCevir();
+      if(!blob){toastGoster('Görsel oluşturulamadı.');return;}
+      const url=URL.createObjectURL(blob);
+      const a=document.createElement('a'); a.href=url; a.download=`hikaye-${post.id}.png`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(()=>URL.revokeObjectURL(url),4000);
+      toastGoster('⬇️ Görsel indirildi! Instagram\'ı açıp hikayene ekleyebilirsin.');
+    };
+
+    paylasBtn.onclick=async()=>{
+      paylasBtn.disabled=true; paylasBtn.textContent='⏳...';
+      try{
+        const blob=await gorseliBlobaCevir();
+        if(!blob) throw new Error('blob yok');
+        const dosya=new File([blob], `hikaye-${post.id}.png`, {type:'image/png'});
+        if(navigator.canShare && navigator.canShare({files:[dosya]})){
+          await navigator.share({files:[dosya], title: post.title||'Şiir', text:'Yeni Ozanlar 🪶'});
+          kapat();
+        } else {
+          indirBtn.click();
+        }
+      }catch(err){
+        if(err?.name!=='AbortError'){ toastGoster('Paylaşım açılamadı, görsel indirildi.'); indirBtn.click(); }
+      } finally {
+        paylasBtn.disabled=false; paylasBtn.textContent='📤 Paylaş';
+      }
+    };
+
+    btnRow.appendChild(paylasBtn); btnRow.appendChild(indirBtn);
+
+    modal.appendChild(previewWrap);
+    modal.appendChild(slider);
+    modal.appendChild(yuzde);
+    modal.appendChild(ipucu);
+    modal.appendChild(btnRow);
+  })();
+
+  return bg;
+}
+
+// Instagram logosuna benzeyen küçük, gradyanlı bir SVG ikon üretir.
+function igIkonSVG(uid, size=18){
+  const gid=`igGrad-${uid}`;
+  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <radialGradient id="${gid}" cx="30%" cy="107%" r="150%">
+        <stop offset="0%" stop-color="#fdf497"/>
+        <stop offset="5%" stop-color="#fdf497"/>
+        <stop offset="45%" stop-color="#fd5949"/>
+        <stop offset="60%" stop-color="#d6249f"/>
+        <stop offset="90%" stop-color="#285AEB"/>
+      </radialGradient>
+    </defs>
+    <rect x="1.5" y="1.5" width="21" height="21" rx="6.5" fill="url(#${gid})"/>
+    <rect x="6.3" y="6.3" width="11.4" height="11.4" rx="3.4" fill="none" stroke="#fff" stroke-width="1.6"/>
+    <circle cx="12" cy="12" r="3.1" fill="none" stroke="#fff" stroke-width="1.6"/>
+    <circle cx="16.7" cy="7.3" r="1" fill="#fff"/>
+  </svg>`;
+}
+
 // Bot kullanıcı ID'leri
 const BOT_IDS = ['bot_duyu_yorum','bot_katli_yorum','bot_ari_yorum'];
 
@@ -1881,6 +2190,9 @@ function postCard(post, forceExpand=false, autoOpenComments=false, hedefYorumId=
   if(avg!==null) pfoot.appendChild(h('span',{style:{fontSize:'.75rem',color:scoreColor(avg)}},scoreBadge(avg)));
   const shareIcon=h('span',{title:'Linki kopyala',style:{fontSize:'.85rem',cursor:'pointer',marginLeft:'8px'},onclick:(e)=>{e.stopPropagation();linkiKopyala(post.id);}},'🔗');
   pfoot.appendChild(shareIcon);
+  const igIcon=h('span',{title:'Hikayede paylaş',style:{cursor:'pointer',marginLeft:'8px',display:'inline-flex',alignItems:'center',verticalAlign:'middle'},onclick:(e)=>{e.stopPropagation();document.body.appendChild(instagramHikayeModal(post));}});
+  igIcon.innerHTML=igIkonSVG(post.id,18);
+  pfoot.appendChild(igIcon);
   const expandLabel=h('span',{style:{fontSize:'.75rem',color:'#7c3aed',marginLeft:'auto'}},'Devamını gör ▼');
   pfoot.appendChild(expandLabel);
   preview.appendChild(pfoot);
