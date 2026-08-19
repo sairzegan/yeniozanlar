@@ -2,7 +2,18 @@
   "rewrites": [
     {
       "source": "/post/:slug",
+      "has": [
+        {
+          "type": "header",
+          "key": "user-agent",
+          "value": ".*(facebookexternalhit|Facebot|Twitterbot|LinkedInBot|WhatsApp|TelegramBot|Pinterest|Slackbot|Discordbot|Googlebot).*"
+        }
+      ],
       "destination": "/api/postPreview?slug=:slug"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
     }
   ]
 }
