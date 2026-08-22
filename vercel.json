@@ -12,7 +12,7 @@
       "destination": "/api/postPreview?slug=:slug"
     },
     {
-      "source": "/((?!sitemap\\.xml$).*)",
+      "source": "/(.*)",
       "destination": "/index.html"
     }
   ]
