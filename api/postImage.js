@@ -1,53 +1,45 @@
-const { cert, getApps, initializeApp } = require("firebase-admin/app");
-const { getFirestore } = require("firebase-admin/firestore");
+// api/postImage.js
+//
+// Vercel bu dosyayı OTOMATİK olarak şu adreste yayınlar:
+//   https://SIZIN-PROJENIZ.vercel.app/api/postImage?id=ŞİİR_ID
+//
+// Firestore'daki base64 resmi GERÇEK bir görsel dosyası (doğru Content-Type ile
+// ham byte) olarak sunar. og:image, base64/data-uri kabul etmediği için
+// postPreview.js bu adresi kullanır.
 
-const PROJECT_ID = "yeniozanlar-68b49";
-const APP_URL = "https://yeniozanlar.vercel.app";
+const PROJECT_ID = "yeniozanlar-68b49"; // Firebase proje ID'niz
+const API_KEY = "AIzaSyC6sshBjUU7xZf_KgjwW2yWuvE1ZG9oZWY";
+const SITE_URL = "https://yeniozanlar-68b49.web.app";
 
-function firebaseAdmin() {
-  if (getApps().length) return getApps()[0];
-
-  const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
-  if (!raw) {
-    throw new Error("FIREBASE_SERVICE_ACCOUNT_JSON Vercel ortam değişkeni tanımlı değil.");
+module.exports = async (req, res) => {
+  const postId = req.query.id;
+  if (!postId) {
+    res.writeHead(302, { Location: `${SITE_URL}/og-image.png` });
+    return res.end();
   }
 
-  const serviceAccount = JSON.parse(raw);
-
-  return initializeApp({
-    credential: cert(serviceAccount),
-    projectId: PROJECT_ID,
-  });
-}
-
-function db() {
-  firebaseAdmin();
-  return getFirestore();
-}
-
-module.exports = async function handler(req, res) {
   try {
-    const postId = String(req.query?.id || "");
-    if (!postId) {
-      return res.redirect(302, `${APP_URL}/og-image.png`);
+    const firestoreUrl = `https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents/posts/${encodeURIComponent(postId)}?key=${API_KEY}`;
+    const r = await fetch(firestoreUrl);
+    if (!r.ok) {
+      res.writeHead(302, { Location: `${SITE_URL}/og-image.png` });
+      return res.end();
     }
-
-    const doc = await db().collection("posts").doc(postId).get();
-    const dataUri = doc.exists ? doc.data().image : null;
-    const eslesme = dataUri && dataUri.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
-
+    const data = await r.json();
+    const dataUri = data.fields?.image?.stringValue || "";
+    const eslesme = dataUri.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
     if (!eslesme) {
-      return res.redirect(302, `${APP_URL}/og-image.png`);
+      res.writeHead(302, { Location: `${SITE_URL}/og-image.png` });
+      return res.end();
     }
-
     const mime = eslesme[1];
-    const buffer = Buffer.from(eslesme.slice(2).join(","), "base64");
-
+    const buffer = Buffer.from(eslesme[2], "base64");
     res.setHeader("Content-Type", mime);
     res.setHeader("Cache-Control", "public, max-age=3600, s-maxage=86400");
     return res.status(200).send(buffer);
   } catch (err) {
-    console.error("postImage error:", err);
-    return res.redirect(302, `${APP_URL}/og-image.png`);
+    console.error("postImage hata:", err);
+    res.writeHead(302, { Location: `${SITE_URL}/og-image.png` });
+    return res.end();
   }
 };
