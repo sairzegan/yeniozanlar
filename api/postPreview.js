@@ -1,6 +1,5 @@
 const { cert, getApps, initializeApp } = require("firebase-admin/app");
 const { getFirestore } = require("firebase-admin/firestore");
-const fs = require("fs");
 
 const PROJECT_ID = "yeniozanlar-68b49";
 const APP_URL = "https://yeniozanlar.vercel.app";
@@ -68,7 +67,6 @@ module.exports = async function handler(req, res) {
       return res.status(404).send("Şiir bulunamadı.");
     }
 
-    // Normal tarayıcı: mevcut uygulamanın kendi post route'una dön.
     if (!isCrawler(req)) {
       return res.redirect(302, `${APP_URL}${req.url}`);
     }
@@ -81,10 +79,7 @@ module.exports = async function handler(req, res) {
 
     const post = snap.data() || {};
     const title = post.title || "Yeni Ozanlar";
-    
-    // Güvenli alan kontrolü: text, content, siir, body veya description alanlarının hepsini kapsar
-    const rawText = post.text || post.content || post.siir || post.body || post.description || "";
-    const description = excerpt(rawText);
+    const description = excerpt(post.text);
 
     let image = null;
 
