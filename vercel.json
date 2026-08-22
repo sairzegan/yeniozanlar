@@ -10,7 +10,7 @@
         {
           "type": "header",
           "key": "user-agent",
-          "value": ".*(facebookexternalhit|Facebot|Twitterbot|LinkedInBot|WhatsApp|TelegramBot|Pinterest|Slackbot|Discordbot|Googlebot).*.*"
+          "value": ".*(facebookexternalhit|Facebot|Twitterbot|LinkedInBot|WhatsApp|TelegramBot|Pinterest|Slackbot|Discordbot|Googlebot|Applebot|SkypeUriPreview|vkShare|redditbot).*|.*bot.*"
         }
       ],
       "destination": "/api/postPreview?slug=:slug"
