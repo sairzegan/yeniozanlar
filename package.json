@@ -2,7 +2,7 @@
   "name": "yeniozanlar-vercel-preview",
   "private": true,
   "engines": {
-    "node": "20.x"
+    "node": "22.x"
   },
   "dependencies": {
     "firebase-admin": "14.2.0"
