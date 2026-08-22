@@ -13,7 +13,7 @@
           "value": ".*(facebookexternalhit|Facebot|Twitterbot|LinkedInBot|WhatsApp|TelegramBot|Pinterest|Slackbot|Discordbot|Googlebot).*"
         }
       ],
-      "destination": "/api/postPreview?slug=:slug"
+      "destination": "/API/postPreview?slug=:slug"
     },
     {
       "source": "/(.*)",
