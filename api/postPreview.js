@@ -81,7 +81,10 @@ module.exports = async function handler(req, res) {
 
     const post = snap.data() || {};
     const title = post.title || "Yeni Ozanlar";
-    const description = excerpt(post.text);
+    
+    // Güvenli alan kontrolü: text, content, siir, body veya description alanlarının hepsini kapsar
+    const rawText = post.text || post.content || post.siir || post.body || post.description || "";
+    const description = excerpt(rawText);
 
     let image = null;
 
