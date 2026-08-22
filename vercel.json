@@ -1,10 +1,6 @@
 {
   "rewrites": [
     {
-      "source": "/sitemap.xml",
-      "destination": "/sitemap.xml"
-    },
-    {
       "source": "/post/:slug",
       "has": [
         {
@@ -16,7 +12,7 @@
       "destination": "/api/postPreview?slug=:slug"
     },
     {
-      "source": "/(.*)",
+      "source": "/((?!sitemap\\.xml$).*)",
       "destination": "/index.html"
     }
   ]
