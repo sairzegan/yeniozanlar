@@ -106,13 +106,12 @@ module.exports = async function handler(req, res) {
           if (post.title) title = post.title;
           if (post.text) description = excerpt(post.text);
           
-          // Resim kontrolü: Hatalı web.app uzantılarını temizleyip düzgün URL yapıyoruz
           if (post.image) {
             const rawImg = String(post.image);
-            if (/^https?:\/\//i.test(rawImg) && !rawImg.includes("web.app")) {
+            if (rawImg.includes("web.app") || rawImg.includes("firebaseapp.com")) {
+              image = null;
+            } else if (/^https?:\/\//i.test(rawImg)) {
               image = rawImg;
-            } else {
-              image = `${APP_URL}/api/postImage?id=${encodeURIComponent(snap.id)}`;
             }
           }
 
@@ -121,9 +120,7 @@ module.exports = async function handler(req, res) {
             image = `https://img.youtube.com/vi/${youtube}/maxresdefault.jpg`;
           }
         }
-      } catch (err) {
-        // Hata durumunda slug başlığı ile devam edilir
-      }
+      } catch (err) {}
     }
 
     const cleanSlug = slug || postId;
@@ -171,4 +168,4 @@ ${image ? `<img src="${esc(image)}" alt="${esc(title)}" style="max-width:100%;he
   } catch (error) {
     return res.redirect(302, APP_URL);
   }
-}
+};
