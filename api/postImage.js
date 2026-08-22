@@ -1,45 +1,57 @@
-// api/postImage.js
-//
-// Vercel bu dosyayı OTOMATİK olarak şu adreste yayınlar:
-//   https://SIZIN-PROJENIZ.vercel.app/api/postImage?id=ŞİİR_ID
-//
-// Firestore'daki base64 resmi GERÇEK bir görsel dosyası (doğru Content-Type ile
-// ham byte) olarak sunar. og:image, base64/data-uri kabul etmediği için
-// postPreview.js bu adresi kullanır.
+const { cert, getApps, initializeApp } = require("firebase-admin/app");
+const { getFirestore } = require("firebase-admin/firestore");
 
-const PROJECT_ID = "yeniozanlar-68b49"; // Firebase proje ID'niz
-const API_KEY = "AIzaSyC6sshBjUU7xZf_KgjwW2yWuvE1ZG9oZWY";
-const SITE_URL = "https://yeniozanlar-68b49.web.app";
+const PROJECT_ID = "yeniozanlar-68b49";
 
-module.exports = async (req, res) => {
-  const postId = req.query.id;
-  if (!postId) {
-    res.writeHead(302, { Location: `${SITE_URL}/og-image.png` });
-    return res.end();
+function firebaseAdmin() {
+  if (getApps().length) return getApps()[0];
+
+  const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+  if (!raw) {
+    throw new Error("FIREBASE_SERVICE_ACCOUNT_JSON Vercel ortam değişkeni tanımlı değil.");
   }
 
+  return initializeApp({
+    credential: cert(JSON.parse(raw)),
+    projectId: PROJECT_ID,
+  });
+}
+
+module.exports = async function handler(req, res) {
   try {
-    const firestoreUrl = `https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents/posts/${encodeURIComponent(postId)}?key=${API_KEY}`;
-    const r = await fetch(firestoreUrl);
-    if (!r.ok) {
-      res.writeHead(302, { Location: `${SITE_URL}/og-image.png` });
-      return res.end();
+    firebaseAdmin();
+
+    const id = String(req.query?.id || "");
+
+    if (!/^[A-Za-z0-9]{7}$/.test(id)) {
+      return res.status(400).send("Geçersiz ID.");
     }
-    const data = await r.json();
-    const dataUri = data.fields?.image?.stringValue || "";
-    const eslesme = dataUri.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
-    if (!eslesme) {
-      res.writeHead(302, { Location: `${SITE_URL}/og-image.png` });
-      return res.end();
+
+    const snap = await getFirestore().collection("posts").doc(id).get();
+
+    if (!snap.exists) {
+      return res.status(404).send("Görsel bulunamadı.");
     }
-    const mime = eslesme[1];
-    const buffer = Buffer.from(eslesme[2], "base64");
-    res.setHeader("Content-Type", mime);
-    res.setHeader("Cache-Control", "public, max-age=3600, s-maxage=86400");
+
+    const dataUrl = String(snap.data()?.image || "");
+
+    const match = dataUrl.match(
+      /^data:(image\/[A-Za-z0-9.+-]+);base64,([A-Za-z0-9+/=\s]+)$/
+    );
+
+    if (!match) {
+      return res.status(404).send("Görsel bulunamadı.");
+    }
+
+    const buffer = Buffer.from(match[2].replace(/\s/g, ""), "base64");
+
+    res.setHeader("Content-Type", match[1]);
+    res.setHeader("Content-Length", String(buffer.length));
+    res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+
     return res.status(200).send(buffer);
-  } catch (err) {
-    console.error("postImage hata:", err);
-    res.writeHead(302, { Location: `${SITE_URL}/og-image.png` });
-    return res.end();
+  } catch (error) {
+    console.error("postImage:", error);
+    return res.status(500).send("Görsel alınamadı.");
   }
 };
