@@ -47,7 +47,6 @@ function getPostId(slug) {
 
 function titleFromSlug(slug) {
   if (!slug) return "Yeni Ozanlar";
-  // e.g. "bir-cift-kara-goz-8k43vdz" -> "Bir Çift Kara Göz"
   const clean = String(slug).replace(/-[A-Za-z0-9]{7}$/, "");
   return clean
     .split("-")
@@ -106,21 +105,24 @@ module.exports = async function handler(req, res) {
           const post = snap.data() || {};
           if (post.title) title = post.title;
           if (post.text) description = excerpt(post.text);
+          
+          // Resim kontrolü: Hatalı web.app uzantılarını temizleyip düzgün URL yapıyoruz
           if (post.image) {
             const rawImg = String(post.image);
-            if (/^https?:\/\//i.test(rawImg)) {
+            if (/^https?:\/\//i.test(rawImg) && !rawImg.includes("web.app")) {
               image = rawImg;
-            } else if (/^data:image\//i.test(rawImg)) {
+            } else {
               image = `${APP_URL}/api/postImage?id=${encodeURIComponent(snap.id)}`;
             }
           }
+
           const youtube = getYouTubeId(post.youtube);
           if (!image && youtube) {
             image = `https://img.youtube.com/vi/${youtube}/maxresdefault.jpg`;
           }
         }
       } catch (err) {
-        // Fallback to slug-based title if DB fails
+        // Hata durumunda slug başlığı ile devam edilir
       }
     }
 
@@ -169,4 +171,4 @@ ${image ? `<img src="${esc(image)}" alt="${esc(title)}" style="max-width:100%;he
   } catch (error) {
     return res.redirect(302, APP_URL);
   }
-};
+}
