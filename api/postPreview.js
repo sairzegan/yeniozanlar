@@ -36,10 +36,8 @@ function esc(value) {
 
 function getPostId(slug) {
   if (!slug) return null;
-  // Match standard suffix like -([A-Za-z0-9]{7})
   const match = String(slug).match(/-([A-Za-z0-9]{7})$/);
   if (match) return match[1];
-  // Fallback: if slug itself is the ID or raw string
   return slug;
 }
 
@@ -64,11 +62,12 @@ function isCrawler(req) {
 
 module.exports = async function handler(req, res) {
   try {
-    const slug = String(req.query?.slug || "");
+    const rawSlug = String(req.query?.slug || "");
+    const slug = rawSlug.split("?")[0].trim();
     const postId = getPostId(slug);
 
     if (!postId) {
-      return res.status(404).send("Şiir bulunamadı.");
+      return res.redirect(302, APP_URL);
     }
 
     if (!isCrawler(req)) {
@@ -77,7 +76,6 @@ module.exports = async function handler(req, res) {
 
     let snap = await db().collection("posts").doc(postId).get();
 
-    // If not found directly by ID, try querying by slug or title if needed, or fallback
     if (!snap.exists) {
       const querySnap = await db().collection("posts").where("slug", "==", slug).limit(1).get();
       if (!querySnap.empty) {
@@ -101,7 +99,7 @@ module.exports = async function handler(req, res) {
       if (/^https?:\/\//i.test(raw)) {
         image = raw;
       } else if (/^data:image\//i.test(raw)) {
-        image = `${APP_URL}/api/postImage?id=${encodeURIComponent(realPostId)}&v=${encodeURIComponent(post.ts || Date.now())}`;
+        image = `${APP_URL}/api/postImage?id=${encodeURIComponent(realPostId)}`;
       }
     }
 
@@ -110,7 +108,8 @@ module.exports = async function handler(req, res) {
       image = `https://img.youtube.com/vi/${youtube}/maxresdefault.jpg`;
     }
 
-    const canonical = `${APP_URL}/post/${encodeURIComponent(slug)}`;
+    const cleanSlug = slug || realPostId;
+    const canonical = `${APP_URL}/post/${encodeURIComponent(cleanSlug)}`;
     const uygulamaLinki = `${APP_URL}/#postdetail-${encodeURIComponent(realPostId)}`;
 
     const html = `<!doctype html>
@@ -153,6 +152,6 @@ ${image ? `<img src="${esc(image)}" alt="${esc(title)}" style="max-width:100%;he
     return res.status(200).send(html);
   } catch (error) {
     console.error("postPreview error:", error);
-    return res.status(500).send("Önizleme oluşturulamadı.");
+    return res.redirect(302, APP_URL);
   }
 };
