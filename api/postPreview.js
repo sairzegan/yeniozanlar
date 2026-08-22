@@ -35,8 +35,12 @@ function esc(value) {
 }
 
 function getPostId(slug) {
-  const match = String(slug || "").match(/-([A-Za-z0-9]{7})$/);
-  return match ? match[1] : null;
+  if (!slug) return null;
+  // Match standard suffix like -([A-Za-z0-9]{7})
+  const match = String(slug).match(/-([A-Za-z0-9]{7})$/);
+  if (match) return match[1];
+  // Fallback: if slug itself is the ID or raw string
+  return slug;
 }
 
 function getYouTubeId(url) {
@@ -55,7 +59,7 @@ function excerpt(text) {
 
 function isCrawler(req) {
   const ua = String(req.headers["user-agent"] || "").toLowerCase();
-  return /facebookexternalhit|facebot|twitterbot|linkedinbot|whatsapp|telegrambot|pinterest|slackbot|discordbot|googlebot/i.test(ua);
+  return /facebookexternalhit|facebot|twitterbot|linkedinbot|whatsapp|telegrambot|pinterest|slackbot|discordbot|googlebot|applebot|skypeuripreview|vkshare|redditbot/i.test(ua);
 }
 
 module.exports = async function handler(req, res) {
@@ -68,10 +72,18 @@ module.exports = async function handler(req, res) {
     }
 
     if (!isCrawler(req)) {
-      return res.redirect(302, `${APP_URL}${req.url}`);
+      return res.redirect(302, `${APP_URL}/#postdetail-${encodeURIComponent(postId)}`);
     }
 
-    const snap = await db().collection("posts").doc(postId).get();
+    let snap = await db().collection("posts").doc(postId).get();
+
+    // If not found directly by ID, try querying by slug or title if needed, or fallback
+    if (!snap.exists) {
+      const querySnap = await db().collection("posts").where("slug", "==", slug).limit(1).get();
+      if (!querySnap.empty) {
+        snap = querySnap.docs[0];
+      }
+    }
 
     if (!snap.exists) {
       return res.status(404).send("Şiir bulunamadı.");
@@ -80,26 +92,26 @@ module.exports = async function handler(req, res) {
     const post = snap.data() || {};
     const title = post.title || "Yeni Ozanlar";
     const description = excerpt(post.text);
+    const realPostId = snap.id;
 
     let image = null;
 
     if (post.image) {
       const raw = String(post.image);
-
       if (/^https?:\/\//i.test(raw)) {
         image = raw;
       } else if (/^data:image\//i.test(raw)) {
-        image = `${APP_URL}/api/postImage?id=${encodeURIComponent(postId)}&v=${encodeURIComponent(post.ts || Date.now())}`;
+        image = `${APP_URL}/api/postImage?id=${encodeURIComponent(realPostId)}&v=${encodeURIComponent(post.ts || Date.now())}`;
       }
     }
 
     const youtube = getYouTubeId(post.youtube);
-
     if (!image && youtube) {
       image = `https://img.youtube.com/vi/${youtube}/maxresdefault.jpg`;
     }
 
-    const canonical = `${APP_URL}${req.url}`;
+    const canonical = `${APP_URL}/post/${encodeURIComponent(slug)}`;
+    const uygulamaLinki = `${APP_URL}/#postdetail-${encodeURIComponent(realPostId)}`;
 
     const html = `<!doctype html>
 <html lang="tr">
@@ -126,11 +138,13 @@ ${image ? `
 
 <meta name="twitter:title" content="${esc(title)}">
 <meta name="twitter:description" content="${esc(description)}">
+<meta http-equiv="refresh" content="0; url=${esc(uygulamaLinki)}">
 </head>
 <body>
 <h1>${esc(title)}</h1>
 <p>${esc(description)}</p>
 ${image ? `<img src="${esc(image)}" alt="${esc(title)}" style="max-width:100%;height:auto">` : ""}
+<p><a href="${esc(uygulamaLinki)}">Şiiri görüntülemek için tıklayın</a></p>
 </body>
 </html>`;
 
@@ -138,7 +152,7 @@ ${image ? `<img src="${esc(image)}" alt="${esc(title)}" style="max-width:100%;he
     res.setHeader("Cache-Control", "public, s-maxage=60, stale-while-revalidate=300");
     return res.status(200).send(html);
   } catch (error) {
-    console.error("postPreview:", error);
+    console.error("postPreview error:", error);
     return res.status(500).send("Önizleme oluşturulamadı.");
   }
 };

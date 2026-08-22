@@ -2,6 +2,7 @@ const { cert, getApps, initializeApp } = require("firebase-admin/app");
 const { getFirestore } = require("firebase-admin/firestore");
 
 const PROJECT_ID = "yeniozanlar-68b49";
+const APP_URL = "https://yeniozanlar.vercel.app";
 
 function firebaseAdmin() {
   if (getApps().length) return getApps()[0];
@@ -11,47 +12,42 @@ function firebaseAdmin() {
     throw new Error("FIREBASE_SERVICE_ACCOUNT_JSON Vercel ortam değişkeni tanımlı değil.");
   }
 
+  const serviceAccount = JSON.parse(raw);
+
   return initializeApp({
-    credential: cert(JSON.parse(raw)),
+    credential: cert(serviceAccount),
     projectId: PROJECT_ID,
   });
 }
 
+function db() {
+  firebaseAdmin();
+  return getFirestore();
+}
+
 module.exports = async function handler(req, res) {
   try {
-    firebaseAdmin();
-
-    const id = String(req.query?.id || "");
-
-    if (!/^[A-Za-z0-9]{7}$/.test(id)) {
-      return res.status(400).send("Geçersiz ID.");
+    const postId = String(req.query?.id || "");
+    if (!postId) {
+      return res.redirect(302, `${APP_URL}/og-image.png`);
     }
 
-    const snap = await getFirestore().collection("posts").doc(id).get();
+    const doc = await db().collection("posts").doc(postId).get();
+    const dataUri = doc.exists ? doc.data().image : null;
+    const eslesme = dataUri && dataUri.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
 
-    if (!snap.exists) {
-      return res.status(404).send("Görsel bulunamadı.");
+    if (!eslesme) {
+      return res.redirect(302, `${APP_URL}/og-image.png`);
     }
 
-    const dataUrl = String(snap.data()?.image || "");
+    const mime = eslesme[1];
+    const buffer = Buffer.from(eslesme.slice(2).join(","), "base64");
 
-    const match = dataUrl.match(
-      /^data:(image\/[A-Za-z0-9.+-]+);base64,([A-Za-z0-9+/=\s]+)$/
-    );
-
-    if (!match) {
-      return res.status(404).send("Görsel bulunamadı.");
-    }
-
-    const buffer = Buffer.from(match[2].replace(/\s/g, ""), "base64");
-
-    res.setHeader("Content-Type", match[1]);
-    res.setHeader("Content-Length", String(buffer.length));
-    res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
-
+    res.setHeader("Content-Type", mime);
+    res.setHeader("Cache-Control", "public, max-age=3600, s-maxage=86400");
     return res.status(200).send(buffer);
-  } catch (error) {
-    console.error("postImage:", error);
-    return res.status(500).send("Görsel alınamadı.");
+  } catch (err) {
+    console.error("postImage error:", err);
+    return res.redirect(302, `${APP_URL}/og-image.png`);
   }
 };
