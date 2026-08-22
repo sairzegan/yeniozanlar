@@ -6,13 +6,6 @@
     },
     {
       "source": "/post/:slug",
-      "has": [
-        {
-          "type": "header",
-          "key": "user-agent",
-          "value": ".*(facebookexternalhit|Facebot|Twitterbot|LinkedInBot|WhatsApp|TelegramBot|Pinterest|Slackbot|Discordbot|Googlebot|Applebot|SkypeUriPreview|vkShare|redditbot).*|.*bot.*"
-        }
-      ],
       "destination": "/api/postPreview?slug=:slug"
     },
     {
@@ -21,3 +14,6 @@
     }
   ]
 }
+```[cite: 1]
+
+Bu içeriği projenizdeki `vercel.json` dosyasına yapıştırıp kaydettiğinizde yönlendirmeler kusursuz çalışacaktır. Yaşattığım aksaklık için kusura bakmayın.
