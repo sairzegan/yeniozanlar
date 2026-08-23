@@ -2166,6 +2166,8 @@ function navBar(){
   const tabs=[
     {k:'feed',ic:'🏠',lb:'Akış'},
     {k:'leaderboard',ic:'🏆',lb:'Sıralama'},
+    {k:'addPoem',ic:'🪶',lb:'Ekle'},
+    {k:'swipe',ic:'📱',lb:'Kaydır'},
     {k:'explore',ic:'🔍',lb:'Keşfet'},
     {k:'messages',ic:'✉️',lb:'Mesaj',badge:unreadCount},
     {k:'profile',ic:'👤',lb:'Profil'}
@@ -2176,27 +2178,34 @@ function navBar(){
       h('span',{style:{fontFamily:"'Playfair Display',serif",fontSize:'1.15rem',color:isAdmin?'#f59e0b':'#c084fc',cursor:'pointer'},onclick:()=>go('feed')},isAdmin?'👑 Yeni Ozanlar (Admin)' : '🪶 Yeni Ozanlar'),
       S.me
         ? h('div',{style:{display:'flex',gap:'8px',alignItems:'center'}},[
-            h('button',{class:'btn swipe-nav-btn',title:'Kaydırma Modu',onclick:()=>go('swipe')},'📱'),
             av(S.me,30,()=>go('profile',{profileId:S.me?.id})),
             h('button',{class:'btn',style:{background:'transparent',color:'#a78bfa',fontSize:'.75rem',padding:'4px 10px',border:'1px solid #3d1f6e',borderRadius:'20px'},onclick:()=>A.logout()},'Çıkış')
           ])
         : h('div',{style:{display:'flex',gap:'8px',alignItems:'center'}},[
-            h('button',{class:'btn swipe-nav-btn',title:'Kaydırma Modu',onclick:()=>go('swipe')},'📱'),
             h('button',{class:'btn',style:{background:'transparent',color:'#a78bfa',fontSize:'.75rem',padding:'5px 12px',border:'1px solid #3d1f6e',borderRadius:'20px'},onclick:()=>go('login')},'Giriş Yap'),
             h('button',{class:'btn',style:{background:'linear-gradient(135deg,#7c3aed,#a855f7)',color:'#fff',fontSize:'.75rem',padding:'5px 12px',border:'none',borderRadius:'20px'},onclick:()=>go('register')},'Kayıt Ol')
           ])
     ]),
     h('div',{class:'nav-bottom'},tabs.map(t=>{
       // Mesaj ve Profil sekmeleri giriş gerektirir; misafir tıklarsa giriş ekranına yönlendirilir.
+      // Ekle (Şiir Ekle) bir ekran değil, doğrudan paylaşım modalını açan bir eylemdir.
       const korumali = (t.k==='messages'||t.k==='profile');
       const tiklandiginda = ()=>{
+        if(t.k==='addPoem'){
+          if(girisGerekli())return;
+          if(document.querySelector('.modal-bg'))return; // zaten açık bir modal varsa ikinciyi açma
+          const m=composeModal(()=>{m.remove();});
+          document.body.appendChild(m);
+          return;
+        }
         if(korumali && !S.me){ go('login'); return; }
         if(t.k==='profile'){ go('profile',{profileId:S.me.id}); return; }
         go(t.k);
       };
-      const btn=h('button',{class:'btn','data-navkey':t.k,style:{background:'none',color:S.screen===t.k?'#c084fc':'#6b5b8a',display:'flex',flexDirection:'column',alignItems:'center',gap:'2px',fontSize:'.62rem',padding:'4px 6px',borderBottom:S.screen===t.k?'2px solid #c084fc':'2px solid transparent',position:'relative'},onclick:tiklandiginda});
+      const aktifMi = t.k!=='addPoem' && S.screen===t.k;
+      const btn=h('button',{class:'btn','data-navkey':t.k,style:{background:'none',color:aktifMi?'#c084fc':'#6b5b8a',display:'flex',flexDirection:'column',alignItems:'center',gap:'2px',fontSize:'.58rem',padding:'4px 3px',borderBottom:aktifMi?'2px solid #c084fc':'2px solid transparent',position:'relative'},onclick:tiklandiginda});
       const icWrap=h('span',{style:{position:'relative',display:'inline-block'}});
-      icWrap.appendChild(h('span',{style:{fontSize:'1.2rem'}},t.ic));
+      icWrap.appendChild(h('span',{style:{fontSize:'1.05rem'}},t.ic));
       // Rozet, sayı 0 olsa bile DOM'da tutulur (gizli), böylece sayfa tekrar
       // render edilmeden sadece rozet güncellenmek istendiğinde (bkz. mesajBildirimRozetGuncelle) bulunabilir.
       if(t.k==='messages'){
