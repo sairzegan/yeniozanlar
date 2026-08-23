@@ -35,9 +35,19 @@ function esc(value) {
     .replace(/'/g, "&#39;");
 }
 
+// Şiirin ID'sini linkten çıkarır. İki format da desteklenir:
+//  - "baslik-slug-ID"  → yeni format (bkz. index.html → postYolu()/paylasimLinki())
+//  - "ID"              → eski format (slug özelliği eklenmeden ÖNCE paylaşılmış,
+//                         Facebook/X'te hâlâ dolaşımda olan geçmiş linkler)
+// Mantık, uygulamanın (index.html) kendi ID ayrıştırma mantığıyla BİREBİR aynıdır:
+// son "-" işaretinden sonraki kısım alınır; hiç "-" yoksa girdinin tamamı ID sayılır.
+// Böylece daha önce eski formatta paylaşılmış bir link de artık düzgün önizleme üretir.
 function getPostId(slug) {
-  const match = String(slug || "").match(/-([A-Za-z0-9]{7})$/);
-  return match ? match[1] : null;
+  let raw = String(slug || "");
+  try { raw = decodeURIComponent(raw); } catch {}
+  const sonTireIndex = raw.lastIndexOf("-");
+  const aday = sonTireIndex !== -1 ? raw.slice(sonTireIndex + 1) : raw;
+  return /^[A-Za-z0-9]{7}$/.test(aday) ? aday : null;
 }
 
 function getYouTubeId(url) {
@@ -56,7 +66,7 @@ function excerpt(text) {
 
 function isCrawler(req) {
   const ua = String(req.headers["user-agent"] || "").toLowerCase();
-  return /facebookexternalhit|facebot|twitterbot|linkedinbot|whatsapp|telegrambot|pinterest|slackbot|discordbot|googlebot/i.test(ua);
+  return /facebookexternalhit|facebot|meta-externalagent|twitterbot|linkedinbot|whatsapp|telegrambot|pinterest|slackbot|discordbot|googlebot/i.test(ua);
 }
 
 module.exports = async function handler(req, res) {
