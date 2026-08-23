@@ -2834,7 +2834,7 @@ function Explore(){
 // KAYDIRMA MODU (mobil "reels" tarzı tam ekran şiir okuma arayüzü)
 // 3 mod: en yeni→eskiye (latest), rastgele (random), sıralama sayfasındaki
 // puana göre (top). Metin şiirlerde aşağı kaydırma şiirin devamını okutur,
-// sağa kaydırma bir sonraki şiire geçer. Görsel/videolu paylaşımlarda görsel
+// sola kaydırma bir sonraki şiire geçer. Görsel/videolu paylaşımlarda görsel
 // üstte sabit görünür, aşağı kaydırınca altından şiir metni okunur. YouTube
 // videolar otomatik oynatılır (tarayıcı politikası gereği sessiz/muted başlar).
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2898,11 +2898,11 @@ function SwipeMode(){
     if(idx>=list.length)idx=0;
     const post=list[idx];
     stage.appendChild(swipeCard(post,()=>{idx++;renderCard();}));
-    counter.textContent=`${idx+1} / ${list.length} · sağa kaydır = sonraki`;
+    counter.textContent=`${idx+1} / ${list.length} · sola kaydır = sonraki`;
   }
 
   // Dokunma jestleri: dikey kaydırma normal scroll olarak bırakılır (içeriği okumak için),
-  // yatay kaydırma algılanınca sağa kaydırmada sıradaki şiire geçilir.
+  // yatay kaydırma algılanınca sola kaydırmada sıradaki şiire geçilir.
   let startX=0,startY=0,tracking=false,horizontal=false;
   stage.addEventListener('touchstart',e=>{
     const t=e.touches[0];
@@ -2919,15 +2919,15 @@ function SwipeMode(){
     const t=e.changedTouches[0];
     const dx=t.clientX-startX, dy=t.clientY-startY;
     if(horizontal && Math.abs(dx)>55){
-      if(dx>0){ idx++; renderCard(); } // sağa kaydır → sonraki şiir
-      else { idx--; renderCard(); } // sola kaydır → önceki şiir (kolaylık)
+      if(dx<0){ idx++; renderCard(); } // sola kaydır → sonraki şiir
+      else { idx--; renderCard(); } // sağa kaydır → önceki şiir (kolaylık)
     }
   });
   // Masaüstünde de kullanılabilsin diye ok tuşları ve fare tekerleği (yatay) desteği
   wrap.tabIndex=0;
   wrap.addEventListener('keydown',e=>{
-    if(e.key==='ArrowRight'){idx++;renderCard();}
-    else if(e.key==='ArrowLeft'){idx--;renderCard();}
+    if(e.key==='ArrowLeft'){idx++;renderCard();}
+    else if(e.key==='ArrowRight'){idx--;renderCard();}
   });
 
   renderCard();
@@ -2989,7 +2989,7 @@ function swipeCard(post,sonrakineGec){
     scroller.appendChild(rw);
   }
 
-  scroller.appendChild(h('p',{class:'swipe-hint'},'↓ okumaya devam et · sağa kaydır → sonraki şiir'));
+  scroller.appendChild(h('p',{class:'swipe-hint'},'↓ okumaya devam et · sola kaydır → sonraki şiir'));
 
   // Dokunmatik olmayan (fare) kullanıcılar için: metnin sonuna gelince görünen buton
   const nextBtn=h('button',{class:'btn',style:{width:'100%',background:'linear-gradient(135deg,#0891b2,#0e7490)',color:'#fff',border:'none',borderRadius:'12px',padding:'10px',fontSize:'.85rem',marginBottom:'8px'},onclick:(e)=>{e.stopPropagation();sonrakineGec();}},'➜ Sonraki Şiir');
