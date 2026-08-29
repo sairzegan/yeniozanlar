@@ -1,71 +1,72 @@
-// /api/flux-image.js
+// api/flux-image.js
+// Cloudflare Workers AI -> FLUX.1 schnell
+//
+// Vercel Environment Variables:
+// CLOUDFLARE_ACCOUNT_ID
+// CLOUDFLARE_API_TOKEN
 
-const MODEL = '@cf/black-forest-labs/flux-1-schnell';
+const MODEL = "@cf/black-forest-labs/flux-1-schnell";
 
-function json(res, status, data) {
-  return res.status(status).json(data);
-}
-
-function temizle(value, maxLength = 1800) {
-  return String(value ?? '')
-    .replace(/\u0000/g, '')
-    .replace(/\s+/g, ' ')
+function makePrompt(title, poem) {
+  const cleanTitle = String(title || "")
     .trim()
-    .slice(0, maxLength);
-}
+    .slice(0, 300);
 
-function promptOlustur(title, text) {
-  const baslik = temizle(title, 300);
-  const siir = temizle(text, 1500);
-
-  const siirMetni = [
-    baslik ? `Poem title: ${baslik}` : '',
-    siir ? `Poem: ${siir}` : ''
-  ]
-    .filter(Boolean)
-    .join('\n');
+  const cleanPoem = String(poem || "")
+    .trim()
+    .slice(0, 1400);
 
   const prompt = `
-Create a cinematic, realistic fine-art photograph inspired directly by this poem.
+Türkçe şiirden ilham alan tek bir özgün yatay görsel oluştur.
 
-The image must clearly represent the actual subject, story, objects,
-people, places, emotions, memories, weather and atmosphere described in the poem.
+ŞİDDETLE UYULACAK KURALLAR:
+- Şiirin konusu ve anlamı görselin ana kaynağı olmalıdır.
+- Şiirde anlatılan kişi, nesne, mekan, olay, doğa, mevsim, hava durumu ve duygular varsa bunları görsel olarak yansıt.
+- Şiirin anlamından uzak, genel veya rastgele bir şiir görseli oluşturma.
+- Şiirde olmayan gereksiz nesneler, kişiler veya mekanlar ekleme.
+- Görsel sinematik, gerçekçi, sanatsal ve etkileyici olsun.
+- Gerçekçi profesyonel fotoğraf estetiği kullan.
+- Doğal ve dramatik ışık kullan.
+- Güçlü atmosfer, derinlik ve sinematik kompozisyon kullan.
+- Görsel şiirin duygusunu açıkça hissettirsin.
+- Romantik, hüzünlü, nostaljik, umutlu, gizemli veya düşsel bir duygu varsa bunu görsel olarak ifade et.
+- Yatay 16:9 kompozisyon oluştur.
+- Görsel yüksek kaliteli ve gerçekçi görünsün.
 
-Style:
-cinematic movie still,
-realistic professional photography,
-poetic atmosphere,
-dramatic natural lighting,
-beautiful depth,
-subtle film grain,
-emotionally expressive,
-tasteful colors,
-highly detailed,
-believable realistic scene.
+YAZI KURALI:
+- Görselin içine İngilizce hiçbir kelime, cümle veya harf ekleme.
+- Görselin içinde yazı bulunması gerekiyorsa yazılar SADECE TÜRKÇE olmalıdır.
+- İngilizce tabela, İngilizce kitap kapağı, İngilizce afiş, İngilizce tabela yazısı veya İngilizce herhangi bir metin oluşturma.
+- Mümkünse görselin içinde hiç yazı kullanma.
+- Logo, filigran, çerçeve, kenarlık, kullanıcı arayüzü veya kolaj oluşturma.
 
-Do NOT create a generic abstract image.
+ŞİİR BAŞLIĞI:
+${cleanTitle || "Belirtilmemiş"}
 
-If the poem contains a specific person, object, animal, place,
-season, weather, event or memory, make it visually important.
-
-Do not add:
-logos,
-watermarks,
-borders,
-frames,
-UI,
-random text,
-unrelated objects.
-
-POEM:
-${siirMetni}
+ŞİİR:
+${cleanPoem}
 `.trim();
 
+  // Cloudflare FLUX prompt sınırını aşmamak için güvenli sınır.
   return prompt.slice(0, 2048);
 }
 
-async function hataOku(response) {
-  const raw = await response.text().catch(() => '');
+async function parseRequestBody(req) {
+  if (!req.body) return {};
+
+  if (typeof req.body === "object") {
+    return req.body;
+  }
+
+  try {
+    return JSON.parse(req.body);
+  } catch {
+    return null;
+  }
+}
+
+async function readCloudflareError(response) {
+  const raw = await response.text().catch(() => "");
 
   if (!raw) {
     return `HTTP ${response.status}`;
@@ -74,16 +75,15 @@ async function hataOku(response) {
   try {
     const data = JSON.parse(raw);
 
-    if (Array.isArray(data.errors)) {
-      const errors = data.errors
-        .map(x => x?.message || x?.code)
-        .filter(Boolean)
-        .join(' | ');
-
-      if (errors) return errors;
-    }
+    const errors = Array.isArray(data?.errors)
+      ? data.errors
+          .map(error => error?.message || error?.code)
+          .filter(Boolean)
+          .join(" | ")
+      : "";
 
     return (
+      errors ||
       data?.error?.message ||
       data?.message ||
       raw.slice(0, 2000)
@@ -94,210 +94,187 @@ async function hataOku(response) {
 }
 
 export default async function handler(req, res) {
-
-  if (req.method !== 'POST') {
-    return json(res, 405, {
-      error: 'Yalnızca POST destekleniyor.'
+  if (req.method !== "POST") {
+    return res.status(405).json({
+      error: "Yalnızca POST destekleniyor."
     });
   }
 
   const accountId = String(
-    process.env.CLOUDFLARE_ACCOUNT_ID || ''
+    process.env.CLOUDFLARE_ACCOUNT_ID || ""
   ).trim();
 
   const apiToken = String(
-    process.env.CLOUDFLARE_API_TOKEN || ''
+    process.env.CLOUDFLARE_API_TOKEN || ""
   ).trim();
 
   if (!accountId) {
-    return json(res, 500, {
-      error: 'CLOUDFLARE_ACCOUNT_ID bulunamadı.'
+    return res.status(500).json({
+      error: "CLOUDFLARE_ACCOUNT_ID Vercel'de bulunamadı."
     });
   }
 
   if (!apiToken) {
-    return json(res, 500, {
-      error: 'CLOUDFLARE_API_TOKEN bulunamadı.'
+    return res.status(500).json({
+      error: "CLOUDFLARE_API_TOKEN Vercel'de bulunamadı."
     });
   }
 
-  let body = req.body || {};
+  const body = await parseRequestBody(req);
 
-  if (typeof body === 'string') {
-    try {
-      body = JSON.parse(body);
-    } catch {
-      return json(res, 400, {
-        error: 'Geçersiz JSON.'
-      });
-    }
-  }
-
-  const title = temizle(body?.title, 300);
-  const text = temizle(body?.text, 1500);
-
-  if (!title && !text) {
-    return json(res, 400, {
-      error: 'Şiir başlığı veya şiir metni gerekli.'
+  if (!body) {
+    return res.status(400).json({
+      error: "Geçersiz JSON isteği."
     });
   }
 
-  const prompt = promptOlustur(title, text);
+  const title = String(body.title || "")
+    .trim()
+    .slice(0, 300);
 
-  const endpoint =
+  const poem = String(
+    body.text || body.poem || ""
+  )
+    .trim()
+    .slice(0, 1400);
+
+  if (!poem) {
+    return res.status(400).json({
+      error: "Şiir metni boş."
+    });
+  }
+
+  const prompt = makePrompt(title, poem);
+
+  const url =
     `https://api.cloudflare.com/client/v4/accounts/` +
-    `${accountId}/ai/run/${MODEL}`;
+    `${encodeURIComponent(accountId)}/ai/run/${MODEL}`;
 
   try {
-
-    /*
-     * ÖNEMLİ:
-     * Cloudflare'a yalnızca zorunlu "prompt" gönderiyoruz.
-     *
-     * Böylece FLUX isteği minimum resmi API formatında kalıyor.
-     */
-    const response = await fetch(endpoint, {
-      method: 'POST',
+    const response = await fetch(url, {
+      method: "POST",
 
       headers: {
-        Authorization: `Bearer ${apiToken}`,
-        'Content-Type': 'application/json',
-        Accept: 'application/json'
+        "Authorization": `Bearer ${apiToken}`,
+        "Content-Type": "application/json",
+        "Accept": "application/json"
       },
 
       body: JSON.stringify({
-        prompt: prompt
+        prompt: prompt,
+
+        // FLUX Schnell için hızlı üretim.
+        steps: 4,
+
+        // Her tıklamada farklı görsel.
+        seed: Math.floor(
+          Math.random() * 2147483647
+        )
       })
     });
 
+    const raw = await response.text();
+
     if (!response.ok) {
-
-      const detail = await hataOku(response);
-
-      console.error(
-        'CLOUDFLARE FLUX HATASI:',
-        response.status,
-        detail
-      );
-
-      return json(res, 502, {
-        error: `Cloudflare FLUX HTTP ${response.status}`,
-        detail: detail
-      });
-    }
-
-    /*
-     * Cloudflare Workers AI REST cevabı:
-     *
-     * {
-     *   "result": {
-     *     "image": "BASE64..."
-     *   }
-     * }
-     */
-
-    const data = await response.json();
-
-    if (data?.success === false) {
-
-      let detail = 'Cloudflare AI isteği başarısız.';
-
-      if (Array.isArray(data.errors)) {
-        detail = data.errors
-          .map(x => x?.message || x?.code)
-          .filter(Boolean)
-          .join(' | ');
-      }
-
-      return json(res, 502, {
-        error: 'Cloudflare FLUX isteği başarısız.',
-        detail: detail
-      });
-    }
-
-    const imageBase64 =
-      data?.result?.image;
-
-    if (
-      typeof imageBase64 !== 'string' ||
-      imageBase64.length < 100
-    ) {
-
-      console.error(
-        'FLUX IMAGE BULUNAMADI:',
-        JSON.stringify({
-          success: data?.success,
-          resultKeys: data?.result
-            ? Object.keys(data.result)
-            : [],
-          responseKeys: Object.keys(data || {})
+      const message = await readCloudflareError(
+        new Response(raw, {
+          status: response.status
         })
       );
 
-      return json(res, 502, {
-        error: 'Cloudflare FLUX görsel döndürmedi.',
-        detail: 'result.image alanı bulunamadı.'
+      console.error(
+        "Cloudflare FLUX hatası:",
+        response.status,
+        message
+      );
+
+      return res.status(502).json({
+        error:
+          `Cloudflare FLUX HTTP ${response.status}`,
+        detail: message
       });
     }
 
-    /*
-     * Base64 → JPEG
-     */
+    let data;
 
-    const temizBase64 = imageBase64
-      .replace(/^data:image\/[^;]+;base64,/i, '')
-      .replace(/\s/g, '');
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      return res.status(502).json({
+        error:
+          "Cloudflare geçerli JSON yanıtı döndürmedi."
+      });
+    }
 
-    const imageBuffer = Buffer.from(
-      temizBase64,
-      'base64'
-    );
+    const base64 = data?.result?.image;
 
     if (
-      !imageBuffer ||
-      imageBuffer.length < 1000
+      typeof base64 !== "string" ||
+      base64.length < 100
     ) {
-      return json(res, 502, {
-        error: 'FLUX görsel verisi boş veya geçersiz.'
+      console.error(
+        "Cloudflare FLUX görsel döndürmedi:",
+        data
+      );
+
+      return res.status(502).json({
+        error:
+          "Cloudflare başarılı yanıt verdi ancak FLUX görseli bulunamadı."
       });
     }
 
-    /*
-     * Frontend fetch(...).blob()
-     * ile doğrudan resmi alabilir.
-     */
+    // data:image/... formatı gelirse başlığı temizle.
+    const cleanBase64 = base64
+      .replace(
+        /^data:image\/[^;]+;base64,/i,
+        ""
+      )
+      .replace(/\s/g, "");
+
+    const image = Buffer.from(
+      cleanBase64,
+      "base64"
+    );
+
+    if (!image.length) {
+      return res.status(502).json({
+        error:
+          "Cloudflare boş görsel döndürdü."
+      });
+    }
 
     res.setHeader(
-      'Content-Type',
-      'image/jpeg'
+      "Content-Type",
+      "image/jpeg"
     );
 
     res.setHeader(
-      'Content-Length',
-      String(imageBuffer.length)
+      "Content-Length",
+      String(image.length)
     );
 
     res.setHeader(
-      'Cache-Control',
-      'no-store, no-cache, must-revalidate'
+      "Cache-Control",
+      "no-store, no-cache, must-revalidate"
     );
 
     return res
       .status(200)
-      .send(imageBuffer);
+      .send(image);
 
   } catch (error) {
-
     console.error(
-      'FLUX ENDPOINT HATASI:',
+      "Cloudflare FLUX bağlantı hatası:",
       error
     );
 
-    return json(res, 502, {
-      error: 'FLUX görseli oluşturulamadı.',
-      detail:
-        error?.message ||
-        String(error)
+    return res.status(502).json({
+      error:
+        `FLUX görseli oluşturulamadı: ${
+          String(
+            error?.message || error
+          ).slice(0, 1500)
+        }`
     });
   }
 }
