@@ -1,17 +1,15 @@
-# Yeni Ozanlar – GIPHY geri yükleme sürümü
+# Yeni Ozanlar – Gemini kota fallback
 
-Bu paket, mevcut `index.html` geliştirmelerini korurken GIPHY API dosyasını kullanıcının gönderdiği eski çalışan sürüme geri döndürür.
+Admin "🎨 Yapay Zeka ile Yeniden Resim Oluştur" butonuna bastığında önce Gemini AI görseli denenir.
+Gemini kota/AI isteği başarısız olursa işlem durmaz; mevcut şiirin temasına göre `/api/giphy` üzerinden farklı bir GIF aranır ve mevcut GIF'ten farklı bir sonuç seçilmeye çalışılır.
 
-## Önemli
-Mevcut projenizdeki diğer `api/*.js` dosyalarını silmeyin.
+Mevcut çalışan `api/giphy.js` dosyası korunmuştur.
 
-Kopyalanacak:
-- `index.html` → mevcut index.html'nin yerine
-- `api/giphy.js` → mevcut api/giphy.js'nin yerine
-- `api/ai-image.js` → AI görsel özelliğini kullanacaksanız
+## Dosyalar
+- index.html
+- api/giphy.js
+- api/ai-image.js
 
-Vercel Environment Variables:
-- `GIPHY_API_KEY`
-- `GEMINI_API_KEY` (AI görsel için)
-
-GIPHY endpoint'i istemcinin beklediği `{ gifUrl, title }` yanıtını ve `{ error: { message } }` hata biçimini korur.
+## Vercel
+- GIPHY_API_KEY mevcut olmalı.
+- Gemini kullanmak için GEMINI_API_KEY mevcut olmalı; Gemini kotası dolsa bile GIPHY fallback çalışır.
