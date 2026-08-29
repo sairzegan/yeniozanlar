@@ -1,303 +1,377 @@
-// /api/flux-image.js
+// Vercel Serverless Function
+// Cloudflare Workers AI -> FLUX.1-schnell
+// Cloudflare kota/rate-limit durumunda otomatik GIPHY yedeği.
+//
+// Vercel Environment Variables:
+// CLOUDFLARE_ACCOUNT_ID
+// CLOUDFLARE_API_TOKEN
+// GIPHY_API_KEY
 
-const FLUX_MODEL = '@cf/black-forest-labs/flux-1-schnell';
-const GROQ_MODEL = 'openai/gpt-oss-20b';
+const MODEL = '@cf/black-forest-labs/flux-1-schnell';
 
-function getBody(req) {
-  if (!req.body) return {};
+const CLOUDFLARE_URL = (accountId) =>
+  `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/@cf/black-forest-labs/flux-1-schnell`;
 
-  if (typeof req.body === 'object') {
-    return req.body;
-  }
+const GIPHY_SEARCH_URL = 'https://api.giphy.com/v1/gifs/search';
+
+const TIMEOUT_MS = 65000;
+
+
+// ------------------------------------------------------------
+// FLUX PROMPT
+// ------------------------------------------------------------
+
+function buildPrompt(title, text) {
+  const poem = String(text || '').trim().slice(0, 1800);
+  const heading = String(title || '').trim().slice(0, 250);
+
+  return [
+    'Create one original cinematic image specifically inspired by the Turkish poem below.',
+    'Use the actual meaning of the poem as the primary visual source.',
+    'Show the setting, people, objects, actions, symbols, metaphors and emotions that are actually present in the poem.',
+    'Do not create a generic poetry image.',
+    'Do not invent an unrelated scene.',
+    'The poem must determine the subject, atmosphere and visual story.',
+    'Style: cinematic photography, realistic, artistic, atmospheric, detailed, natural lighting, elegant composition, 16:9 landscape.',
+    'IMPORTANT: absolutely NO text anywhere in the image.',
+    'NO letters, NO words, NO captions, NO typography, NO subtitles, NO signs, NO logos, NO watermark.',
+    heading ? `Turkish poem title: ${heading}` : '',
+    `Turkish poem:\n${poem}`
+  ]
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+
+// ------------------------------------------------------------
+// GIPHY ARAMA METNİ
+// ------------------------------------------------------------
+
+function cleanGiphyQuery(title, text) {
+  const source =
+    String(title || '').trim() ||
+    String(text || '').trim();
+
+  const cleaned = source
+    .replace(/https?:\/\/\S+/gi, ' ')
+    .replace(/[^\p{L}\p{N}\s'-]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  // GIPHY q maksimum 50 karakter.
+  return cleaned.slice(0, 50) || 'poetic landscape';
+}
+
+
+// ------------------------------------------------------------
+// TIMEOUT'LU FETCH
+// ------------------------------------------------------------
+
+async function fetchWithTimeout(
+  url,
+  options = {},
+  timeoutMs = TIMEOUT_MS
+) {
+  const controller = new AbortController();
+
+  const timer = setTimeout(() => {
+    controller.abort();
+  }, timeoutMs);
 
   try {
-    return JSON.parse(req.body);
-  } catch {
-    return {};
-  }
-}
-
-function clean(value, max = 12000) {
-  return String(value ?? '')
-    .replace(/\u0000/g, '')
-    .trim()
-    .slice(0, max);
-}
-
-function send(res, status, data) {
-  return res.status(status).json(data);
-}
-
-
-/* ---------------------------------------------------------
-   GROQ
---------------------------------------------------------- */
-
-async function createVisualPrompt(title, poem) {
-
-  const key = String(
-    process.env.GROQ_API_KEY || ''
-  ).trim();
-
-  if (!key) {
-    return null;
-  }
-
-  const systemPrompt = `
-You create image-generation prompts from Turkish poems.
-
-Analyze the Turkish poem and create ONE visual scene that
-clearly represents what the poem is actually about.
-
-IMPORTANT:
-
-- Follow the poem's meaning.
-- Do not invent an unrelated scene.
-- Use the emotions, people, places, objects, events,
-  nature and metaphors actually suggested by the poem.
-- The image must visually represent the poem.
-- Use natural or cinematic lighting.
-- Do NOT make the image excessively dark.
-- Do NOT create a generic "sad poetry" image.
-
-ABSOLUTELY NO TEXT IN THE IMAGE.
-
-Do not include:
-letters,
-words,
-sentences,
-captions,
-subtitles,
-signs,
-posters,
-books with readable writing,
-newspapers,
-logos,
-watermarks,
-typography,
-UI,
-symbols that resemble writing.
-
-The final image must contain ONLY the visual scene.
-
-Return ONLY an English image-generation prompt.
-Do not explain anything.
-`;
-
-  const userPrompt = `
-Title:
-${title || '(no title)'}
-
-Turkish poem:
-${poem}
-`;
-
-  try {
-
-    const r = await fetch(
-      'https://api.groq.com/openai/v1/chat/completions',
-      {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${key}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          model: GROQ_MODEL,
-          messages: [
-            {
-              role: 'system',
-              content: systemPrompt
-            },
-            {
-              role: 'user',
-              content: userPrompt
-            }
-          ],
-          temperature: 0.2,
-          max_completion_tokens: 450
-        })
-      }
-    );
-
-    const raw = await r.text();
-
-    if (!r.ok) {
-      console.error(
-        'GROQ ERROR:',
-        r.status,
-        raw
-      );
-
-      // Groq başarısızsa FLUX yine çalışabilir.
-      return null;
-    }
-
-    let data;
-
-    try {
-      data = JSON.parse(raw);
-    } catch {
-      return null;
-    }
-
-    const prompt =
-      data?.choices?.[0]?.message?.content?.trim();
-
-    return prompt || null;
-
-  } catch (err) {
-
-    console.error(
-      'GROQ CONNECTION ERROR:',
-      err?.message || err
-    );
-
-    return null;
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal
+    });
+  } finally {
+    clearTimeout(timer);
   }
 }
 
 
-/* ---------------------------------------------------------
-   FALLBACK PROMPT
---------------------------------------------------------- */
+// ------------------------------------------------------------
+// CLOUDFLARE CEVABINI GÖRSELE ÇEVİR
+// ------------------------------------------------------------
 
-function fallbackPrompt(title, poem) {
+async function readCloudflareImage(response) {
+  const contentType =
+    (response.headers.get('content-type') || '').toLowerCase();
 
-  return `
-Create a realistic cinematic visual scene directly inspired
-by the following Turkish poem.
+  const raw = await response.text();
 
-The scene must represent the actual subject and meaning of
-the poem, not a generic poetry image.
-
-Title:
-${title}
-
-Poem:
-${poem}
-
-Use the people, place, objects, events, atmosphere and emotions
-suggested by the poem.
-
-Natural cinematic lighting.
-Realistic photography.
-Beautiful composition.
-Natural colors.
-Moderate brightness.
-Detailed environment.
-
-ABSOLUTELY NO TEXT.
-
-No letters.
-No words.
-No captions.
-No subtitles.
-No typography.
-No logos.
-No watermark.
-No signs with writing.
-No posters.
-No books with writing.
-No newspapers.
-
-Only the visual scene.
-`.trim();
-}
-
-
-/* ---------------------------------------------------------
-   CLOUDFLARE ERROR
---------------------------------------------------------- */
-
-async function readCloudflareError(response) {
-
-  const raw =
-    await response.text().catch(() => '');
-
-  let data = null;
+  let data;
 
   try {
     data = JSON.parse(raw);
-  } catch {}
-
-  const internalCode =
-    data?.errors?.[0]?.code ??
-    data?.error?.code ??
-    null;
-
-  const message =
-    data?.errors?.[0]?.message ??
-    data?.error?.message ??
-    data?.message ??
-    raw;
-
-  return {
-    internalCode,
-    message: String(message || '').slice(0, 2000)
-  };
-}
-
-
-/* ---------------------------------------------------------
-   MAIN
---------------------------------------------------------- */
-
-export default async function handler(req, res) {
-
-  if (req.method !== 'POST') {
-    return send(res, 405, {
-      error: 'Yalnızca POST destekleniyor.'
-    });
+  } catch {
+    data = null;
   }
 
 
-  const body = getBody(req);
+  // HTTP hata kodu
+  if (!response.ok) {
+    const detail =
+      data?.errors?.[0]?.message ||
+      data?.error ||
+      raw.slice(0, 500);
 
-
-  /*
-   * index.html şu anda:
-   *
-   * {
-   *   title: post.title,
-   *   text: post.text
-   * }
-   *
-   * gönderiyor.
-   */
-
-  const title = clean(
-    body.title ??
-    body.poemTitle ??
-    body.post?.title ??
-    '',
-    500
-  );
-
-
-  const poem = clean(
-    body.text ??
-    body.poem ??
-    body.content ??
-    body.poemText ??
-    body.postText ??
-    body.post?.text ??
-    body.post?.poem ??
-    '',
-    12000
-  );
-
-
-  if (!poem) {
-
-    console.error(
-      'FLUX: şiir metni yok.',
-      JSON.stringify(body).slice(0, 3000)
+    const error = new Error(
+      `Cloudflare FLUX HTTP ${response.status}${
+        detail ? ` — ${detail}` : ''
+      }`
     );
 
-    return send(res, 400, {
-      error: 'Şiir metni gönderilemedi.'
-    });
+    error.status = response.status;
+    error.isCloudflare = true;
+
+    throw error;
+  }
+
+
+  // Workers AI FLUX cevabı:
+  // { result: { image: "BASE64..." } }
+
+  const base64 =
+    data?.result?.image ||
+    data?.image;
+
+  if (
+    base64 &&
+    typeof base64 === 'string'
+  ) {
+    return Buffer.from(base64, 'base64');
+  }
+
+
+  // İhtimale karşı doğrudan binary image cevabı
+  if (contentType.startsWith('image/')) {
+    return Buffer.from(raw, 'binary');
+  }
+
+
+  throw new Error(
+    'Cloudflare FLUX geçerli bir görsel döndürmedi.'
+  );
+}
+
+
+// ------------------------------------------------------------
+// GIPHY FALLBACK
+// ------------------------------------------------------------
+
+async function getGiphyImage(title, text) {
+
+  const key =
+    String(process.env.GIPHY_API_KEY || '').trim();
+
+  if (!key) {
+    throw new Error(
+      'GIPHY_API_KEY Vercel Environment Variable bulunamadı.'
+    );
+  }
+
+
+  const q = cleanGiphyQuery(title, text);
+
+  const url = new URL(GIPHY_SEARCH_URL);
+
+  url.searchParams.set(
+    'api_key',
+    key
+  );
+
+  url.searchParams.set(
+    'q',
+    q
+  );
+
+  url.searchParams.set(
+    'limit',
+    '10'
+  );
+
+  url.searchParams.set(
+    'rating',
+    'g'
+  );
+
+  url.searchParams.set(
+    'lang',
+    'tr'
+  );
+
+  url.searchParams.set(
+    'fields',
+    'id,title,images'
+  );
+
+
+  const response =
+    await fetchWithTimeout(
+      url.toString(),
+      {
+        headers: {
+          Accept: 'application/json'
+        }
+      },
+      15000
+    );
+
+
+  if (!response.ok) {
+    throw new Error(
+      `GIPHY API HTTP ${response.status}`
+    );
+  }
+
+
+  const payload =
+    await response.json();
+
+
+  const items =
+    Array.isArray(payload?.data)
+      ? payload.data
+      : [];
+
+
+  if (!items.length) {
+    throw new Error(
+      `GIPHY aramasında sonuç bulunamadı: ${q}`
+    );
+  }
+
+
+  // Büyük görselden küçüğe doğru dene.
+  const candidates = [];
+
+
+  for (const item of items) {
+
+    const images =
+      item?.images || {};
+
+    const urls = [
+
+      images?.downsized_large?.url,
+
+      images?.downsized?.url,
+
+      images?.original?.url,
+
+      images?.fixed_width?.url,
+
+      images?.fixed_height?.url
+
+    ].filter(Boolean);
+
+
+    candidates.push(...urls);
+  }
+
+
+  // Bir URL çalışmazsa diğerini dene.
+  for (const imageUrl of candidates) {
+
+    try {
+
+      const imageResponse =
+        await fetchWithTimeout(
+          imageUrl,
+          {
+            headers: {
+              Accept:
+                'image/avif,image/webp,image/gif,image/*,*/*;q=0.8'
+            }
+          },
+          15000
+        );
+
+
+      if (!imageResponse.ok) {
+        continue;
+      }
+
+
+      const buffer =
+        Buffer.from(
+          await imageResponse.arrayBuffer()
+        );
+
+
+      if (!buffer.length) {
+        continue;
+      }
+
+
+      const contentType =
+        imageResponse.headers.get(
+          'content-type'
+        ) || 'image/gif';
+
+
+      return {
+        buffer,
+        contentType,
+        query: q
+      };
+
+    } catch {
+      // Sonraki GIPHY görselini dene.
+    }
+  }
+
+
+  throw new Error(
+    'GIPHY görsel dosyası alınamadı.'
+  );
+}
+
+
+// ------------------------------------------------------------
+// VERCEL
+// ------------------------------------------------------------
+
+export const maxDuration = 75;
+
+
+// ------------------------------------------------------------
+// MAIN HANDLER
+// ------------------------------------------------------------
+
+export default async function handler(
+  req,
+  res
+) {
+
+  // Sadece POST
+  if (req.method !== 'POST') {
+
+    return res
+      .status(405)
+      .json({
+        error:
+          'Yalnızca POST destekleniyor.'
+      });
+  }
+
+
+  const title =
+    req.body?.title || '';
+
+  const text =
+    req.body?.text || '';
+
+
+  // Şiir yoksa FLUX'a boş prompt gönderme.
+  if (!String(text).trim()) {
+
+    return res
+      .status(400)
+      .json({
+        error:
+          'Şiir metni gönderilemedi.'
+      });
   }
 
 
@@ -306,229 +380,89 @@ export default async function handler(req, res) {
       process.env.CLOUDFLARE_ACCOUNT_ID || ''
     ).trim();
 
+
   const token =
     String(
       process.env.CLOUDFLARE_API_TOKEN || ''
     ).trim();
 
 
-  if (!accountId) {
-    return send(res, 500, {
-      error: 'CLOUDFLARE_ACCOUNT_ID eksik.'
-    });
-  }
+  if (!accountId || !token) {
 
-  if (!token) {
-    return send(res, 500, {
-      error: 'CLOUDFLARE_API_TOKEN eksik.'
-    });
-  }
-
-
-  /* -------------------------------------------------------
-     GROQ → ŞİİR ANALİZİ
-  ------------------------------------------------------- */
-
-  let prompt =
-    await createVisualPrompt(
-      title,
-      poem
-    );
-
-
-  if (!prompt) {
-    prompt =
-      fallbackPrompt(
-        title,
-        poem
-      );
+    return res
+      .status(500)
+      .json({
+        error:
+          'Cloudflare değişkenleri eksik: CLOUDFLARE_ACCOUNT_ID ve CLOUDFLARE_API_TOKEN gerekli.'
+      });
   }
 
 
-  /*
-   * FLUX prompt maksimum 2048 karakter.
-   */
-
-  prompt =
-    prompt
-      .replace(/\s+/g, ' ')
-      .trim()
-      .slice(0, 2048);
+  let cloudflareError = null;
 
 
-  /* -------------------------------------------------------
-     FLUX
-  ------------------------------------------------------- */
-
-  const url =
-    `https://api.cloudflare.com/client/v4/accounts/` +
-    `${encodeURIComponent(accountId)}` +
-    `/ai/run/${FLUX_MODEL}`;
-
-
-  let response;
+  // ==========================================================
+  // 1. ÖNCE CLOUDFLARE FLUX
+  // ==========================================================
 
   try {
 
-    response = await fetch(
-      url,
-      {
-        method: 'POST',
-
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        },
-
-        body: JSON.stringify({
-          prompt,
-          steps: 4
-        })
-      }
-    );
-
-  } catch (err) {
-
-    console.error(
-      'CLOUDFLARE CONNECTION ERROR:',
-      err
-    );
-
-    return send(res, 502, {
-      error:
-        'Cloudflare FLUX bağlantısı kurulamadı.'
-    });
-  }
-
-
-  /* -------------------------------------------------------
-     429 — ÖZEL OLARAK ELE AL
-  ------------------------------------------------------- */
-
-  if (response.status === 429) {
-
-    const cf =
-      await readCloudflareError(
-        response
+    const prompt =
+      buildPrompt(
+        title,
+        text
       );
 
-    console.error(
-      'CLOUDFLARE FLUX 429:',
-      cf
-    );
 
+    const response =
+      await fetchWithTimeout(
 
-    /*
-     * 3036 = günlük ücretsiz neuron kotası.
-     */
+        CLOUDFLARE_URL(
+          accountId
+        ),
 
-    if (cf.internalCode === 3036) {
+        {
+          method: 'POST',
 
-      return send(res, 429, {
-        error:
-          'Cloudflare FLUX günlük ücretsiz kullanım kotası doldu.',
-        code: 'CLOUDFLARE_DAILY_QUOTA',
-        detail:
-          'Yeni görsel oluşturmak için Cloudflare Workers AI kotasının yenilenmesi veya ücretli plana geçilmesi gerekiyor.'
-      });
-    }
+          headers: {
+            Authorization:
+              `Bearer ${token}`,
 
+            'Content-Type':
+              'application/json',
 
-    /*
-     * 3040 = Cloudflare kapasitesi.
-     */
+            Accept:
+              'application/json'
+          },
 
-    if (cf.internalCode === 3040) {
+          body:
+            JSON.stringify({
+              prompt,
 
-      return send(res, 503, {
-        error:
-          'Cloudflare FLUX şu anda kapasite sınırında.',
-        code: 'CLOUDFLARE_CAPACITY',
-        detail:
-          'Bir süre sonra tekrar deneyin.'
-      });
-    }
-
-
-    /*
-     * Diğer 429.
-     */
-
-    return send(res, 429, {
-      error:
-        'Cloudflare FLUX istek sınırı nedeniyle isteği reddetti.',
-      code: 'CLOUDFLARE_RATE_LIMIT',
-      detail:
-        cf.message
-    });
-  }
-
-
-  /* -------------------------------------------------------
-     DİĞER CLOUDFLARE HATALARI
-  ------------------------------------------------------- */
-
-  if (!response.ok) {
-
-    const cf =
-      await readCloudflareError(
-        response
+              // Seed YOK.
+              // Önceki "/seed not allowed"
+              // problemini engeller.
+              steps: 4
+            })
+        }
       );
 
-    console.error(
-      'CLOUDFLARE FLUX ERROR:',
-      response.status,
-      cf
-    );
-
-    return send(res, 502, {
-      error:
-        `Cloudflare FLUX HTTP ${response.status}`,
-      detail:
-        cf.message,
-      code:
-        cf.internalCode
-    });
-  }
-
-
-  /* -------------------------------------------------------
-     BAŞARILI CEVAP
-  ------------------------------------------------------- */
-
-  const contentType =
-    (
-      response.headers.get(
-        'content-type'
-      ) || ''
-    ).toLowerCase();
-
-
-  /*
-   * Cloudflare bazı durumlarda doğrudan JPEG döndürebilir.
-   */
-
-  if (
-    contentType.startsWith('image/')
-  ) {
 
     const buffer =
-      Buffer.from(
-        await response.arrayBuffer()
+      await readCloudflareImage(
+        response
       );
 
-    if (!buffer.length) {
 
-      return send(res, 502, {
-        error:
-          'Cloudflare boş görsel döndürdü.'
-      });
-    }
-
+    // FLUX başarılı
     res.setHeader(
       'Content-Type',
-      contentType.split(';')[0]
+      'image/jpeg'
+    );
+
+    res.setHeader(
+      'Content-Length',
+      String(buffer.length)
     );
 
     res.setHeader(
@@ -536,117 +470,113 @@ export default async function handler(req, res) {
       'no-store'
     );
 
+    res.setHeader(
+      'X-AI-Provider',
+      'cloudflare'
+    );
+
+    res.setHeader(
+      'X-AI-Model',
+      MODEL
+    );
+
+
     return res
       .status(200)
       .send(buffer);
+
+
+  } catch (err) {
+
+    cloudflareError = err;
+
+    console.error(
+      'Cloudflare FLUX error:',
+      err?.message || err
+    );
   }
 
 
-  /*
-   * Normal Workers AI JSON:
-   *
-   * {
-   *   result: {
-   *      image: "BASE64..."
-   *   }
-   * }
-   */
-
-  const raw =
-    await response.text();
-
-
-  let data;
+  // ==========================================================
+  // 2. FLUX BAŞARISIZSA GIPHY
+  // ==========================================================
 
   try {
 
-    data =
-      JSON.parse(raw);
-
-  } catch {
-
-    console.error(
-      'FLUX JSON parse error:',
-      raw.slice(0, 2000)
-    );
-
-    return send(res, 502, {
-      error:
-        'FLUX geçerli JSON/görsel döndürmedi.'
-    });
-  }
-
-
-  const base64 =
-    data?.result?.image;
-
-
-  if (!base64) {
-
-    console.error(
-      'FLUX result.image yok:',
-      JSON.stringify(data).slice(0, 3000)
-    );
-
-    return send(res, 502, {
-      error:
-        'FLUX görsel üretmedi.',
-      detail:
-        data?.errors ||
-        data?.messages ||
-        null
-    });
-  }
-
-
-  let buffer;
-
-  try {
-
-    buffer =
-      Buffer.from(
-        String(base64),
-        'base64'
+    const fallback =
+      await getGiphyImage(
+        title,
+        text
       );
 
-  } catch {
 
-    return send(res, 502, {
-      error:
-        'FLUX görsel verisi okunamadı.'
-    });
+    res.setHeader(
+      'Content-Type',
+      fallback.contentType
+    );
+
+    res.setHeader(
+      'Content-Length',
+      String(
+        fallback.buffer.length
+      )
+    );
+
+    res.setHeader(
+      'Cache-Control',
+      'no-store'
+    );
+
+    res.setHeader(
+      'X-AI-Provider',
+      'giphy-fallback'
+    );
+
+    res.setHeader(
+      'X-GIPHY-Query',
+      fallback.query
+    );
+
+
+    // ÖNEMLİ:
+    // JSON değil, gerçek görsel binary'si dönüyor.
+    return res
+      .status(200)
+      .send(fallback.buffer);
+
+
+  } catch (giphyError) {
+
+    console.error(
+      'GIPHY fallback error:',
+      giphyError?.message ||
+      giphyError
+    );
+
+
+    const cfMessage =
+      cloudflareError?.name === 'AbortError'
+        ? 'Cloudflare FLUX isteği zaman aşımına uğradı.'
+        : (
+            cloudflareError?.message ||
+            'Cloudflare FLUX başarısız oldu.'
+          );
+
+
+    const gifMessage =
+      giphyError?.message ||
+      'GIPHY yedeği başarısız oldu.';
+
+
+    return res
+      .status(502)
+      .json({
+
+        error:
+          `Görsel üretilemedi. FLUX: ${cfMessage} | GIPHY yedeği: ${gifMessage}`,
+
+        provider:
+          'cloudflare+giphy-fallback'
+      });
   }
-
-
-  if (
-    !buffer ||
-    buffer.length < 1000
-  ) {
-
-    return send(res, 502, {
-      error:
-        'FLUX geçerli bir görsel döndürmedi.'
-    });
-  }
-
-
-  res.setHeader(
-    'Content-Type',
-    'image/jpeg'
-  );
-
-  res.setHeader(
-    'Content-Length',
-    String(buffer.length)
-  );
-
-  res.setHeader(
-    'Cache-Control',
-    'no-store'
-  );
-
-
-  return res
-    .status(200)
-    .send(buffer);
 }
