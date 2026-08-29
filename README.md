@@ -1,23 +1,17 @@
-# Yeni Ozanlar — güvenli düzeltme paketi
+# Yeni Ozanlar – GIPHY geri yükleme sürümü
 
-Bu paket, önceki hatalı geliştirmeyi geri alıp kullanıcının yüklediği ORİJİNAL `index.html` üzerinden hazırlanmıştır.
+Bu paket, mevcut `index.html` geliştirmelerini korurken GIPHY API dosyasını kullanıcının gönderdiği eski çalışan sürüme geri döndürür.
 
 ## Önemli
-Bu paketi mevcut GitHub projesinin üzerine **birleştir**. Eski `api/groq.js`, `api/gemini.js`, `api/claude.js`, `api/facebookScrape.js` vb. mevcut serverless dosyalarını silme.
+Mevcut projenizdeki diğer `api/*.js` dosyalarını silmeyin.
 
-Kopyalanacaklar:
-- `index.html` → mevcut orijinal index.html yerine
-- `api/ai-image.js` → yeni dosya
-- `api/giphy.js` → mevcut giphy.js yoksa ekle; varsa mevcut dosyanı bununla karşılaştırıp yalnızca eksikse kullan
+Kopyalanacak:
+- `index.html` → mevcut index.html'nin yerine
+- `api/giphy.js` → mevcut api/giphy.js'nin yerine
+- `api/ai-image.js` → AI görsel özelliğini kullanacaksanız
 
-## Environment Variables
-Vercel'de:
-- `GIPHY_API_KEY` — mevcut GIPHY anahtarın
-- `GEMINI_API_KEY` — Gemini API anahtarın
+Vercel Environment Variables:
+- `GIPHY_API_KEY`
+- `GEMINI_API_KEY` (AI görsel için)
 
-Görsel butonu `POST /api/ai-image` çağırır. Görsel tarayıcıya data olarak gelir, sonra mevcut Firebase Storage'a yüklenir. Böylece Firestore'a büyük base64 görsel yazılmaz.
-
-## Eklenen özellikler
-- Admin: `📌 Üste Taşı / 📍 Üstten Kaldır`
-- Admin: `🎨 Yapay Zeka ile Yeniden Resim Oluştur`
-- Yeni paylaşımlarda mevcut otomatik GIPHY akışı korunmuştur; AI görsel sistemi GIPHY'nin yerine geçirilmemiştir.
+GIPHY endpoint'i istemcinin beklediği `{ gifUrl, title }` yanıtını ve `{ error: { message } }` hata biçimini korur.
