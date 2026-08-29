@@ -1,10 +1,6 @@
 {
-  "name": "yeniozanlar-vercel-preview",
   "private": true,
-  "engines": {
-    "node": "22.x"
-  },
   "dependencies": {
-    "firebase-admin": "14.2.0"
+    "@huggingface/inference": "4.13.28"
   }
 }
