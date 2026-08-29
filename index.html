@@ -208,6 +208,42 @@ async function verileriYukle() {
       lsSet('yo_posts', S.posts);
     }
 
+    // AYIN ŞİİRLERİ için yalnızca en yeni 30 şiire güvenme.
+    // İçinde bulunduğumuz ayın TÜM şiirlerini ayrıca Firebase'den çekiyoruz.
+    // Böylece ayın başındaki şiirler, son 30 şiirin dışında kalsalar bile
+    // "Ayın Şiirleri" sekmesinde görünür.
+    try {
+      const turkeyParts = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'Europe/Istanbul',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+      }).formatToParts(new Date());
+      const ty = Number(turkeyParts.find(x => x.type === 'year')?.value);
+      const tm = Number(turkeyParts.find(x => x.type === 'month')?.value);
+
+      // Türkiye saati UTC+3. Firestore ts milisaniye cinsinden tutuluyor.
+      const ayBaslangicMs = Date.UTC(ty, tm - 1, 1) - (3 * 60 * 60 * 1000);
+      const sonrakiAyBaslangicMs = Date.UTC(ty, tm, 1) - (3 * 60 * 60 * 1000);
+
+      const aySnapshot = await db.collection('posts')
+        .where('ts', '>=', ayBaslangicMs)
+        .where('ts', '<', sonrakiAyBaslangicMs)
+        .orderBy('ts', 'desc')
+        .get()
+        .catch(() => null);
+
+      if (aySnapshot && aySnapshot.docs.length) {
+        const ayPosts = aySnapshot.docs.map(doc => doc.data());
+        const mevcut = new Map(S.posts.map(post => [post.id, post]));
+        ayPosts.forEach(post => mevcut.set(post.id, post));
+        S.posts = postSirala(Array.from(mevcut.values()));
+        lsSet('yo_posts', S.posts);
+      }
+    } catch (e) {
+      console.warn('Ayın şiirleri verisi alınamadı:', e);
+    }
+
     // Paylaşım linkiyle açılan şiir, en yeni 30 şiir arasında değilse
     // (örn. eski bir şiirse) onu doğrudan ID'siyle tekil olarak çekiyoruz.
     if (S.postId && !S.posts.find(p => p.id === S.postId)) {
@@ -3397,21 +3433,44 @@ function Leaderboard(){
   // Türkiye saatine göre içinde bulunduğumuz ayı belirler.
   // ts varsa onu kullanır; eski kayıtlarda ts yoksa date alanına düşer.
   const TURKEY_TZ='Europe/Istanbul';
-  function turkiyeYilAy(timestamp){
-    if(!timestamp)return null;
-    try{
-      return new Intl.DateTimeFormat('en-CA',{timeZone:TURKEY_TZ,year:'numeric',month:'2-digit'}).format(new Date(Number(timestamp)));
-    }catch{return null;}
-  }
   function postZamani(p){
-    const ts=Number(p?.ts||0);
-    if(ts>0)return ts;
+    const raw = p?.ts;
+    if(raw && typeof raw.toMillis === 'function') {
+      const ms = raw.toMillis();
+      if(Number.isFinite(ms) && ms > 0) return ms;
+    }
+    if(raw && typeof raw === 'object' && typeof raw.seconds === 'number') {
+      const ms = raw.seconds * 1000 + Math.floor((raw.nanoseconds || 0) / 1000000);
+      if(Number.isFinite(ms) && ms > 0) return ms;
+    }
+    const ts = Number(raw || 0);
+    if(Number.isFinite(ts) && ts > 0) return ts;
     return parseDate(p?.date);
   }
-  const simdiYilAy=new Intl.DateTimeFormat('en-CA',{timeZone:TURKEY_TZ,year:'numeric',month:'2-digit'}).format(new Date());
-  const ayAdi=new Intl.DateTimeFormat('tr-TR',{timeZone:TURKEY_TZ,month:'long',year:'numeric'}).format(new Date());
+  function turkiyeYilAyFromPost(p){
+    const ms = postZamani(p);
+    if(!ms) return null;
+    try{
+      const parts = new Intl.DateTimeFormat('en-US',{
+        timeZone:TURKEY_TZ,
+        year:'numeric',
+        month:'2-digit'
+      }).formatToParts(new Date(ms));
+      const y = parts.find(x=>x.type==='year')?.value;
+      const m = parts.find(x=>x.type==='month')?.value;
+      return y && m ? `${y}-${m}` : null;
+    }catch{return null;}
+  }
+  const nowTurkey = new Date();
+  const turkeyNowParts = new Intl.DateTimeFormat('en-US',{
+    timeZone:TURKEY_TZ,
+    year:'numeric',
+    month:'2-digit'
+  }).formatToParts(nowTurkey);
+  const simdiYilAy = `${turkeyNowParts.find(x=>x.type==='year')?.value}-${turkeyNowParts.find(x=>x.type==='month')?.value}`;
+  const ayAdi=new Intl.DateTimeFormat('tr-TR',{timeZone:TURKEY_TZ,month:'long',year:'numeric'}).format(nowTurkey);
   const aylik=gorunenPaylasimlar
-    .filter(p=>turkiyeYilAy(postZamani(p))===simdiYilAy)
+    .filter(p=>turkiyeYilAyFromPost(p)===simdiYilAy)
     .map(p=>({...p,avg:calcAvg(p.userRatings,p.aiScore)}))
     .filter(p=>p.avg!==null)
     .sort((a,b)=>{
