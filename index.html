@@ -2687,83 +2687,97 @@ async function adminYapayZekaGorseliYenile(post){
     throw new Error('Bu işlem yalnızca admin içindir.');
   }
 
-  const controller=new AbortController();
-  const fluxTimeout=setTimeout(()=>controller.abort(),90000);
+  // FLUX başarısız olursa (özellikle Cloudflare 429 kota/rate-limit)
+  // aynı buton içinde otomatik olarak GIPHY'ye düşeriz.
+  async function giphyFallback(fluxMessage){
+    try{
+      const data=await adminGiphyFallbackUygula(post);
+      return {
+        type:'giphy',
+        provider:'giphy',
+        gifUrl:data?.gifUrl||null,
+        fallbackReason:fluxMessage||'FLUX kullanılamadı.'
+      };
+    }catch(giphyErr){
+      throw new Error(`FLUX kullanılamadı (${fluxMessage||'bilinmeyen hata'}). GIPHY yedeği de başarısız: ${giphyErr?.message||giphyErr}`);
+    }
+  }
 
+  let fluxError='';
   try{
-    const r=await fetch('/api/flux-image',{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      signal:controller.signal,
-      body:JSON.stringify({
-        title:post.title||'',
-        text:post.text||''
-      })
-    });
+    const controller=new AbortController();
+    const fluxTimeout=setTimeout(()=>controller.abort(),90000);
 
-    const contentType=(r.headers.get('content-type')||'').split(';')[0].trim();
+    let r;
+    try{
+      r=await fetch('/api/flux-image',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        signal:controller.signal,
+        body:JSON.stringify({title:post.title||'',text:post.text||''})
+      });
+    }catch(err){
+      clearTimeout(fluxTimeout);
+      fluxError=err?.name==='AbortError'?'FLUX isteği 90 saniyede tamamlanmadı.':(err?.message||'FLUX bağlantı hatası.');
+      return await giphyFallback(fluxError);
+    }
+    clearTimeout(fluxTimeout);
+
+    const contentType=(r.headers.get('content-type')||'').split(';')[0].trim().toLowerCase();
 
     if(!r.ok){
       let hata='';
       try{
         const data=await r.json();
-        hata=data?.error||'';
-      }catch(_){ }
-      throw new Error(hata||`FLUX sunucusu HTTP ${r.status} döndürdü.`);
+        hata=data?.error||data?.detail||data?.message||'';
+      }catch(_){
+        try{ hata=(await r.text()).slice(0,500); }catch(__){}
+      }
+      fluxError=`Cloudflare FLUX HTTP ${r.status}${hata?` — ${hata}`:''}`;
+      // 429 kota/rate-limit dahil tüm FLUX HTTP hatalarında GIPHY yedeği.
+      return await giphyFallback(fluxError);
     }
 
     if(!contentType.startsWith('image/')){
-      throw new Error(`FLUX görsel yerine ${contentType||'bilinmeyen veri'} döndürdü.`);
+      fluxError=`FLUX görsel yerine ${contentType||'bilinmeyen veri'} döndürdü.`;
+      return await giphyFallback(fluxError);
     }
 
     const blob=await r.blob();
     if(!blob || !blob.size){
-      throw new Error('FLUX boş görsel döndürdü.');
+      fluxError='FLUX boş görsel döndürdü.';
+      return await giphyFallback(fluxError);
     }
 
-    clearTimeout(fluxTimeout);
-
-    // Firebase Storage kullanmıyoruz. Firebase Storage kotası dolu olsa bile
-    // FLUX görselini küçültüp doğrudan Firestore'da veri URL'si olarak saklıyoruz.
-    // Böylece Storage upload/timeout problemi tamamen devre dışı kalır.
+    // Firebase Storage kullanmıyoruz. Görsel küçültülüp Firestore'a data URL
+    // olarak kaydedilir; böylece Storage kotası/timeout'u bu akışı engellemez.
     const aiImageDataUrl=await new Promise((resolve,reject)=>{
       const reader=new FileReader();
       reader.onload=()=>{
         const img=new Image();
         img.onload=()=>{
-          // Firestore belge boyutunu güvenli tarafta tutmak için küçült.
           const maxSide=768;
           let w=img.naturalWidth||img.width||768;
           let h=img.naturalHeight||img.height||768;
           if(w>maxSide||h>maxSide){
-            if(w>=h){ h=Math.round(h*maxSide/w); w=maxSide; }
-            else { w=Math.round(w*maxSide/h); h=maxSide; }
+            if(w>=h){h=Math.round(h*maxSide/w);w=maxSide;}
+            else{w=Math.round(w*maxSide/h);h=maxSide;}
           }
           const canvas=document.createElement('canvas');
-          canvas.width=w; canvas.height=h;
+          canvas.width=w;canvas.height=h;
           const ctx=canvas.getContext('2d');
-          if(!ctx){ reject(new Error('Görsel dönüştürücü başlatılamadı.')); return; }
+          if(!ctx){reject(new Error('Görsel dönüştürücü başlatılamadı.'));return;}
           ctx.drawImage(img,0,0,w,h);
-
-          // Türkçe şiir görselinde kaliteyi korurken veri boyutunu düşük tut.
           let data=canvas.toDataURL('image/jpeg',0.78);
-
-          // Gerekirse daha da küçült; Firestore 1 MiB belge sınırına yaklaşmayalım.
-          if(data.length>850000){
-            data=canvas.toDataURL('image/jpeg',0.62);
-          }
+          if(data.length>850000)data=canvas.toDataURL('image/jpeg',0.62);
           if(data.length>950000){
             const small=document.createElement('canvas');
-            small.width=Math.round(w*0.75);
-            small.height=Math.round(h*0.75);
+            small.width=Math.round(w*0.75);small.height=Math.round(h*0.75);
             const sctx=small.getContext('2d');
             sctx.drawImage(canvas,0,0,small.width,small.height);
             data=small.toDataURL('image/jpeg',0.58);
           }
-          if(data.length>1000000){
-            reject(new Error('FLUX görseli Firestore sınırına sığmayacak kadar büyük.'));
-            return;
-          }
+          if(data.length>1000000){reject(new Error('FLUX görseli Firestore sınırına sığmayacak kadar büyük.'));return;}
           resolve(data);
         };
         img.onerror=()=>reject(new Error('FLUX görseli okunamadı.'));
@@ -2774,12 +2788,10 @@ async function adminYapayZekaGorseliYenile(post){
     });
 
     const status=document.querySelector('[data-flux-status]');
-    if(status){
-      status.textContent='💾 AI görseli kaydediliyor...';
-    }
+    if(status)status.textContent='💾 AI görseli kaydediliyor...';
 
     const idx=S.posts.findIndex(p=>p.id===post.id);
-    if(idx<0) throw new Error('Paylaşım bulunamadı.');
+    if(idx<0)throw new Error('Paylaşım bulunamadı.');
 
     const now=Date.now();
     const updates={
@@ -2794,20 +2806,15 @@ async function adminYapayZekaGorseliYenile(post){
 
     S.posts[idx]={...S.posts[idx],...updates};
     save();
-
     await db.collection('posts').doc(post.id).update(updates);
     refreshCard(post.id);
 
-    return {
-      type:'ai',
-      provider:'cloudflare',
-      model:'@cf/black-forest-labs/flux-1-schnell'
-    };
-
+    return {type:'ai',provider:'cloudflare',model:'@cf/black-forest-labs/flux-1-schnell'};
   }catch(err){
-    clearTimeout(fluxTimeout);
     console.error('AI görsel oluşturma hatası:',err);
-    throw err;
+    // FLUX yanıtı geldikten sonra tarayıcıda dönüştürme/kayıt gibi bir adım
+    // hata verirse de kullanıcıyı boşta bırakma; GIPHY yedeğini dene.
+    return await giphyFallback(err?.message||'FLUX görsel işlemi başarısız oldu.');
   }
 }
 
@@ -3379,36 +3386,86 @@ function Feed(){
 
 function Leaderboard(){
   const gorunenPaylasimlar=gorunurPaylasimlar(S.posts);
-  const scored=gorunenPaylasimlar.map(p=>({...p,avg:calcAvg(p.userRatings,p.aiScore)})).filter(p=>p.avg!==null).sort((a,b)=>b.avg-a.avg);
-  const ranked=S.users.map(u=>{const up=gorunenPaylasimlar.filter(p=>p.authorId===u.id&&calcAvg(p.userRatings,p.aiScore)!==null);if(!up.length)return null;const avg=up.reduce((s,p)=>s+calcAvg(p.userRatings,p.aiScore),0)/up.length;return{...u,avg:+avg.toFixed(2),cnt:up.length}}).filter(Boolean).sort((a,b)=>b.avg-a.avg);
+  const puanli=gorunenPaylasimlar.map(p=>({...p,avg:calcAvg(p.userRatings,p.aiScore)})).filter(p=>p.avg!==null).sort((a,b)=>b.avg-a.avg);
+  const ranked=S.users.map(u=>{
+    const up=gorunenPaylasimlar.filter(p=>p.authorId===u.id&&calcAvg(p.userRatings,p.aiScore)!==null);
+    if(!up.length)return null;
+    const avg=up.reduce((sum,p)=>sum+calcAvg(p.userRatings,p.aiScore),0)/up.length;
+    return{...u,avg:+avg.toFixed(2),cnt:up.length};
+  }).filter(Boolean).sort((a,b)=>b.avg-a.avg);
+
+  // Türkiye saatine göre içinde bulunduğumuz ayı belirler.
+  // ts varsa onu kullanır; eski kayıtlarda ts yoksa date alanına düşer.
+  const TURKEY_TZ='Europe/Istanbul';
+  function turkiyeYilAy(timestamp){
+    if(!timestamp)return null;
+    try{
+      return new Intl.DateTimeFormat('en-CA',{timeZone:TURKEY_TZ,year:'numeric',month:'2-digit'}).format(new Date(Number(timestamp)));
+    }catch{return null;}
+  }
+  function postZamani(p){
+    const ts=Number(p?.ts||0);
+    if(ts>0)return ts;
+    return parseDate(p?.date);
+  }
+  const simdiYilAy=new Intl.DateTimeFormat('en-CA',{timeZone:TURKEY_TZ,year:'numeric',month:'2-digit'}).format(new Date());
+  const ayAdi=new Intl.DateTimeFormat('tr-TR',{timeZone:TURKEY_TZ,month:'long',year:'numeric'}).format(new Date());
+  const aylik=gorunenPaylasimlar
+    .filter(p=>turkiyeYilAy(postZamani(p))===simdiYilAy)
+    .map(p=>({...p,avg:calcAvg(p.userRatings,p.aiScore)}))
+    .filter(p=>p.avg!==null)
+    .sort((a,b)=>{
+      if(b.avg!==a.avg)return b.avg-a.avg;
+      return postZamani(b)-postZamani(a);
+    });
+
   const medals=['🥇','🥈','🥉'];
   const wrap=h('div',{},[navBar()]);
   const page=h('div',{class:'page'});
   page.appendChild(h('h2',{style:{fontFamily:"'Playfair Display',serif",color:'#e9d5ff',marginBottom:'4px',fontSize:'1.4rem'}},'🏆 Sıralama'));
   page.appendChild(h('p',{style:{color:'#6b5b8a',fontSize:'.85rem',marginBottom:'16px',fontStyle:'italic'}},'Puan ver, yorum yaz!'));
+
   const pb=h('button',{class:'btn',style:{flex:'1',padding:'10px',borderRadius:'10px',fontSize:'.88rem',background:'linear-gradient(135deg,#7c3aed,#a855f7)',color:'#fff',border:'none'}},'🪶 En İyi Şiirler');
   const ub=h('button',{class:'btn',style:{flex:'1',padding:'10px',borderRadius:'10px',fontSize:'.88rem',background:'#1a0f2e',color:'#a78bfa',border:'1px solid #2d1b52'}},'👑 En İyi Ozanlar');
-  page.appendChild(h('div',{style:{display:'flex',gap:'8px',marginBottom:'20px'}},[pb,ub]));
+  const mb=h('button',{class:'btn',style:{flex:'1',padding:'10px',borderRadius:'10px',fontSize:'.88rem',background:'#1a0f2e',color:'#a78bfa',border:'1px solid #2d1b52'}},'📅 Ayın Şiirleri');
+  page.appendChild(h('div',{style:{display:'flex',gap:'8px',marginBottom:'20px',flexWrap:'wrap'}},[pb,ub,mb]));
+
   const ct=h('div');
+
+  function kartOlustur(p,i){
+    const author=byId(p.authorId);
+    const dt=p.title||(p.text?.slice(0,28)+(p.text?.length>28?'…':''))||'İsimsiz';
+    const card=h('div',{class:'card',style:{display:'flex',gap:'12px',alignItems:'center',borderLeft:`3px solid ${i<3?['#fbbf24','#9ca3af','#cd7c2e'][i]:scoreColor(p.avg)}`} });
+    card.appendChild(h('div',{style:{textAlign:'center',minWidth:'42px'}},[
+      h('p',{style:{fontSize:'1.35rem'}},medals[i]||`#${i+1}`),
+      h('p',{style:{fontFamily:"'Playfair Display',serif",fontSize:'1.1rem',fontWeight:'700',color:scoreColor(p.avg)}},p.avg.toFixed(1)),
+      h('p',{style:{fontSize:'.55rem',color:'#6b5b8a'}},'/10')
+    ]));
+    const info=h('div',{style:{flex:'1',minWidth:'0'}});
+    const tl=h('p',{style:{fontFamily:"'Playfair Display',serif",fontSize:'1rem',color:'#e9d5ff',fontStyle:'italic',cursor:'pointer',marginBottom:'5px',textDecoration:'underline',textDecorationColor:'#7c3aed'}},`"${dt}"`);
+    tl.onclick=()=>go('postdetail',{postId:p.id});
+    info.appendChild(tl);
+    info.appendChild(h('div',{style:{display:'flex',alignItems:'center',gap:'6px',marginBottom:'4px'}},[
+      av(author,20,()=>go('profile',{profileId:author?.id})),
+      h('span',{style:{fontSize:'.8rem',color:'#a78bfa',cursor:'pointer'},onclick:()=>go('profile',{profileId:author?.id})},author?.name||'')
+    ]));
+    const pR=p.reactions||{like:[],dislike:[],heart:[]};
+    const tepkiMetin=[(pR.like||[]).length?`👍${pR.like.length}`:'',(pR.dislike||[]).length?`👎${pR.dislike.length}`:'',(pR.heart||[]).length?`❤️${pR.heart.length}`:''].filter(Boolean).join(' ');
+    info.appendChild(h('div',{style:{display:'flex',gap:'10px',flexWrap:'wrap',alignItems:'center'}},[
+      h('span',{style:{fontSize:'.72rem',color:'#6b5b8a'}},`${Object.keys(p.userRatings||{}).length} oy · ${(p.comments||[]).length} yorum`),
+      tepkiMetin?h('span',{style:{fontSize:'.72rem',color:'#6b5b8a'}},tepkiMetin):null,
+      h('span',{style:{fontSize:'.72rem',color:scoreColor(p.avg)}},scoreBadge(p.avg))
+    ]));
+    card.appendChild(info);
+    return card;
+  }
+
   function showP(){
     ct.innerHTML='';
-    if(!scored.length){ct.appendChild(h('p',{style:{color:'#6b5b8a',fontStyle:'italic',textAlign:'center',marginTop:'40px'}},'Henüz puanlanmış şiir yok!'));return;}
-    scored.forEach((p,i)=>{
-      const author=byId(p.authorId);
-      const dt=p.title||(p.text?.slice(0,28)+(p.text?.length>28?'…':''))||'İsimsiz';
-      const card=h('div',{class:'card',style:{display:'flex',gap:'12px',alignItems:'center',borderLeft:`3px solid ${i<3?['#fbbf24','#9ca3af','#cd7c2e'][i]:scoreColor(p.avg)}`}});
-      card.appendChild(h('div',{style:{textAlign:'center',minWidth:'42px'}},[h('p',{style:{fontSize:'1.35rem'}},medals[i]||`#${i+1}`),h('p',{style:{fontFamily:"'Playfair Display',serif",fontSize:'1.1rem',fontWeight:'700',color:scoreColor(p.avg)}},p.avg.toFixed(1)),h('p',{style:{fontSize:'.55rem',color:'#6b5b8a'}},'/10')]));
-      const info=h('div',{style:{flex:'1',minWidth:'0'}});
-      const tl=h('p',{style:{fontFamily:"'Playfair Display',serif",fontSize:'1rem',color:'#e9d5ff',fontStyle:'italic',cursor:'pointer',marginBottom:'5px',textDecoration:'underline',textDecorationColor:'#7c3aed'}},`"${dt}"`);
-      tl.onclick=()=>go('postdetail',{postId:p.id});
-      info.appendChild(tl);
-      info.appendChild(h('div',{style:{display:'flex',alignItems:'center',gap:'6px',marginBottom:'4px'}},[av(author,20,()=>go('profile',{profileId:author?.id})),h('span',{style:{fontSize:'.8rem',color:'#a78bfa',cursor:'pointer'},onclick:()=>go('profile',{profileId:author?.id})},author?.name||'')]));
-      const pR=p.reactions||{like:[],dislike:[],heart:[]};
-      const tepkiMetin=[(pR.like||[]).length?`👍${pR.like.length}`:'',(pR.dislike||[]).length?`👎${pR.dislike.length}`:'',(pR.heart||[]).length?`❤️${pR.heart.length}`:''].filter(Boolean).join(' ');
-      info.appendChild(h('div',{style:{display:'flex',gap:'10px',flexWrap:'wrap',alignItems:'center'}},[h('span',{style:{fontSize:'.72rem',color:'#6b5b8a'}},`${Object.keys(p.userRatings||{}).length} oy · ${(p.comments||[]).length} yorum`),tepkiMetin?h('span',{style:{fontSize:'.72rem',color:'#6b5b8a'}},tepkiMetin):null,h('span',{style:{fontSize:'.72rem',color:scoreColor(p.avg)}},scoreBadge(p.avg))]));
-      card.appendChild(info);ct.appendChild(card);
-    });
+    if(!puanli.length){ct.appendChild(h('p',{style:{color:'#6b5b8a',fontStyle:'italic',textAlign:'center',marginTop:'40px'}},'Henüz puanlanmış şiir yok!'));return;}
+    puanli.forEach((p,i)=>ct.appendChild(kartOlustur(p,i)));
   }
+
   function showU(){
     ct.innerHTML='';
     if(!ranked.length){ct.appendChild(h('p',{style:{color:'#6b5b8a',fontStyle:'italic',textAlign:'center',marginTop:'40px'}},'Henüz sıralama oluşmadı!'));return;}
@@ -3417,18 +3474,45 @@ function Leaderboard(){
       card.appendChild(h('p',{style:{fontSize:'1.35rem',minWidth:'32px'}},medals[i]||`#${i+1}`));
       card.appendChild(av(u,48,()=>go('profile',{profileId:u.id})));
       const info=h('div',{style:{flex:'1'}});
-      const n=h('p',{style:{fontFamily:"'Playfair Display',serif",fontWeight:'700',color:'#e9d5ff',cursor:'pointer'},onclick:()=>go('profile',{profileId:u.id})},u.name);
-      info.appendChild(n);info.appendChild(h('p',{style:{color:'#6b5b8a',fontSize:'.8rem'}},`@${u.username} · ${u.cnt} şiir`));
+      info.appendChild(h('p',{style:{fontFamily:"'Playfair Display',serif",fontWeight:'700',color:'#e9d5ff',cursor:'pointer'},onclick:()=>go('profile',{profileId:u.id})},u.name));
+      info.appendChild(h('p',{style:{color:'#6b5b8a',fontSize:'.8rem'}},`@${u.username} · ${u.cnt} şiir`));
       card.appendChild(info);
-      card.appendChild(h('div',{style:{textAlign:'center'}},[h('p',{style:{fontFamily:"'Playfair Display',serif",fontSize:'1.4rem',fontWeight:'700',color:scoreColor(u.avg)}},u.avg.toFixed(1)),h('p',{style:{fontSize:'.63rem',color:'#6b5b8a'}},'ort. puan')]));
+      card.appendChild(h('div',{style:{textAlign:'center'}},[
+        h('p',{style:{fontFamily:"'Playfair Display',serif",fontSize:'1.4rem',fontWeight:'700',color:scoreColor(u.avg)}},u.avg.toFixed(1)),
+        h('p',{style:{fontSize:'.63rem',color:'#6b5b8a'}},'ort. puan')
+      ]));
       ct.appendChild(card);
     });
   }
-  pb.onclick=()=>{pb.style.background='linear-gradient(135deg,#7c3aed,#a855f7)';pb.style.color='#fff';pb.style.border='none';ub.style.background='#1a0f2e';ub.style.color='#a78bfa';ub.style.border='1px solid #2d1b52';showP();};
-  ub.onclick=()=>{ub.style.background='linear-gradient(135deg,#7c3aed,#a855f7)';ub.style.color='#fff';ub.style.border='none';pb.style.background='#1a0f2e';pb.style.color='#a78bfa';pb.style.border='1px solid #2d1b52';showU();};
-  showP();page.appendChild(ct);wrap.appendChild(page);return wrap;
-}
 
+  function showM(){
+    ct.innerHTML='';
+    if(!aylik.length){
+      ct.appendChild(h('p',{style:{color:'#6b5b8a',fontStyle:'italic',textAlign:'center',marginTop:'40px'}},`${ayAdi} içinde henüz puanlanmış şiir yok.`));
+      return;
+    }
+    ct.appendChild(h('p',{style:{color:'#a78bfa',fontSize:'.85rem',textAlign:'center',fontStyle:'italic',marginBottom:'12px'}},`📅 ${ayAdi} — Türkiye saati`));
+    aylik.forEach((p,i)=>ct.appendChild(kartOlustur(p,i)));
+  }
+
+  function aktifButon(aktif){
+    [pb,ub,mb].forEach(b=>{
+      const on=b===aktif;
+      b.style.background=on?'linear-gradient(135deg,#7c3aed,#a855f7)':'#1a0f2e';
+      b.style.color=on?'#fff':'#a78bfa';
+      b.style.border=on?'none':'1px solid #2d1b52';
+    });
+  }
+  pb.onclick=()=>{aktifButon(pb);showP();};
+  ub.onclick=()=>{aktifButon(ub);showU();};
+  mb.onclick=()=>{aktifButon(mb);showM();};
+
+  aktifButon(pb);
+  showP();
+  page.appendChild(ct);
+  wrap.appendChild(page);
+  return wrap;
+}
 function Explore(){
   const wrap=h('div',{},[navBar()]);
   const page=h('div',{class:'page'});
