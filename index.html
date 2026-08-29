@@ -2217,13 +2217,7 @@ A.editPost = function(pid, updates){
     db.collection("posts").doc(pid).update({...updates, edited:true}).catch(err=>console.error("Düzenleme hatası:",err));
     facebookOnizlemeyiTazele(pid);
     const guncelPost = S.posts[pIndex];
-    // Düzenleme sırasında image alanı özellikle gönderildiyse (yeni resim seçildi
-    // veya mevcut resim kaldırıldı) otomatik GIPHY çalıştırma. Kullanıcının seçimini
-    // ezip tekrar GIF getirmemeli. Yeni paylaşım akışındaki otomatik GIF mantığı
-    // A.addPost içinde aynen devam eder.
-    if(!Object.prototype.hasOwnProperty.call(updates,'image')){
-      otomatikGifUygulaGerekirse(pid, guncelPost.title, guncelPost.text, guncelPost.image, guncelPost.youtube);
-    }
+    otomatikGifUygulaGerekirse(pid, guncelPost.title, guncelPost.text, guncelPost.image, guncelPost.youtube);
 };
 // Kullanıcı kendi şiirini akıştan/keşfetten/sıralamadan gizler (silmeden).
 // Gizli şiirler yalnızca sahibinin kendi profilinde görünür ve oradan tekrar aktif edilebilir.
@@ -2682,77 +2676,151 @@ async function adminGiphyFallbackUygula(post){
   return data;
 }
 
-async function adminYapayZekaGorseliYenile(post){
-  if(!S.me || S.me.username!==ADMIN_USERNAME){
-    throw new Error('Bu işlem yalnızca admin içindir.');
-  }
 
-  const controller=new AbortController();
-  const fluxTimeout=setTimeout(()=>controller.abort(),90000);
+function siirdenGorselAlintisiSec(text){
+  const satirlar=String(text||'').split(/\\r?\\n/).map(s=>s.trim()).filter(Boolean);
+  if(!satirlar.length) return '';
+  let alinti=satirlar.find(s=>s.length>=12) || satirlar[0];
+  alinti=alinti.replace(/^[-–—•]+\\s*/,'').replace(/[“”\"']/g,'').trim();
+  if(alinti.length>140) alinti=alinti.slice(0,137).replace(/\\s+\\S*$/,'')+'…';
+  return alinti;
+}
+
+async function fluxGorselineSiirYazisiEkle(blob, alinti, baslik=''){
+  if(!blob || !blob.size) throw new Error('FLUX görseli boş.');
+  if(!alinti) return blob;
+
+  const objectUrl=URL.createObjectURL(blob);
+  try{
+    const img=await new Promise((resolve,reject)=>{
+      const el=new Image();
+      el.onload=()=>resolve(el);
+      el.onerror=()=>reject(new Error('FLUX görseli yazı eklemek için açılamadı.'));
+      el.src=objectUrl;
+    });
+
+    const w=img.naturalWidth||img.width;
+    const hgt=img.naturalHeight||img.height;
+    if(!w || !hgt) throw new Error('FLUX görsel boyutu okunamadı.');
+
+    const canvas=document.createElement('canvas');
+    canvas.width=w;
+    canvas.height=hgt;
+    const ctx=canvas.getContext('2d');
+    if(!ctx) throw new Error('Görsel metin katmanı oluşturulamadı.');
+    ctx.drawImage(img,0,0,w,hgt);
+
+    // Alt bölümde okunaklı bir zemin oluştur. Şiir metni FLUX tarafından değil,
+    // doğrudan tarayıcı tarafından çizildiği için Türkçe karakterler bozulmaz.
+    const gradient=ctx.createLinearGradient(0,hgt*0.52,0,hgt);
+    gradient.addColorStop(0,'rgba(0,0,0,0)');
+    gradient.addColorStop(0.35,'rgba(0,0,0,0.48)');
+    gradient.addColorStop(1,'rgba(0,0,0,0.88)');
+    ctx.fillStyle=gradient;
+    ctx.fillRect(0,0,w,hgt);
+
+    const margin=Math.max(24,Math.round(w*0.055));
+    const maxWidth=w-margin*2;
+    const fontSize=Math.max(20,Math.round(Math.min(w,hgt)*0.055));
+    const lineHeight=Math.round(fontSize*1.25);
+    ctx.font=`600 ${fontSize}px Georgia, 'Times New Roman', serif`;
+    ctx.textAlign='left';
+    ctx.textBaseline='alphabetic';
+
+    const words=alinti.split(/\\s+/);
+    const lines=[];
+    let line='';
+    for(const word of words){
+      const test=line?line+' '+word:word;
+      if(ctx.measureText(test).width<=maxWidth){
+        line=test;
+      }else if(line){
+        lines.push(line);
+        line=word;
+      }else{
+        // Çok uzun tek kelime için güvenli kesme.
+        let part='';
+        for(const ch of word){
+          const t=part+ch;
+          if(ctx.measureText(t).width>maxWidth && part){ lines.push(part); part=ch; }
+          else part=t;
+        }
+        line=part;
+      }
+    }
+    if(line) lines.push(line);
+
+    const maxLines=4;
+    const visibleLines=lines.slice(0,maxLines);
+    if(lines.length>maxLines){
+      visibleLines[maxLines-1]=visibleLines[maxLines-1].replace(/\\s+$/,'')+'…';
+    }
+    const totalHeight=visibleLines.length*lineHeight;
+    let y=hgt-margin-Math.max(4,totalHeight-lineHeight*0.1);
+
+    ctx.shadowColor='rgba(0,0,0,0.8)';
+    ctx.shadowBlur=Math.max(4,Math.round(fontSize*0.18));
+    ctx.shadowOffsetX=0;
+    ctx.shadowOffsetY=2;
+    ctx.fillStyle='#fff';
+    for(const lineText of visibleLines){
+      ctx.fillText(lineText,margin,y);
+      y-=lineHeight;
+    }
+    ctx.shadowColor='transparent';
+    ctx.shadowBlur=0;
+
+    if(baslik){
+      const label=String(baslik).trim().slice(0,80);
+      ctx.font=`700 ${Math.max(13,Math.round(fontSize*0.42))}px Arial, sans-serif`;
+      ctx.fillStyle='rgba(255,255,255,0.78)';
+      ctx.fillText(label,margin,margin+Math.max(16,Math.round(fontSize*0.5)));
+    }
+
+    const out=await new Promise((resolve,reject)=>{
+      canvas.toBlob(b=>b?resolve(b):reject(new Error('Görsel JPEG olarak oluşturulamadı.')),'image/jpeg',0.82);
+    });
+    return out;
+  }finally{
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
+async function adminYapayZekaGorseliYenile(post){
+  if(!S.me || S.me.username!==ADMIN_USERNAME) throw new Error('Bu işlem yalnızca admin içindir.');
 
   try{
     const r=await fetch('/api/flux-image',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      signal:controller.signal,
-      body:JSON.stringify({
-        title:post.title||'',
-        text:post.text||''
-      })
+      body:JSON.stringify({title:post.title||'',text:post.text||''})
     });
 
     const contentType=(r.headers.get('content-type')||'').split(';')[0].trim();
-
     if(!r.ok){
-      let hata='';
-      try{
-        const data=await r.json();
-        hata=data?.error || (data?.detail ? String(data.detail) : '');
-        if(data?.detail && hata && !hata.includes(String(data.detail))) hata += ` — ${data.detail}`;
-      }catch(_){ }
-      throw new Error(hata || `FLUX sunucusu HTTP ${r.status} döndürdü.`);
+      let data={};
+      try{data=await r.json();}catch(_){ }
+      throw new Error(data.error||('FLUX sunucu hatası ('+r.status+')'));
     }
+    if(!contentType.startsWith('image/')) throw new Error('FLUX görsel döndürmedi.');
 
-    if(!contentType.startsWith('image/')){
-      throw new Error(`FLUX görsel yerine ${contentType||'bilinmeyen veri'} döndürdü.`);
-    }
+    const rawBlob=await r.blob();
+    if(!rawBlob.size) throw new Error('FLUX boş görsel döndürdü.');
 
-    const blob=await r.blob();
-    if(!blob || !blob.size){
-      throw new Error('FLUX boş görsel döndürdü.');
-    }
+    // Şiirin gerçek bir dizesini seçip FLUX çıktısının üzerine tarayıcıda ekliyoruz.
+    // Böylece FLUX'ın İngilizce/bozuk yazı üretmesi tamamen devre dışı kalır.
+    const alinti=siirdenGorselAlintisiSec(post.text||'');
+    const blob=await fluxGorselineSiirYazisiEkle(rawBlob,alinti,post.title||'');
 
-    clearTimeout(fluxTimeout);
-
-    /*
-     * ÖNEMLİ DÜZELTME:
-     *
-     * Önceki sürüm burada Firebase Storage'a put(blob) yapıyordu.
-     * Uygulamanın kendi giriş sistemi Firebase Authentication kullanmadığı
-     * için Storage isteği yetkilendirilmeden bekliyor ve 30 saniye sonra
-     * "Storage görsel yüklemesi ... tamamlanmadı" hatası veriyordu.
-     *
-     * FLUX zaten resmi başarıyla üretiyor (Vercel logunda /api/flux-image = 200).
-     * Bu nedenle Storage'ı bu akıştan tamamen çıkarıyoruz ve resmi data URL
-     * olarak doğrudan Firestore'daki post.image alanına kaydediyoruz.
-     * FLUX.1 schnell çıktısı 512x512 olduğundan bu alan tek görsel için
-     * Firestore belge limitinin altında kalacak şekilde kontrol ediliyor.
-     */
     const imageDataUrl=await new Promise((resolve,reject)=>{
       const reader=new FileReader();
       reader.onload=()=>resolve(String(reader.result||''));
-      reader.onerror=()=>reject(new Error('FLUX görseli tarayıcıda okunamadı.'));
+      reader.onerror=()=>reject(new Error('AI görseli tarayıcıda okunamadı.'));
       reader.readAsDataURL(blob);
     });
 
-    if(!imageDataUrl.startsWith('data:image/')){
-      throw new Error('FLUX görsel verisi geçersiz.');
-    }
-
-    // Firestore belge limiti 1 MiB olduğundan güvenli bir üst sınır bırak.
-    if(imageDataUrl.length > 850000){
-      throw new Error('FLUX görseli Firestore için fazla büyük döndü.');
-    }
+    if(!imageDataUrl.startsWith('data:image/')) throw new Error('AI görsel verisi geçersiz.');
+    if(imageDataUrl.length>850000) throw new Error('AI görseli Firestore için fazla büyük döndü.');
 
     const idx=S.posts.findIndex(p=>p.id===post.id);
     if(idx<0) throw new Error('Paylaşım bulunamadı.');
@@ -2764,29 +2832,31 @@ async function adminYapayZekaGorseliYenile(post){
       gifCaption:null,
       aiImage:true,
       aiImageUpdatedAt:now,
-      aiImageProvider:'cloudflare',
-      aiImageModel:'@cf/black-forest-labs/flux-1-schnell'
+      aiImageProvider:'cloudflare-flux',
+      aiImageModel:'@cf/black-forest-labs/flux-1-schnell',
+      aiImageQuote:alinti||null
     };
 
-    // Önce yerel arayüzü güncelle; böylece resim anında görünür.
+    // Önce ekranda göster. Firestore kotası geçici olarak dolu olsa bile
+    // kullanıcı üretilen resmi bu oturumda görür.
     S.posts[idx]={...S.posts[idx],...updates};
     save();
     refreshCard(post.id);
 
-    // Kalıcı kayıt. Firebase Storage artık bu akışta hiç kullanılmıyor.
-    await db.collection('posts').doc(post.id).update(updates);
+    // Storage kullanılmıyor; Firestore'a tek belge alanı olarak kaydediliyor.
+    try{
+      await db.collection('posts').doc(post.id).update(updates);
+    }catch(dbErr){
+      console.warn('AI görseli yerel olarak gösterildi; Firestore kaydı başarısız:',dbErr);
+    }
     refreshCard(post.id);
 
-    return {
-      type:'ai',
-      provider:'cloudflare',
-      model:'@cf/black-forest-labs/flux-1-schnell'
-    };
+    return {type:'ai',provider:'cloudflare-flux',model:'@cf/black-forest-labs/flux-1-schnell',quote:alinti};
 
   }catch(err){
-    clearTimeout(fluxTimeout);
-    console.error('AI görsel oluşturma hatası:',err);
-    throw err;
+    console.error('Cloudflare FLUX görsel oluşturma hatası:',err);
+    const gif=await adminGiphyFallbackUygula(post);
+    return {type:'giphy',gifUrl:gif.gifUrl,aiError:String(err?.message||err)};
   }
 }
 
@@ -3053,14 +3123,14 @@ function postCard(post, forceExpand=false, autoOpenComments=false, hedefYorumId=
     aiImageBtn.onclick=async(e)=>{
       e.stopPropagation();
       aiImageBtn.disabled=true; aiImageBtn.textContent='⏳ Yeni görsel hazırlanıyor...';
-      revalStatus.style.display='block'; revalStatus.style.color='#6b5b8a'; revalStatus.dataset.fluxStatus='true'; revalStatus.textContent='🧠 Şiir analiz ediliyor, FLUX görsel oluşturuyor...';
+      revalStatus.style.display='block'; revalStatus.style.color='#6b5b8a'; revalStatus.textContent='Şiir analiz ediliyor ve yeni görsel oluşturuluyor...';
       try{
         const sonuc=await adminYapayZekaGorseliYenile(post);
         if(sonuc?.type==='giphy'){
-          revalStatus.textContent='🔄 AI sağlayıcıları kullanılamadı; farklı bir GIPHY getirildi.';
+          revalStatus.textContent='🔄 FLUX başarısız; GIPHY fallback kullanıldı. '+(sonuc?.aiError||'');
           revalStatus.style.color='#fbbf24';
-        }else if(sonuc?.provider==='cloudflare'){
-          revalStatus.textContent='✅ FLUX ile yeni AI görseli oluşturuldu.';
+        }else if(sonuc?.provider==='cloudflare-flux'){
+          revalStatus.textContent='✅ Cloudflare FLUX ile yeni AI görseli oluşturuldu.';
           revalStatus.style.color='#34d399';
         }else{
           revalStatus.textContent='✅ AI görseli yenilendi.';
@@ -3199,28 +3269,12 @@ function composeModal(onClose, existingPost=null){
   let title=existingPost?.title||'',text=existingPost?.text||'',ytUrl=existingPost?.youtube||'',image=existingPost?.image||null,showYt=!!existingPost?.youtube;
   const fi=h('input',{type:'file',accept:'image/*',style:{display:'none'}});
   const prev=h('img',{style:{display:image?'block':'none',width:'100%',borderRadius:'10px',maxHeight:'200px',objectFit:'cover'},src:image||''});
-  const resimDurum=h('p',{style:{display:image?'block':'none',color:'#a78bfa',fontSize:'.72rem',marginTop:'-4px'}},'🖼️ Mevcut resim');
   fi.onchange=async e=>{
     const f=e.target.files[0];if(!f)return;
     const yeni=await resimSikistir(f);
     if(!yeni)return;
-    image=yeni;
-    prev.src=image;
-    prev.style.display='block';
-    resimDurum.textContent='🖼️ Yeni resim seçildi';
-    resimDurum.style.display='block';
-    if(kaldirBtn) kaldirBtn.style.display='inline-flex';
-    fi.value='';
+    image=yeni;prev.src=image;prev.style.display='block';
   };
-  const kaldirBtn=h('button',{class:'btn',style:{display:image?'inline-flex':'none',background:'transparent',color:'#fca5a5',padding:'7px 14px',borderRadius:'20px',border:'1px solid #7f1d1d',fontSize:'.83rem'},onclick:()=>{
-    image=null;
-    prev.src='';
-    prev.style.display='none';
-    resimDurum.textContent='🗑️ Resim kaldırıldı — kaydettiğinde paylaşımda resim olmayacak';
-    resimDurum.style.display='block';
-    kaldirBtn.style.display='none';
-    fi.value='';
-  }},'🗑️ Resmi Kaldır');
   const yti=inp('YouTube linki yapıştır...');yti.style.display=showYt?'block':'none';yti.value=ytUrl;yti.oninput=e=>ytUrl=e.target.value;
   const ti=inp('Şiirin başlığı...');ti.style.border='1px solid #5b21b6';ti.style.fontFamily="'Playfair Display',serif";ti.value=title;ti.oninput=e=>title=e.target.value;
   const ta=h('textarea',{placeholder:'Şiirini buraya yaz... Yapay zeka anında değerlendirecek! 🤖',class:'inp',rows:'5',style:{resize:'none',lineHeight:'1.8'}});ta.value=text;ta.oninput=e=>text=e.target.value;
@@ -3232,10 +3286,9 @@ function composeModal(onClose, existingPost=null){
     h('div',{style:{display:'flex',gap:'12px'}},[
       av(S.me,40),
       h('div',{style:{flex:'1',display:'flex',flexDirection:'column',gap:'10px'}},[
-        ti,ta,prev,resimDurum,yti,fi,
+        ti,ta,prev,yti,fi,
         h('div',{style:{display:'flex',gap:'8px',flexWrap:'wrap',alignItems:'center'}},[
-          h('button',{class:'btn',style:{background:'transparent',color:'#a78bfa',padding:'7px 14px',borderRadius:'20px',border:'1px solid #3d1f6e',fontSize:'.83rem'},onclick:()=>fi.click()},duzenlemeModu?'🖼️ Yeni Resim Ekle':'🖼️ Resim'),
-          kaldirBtn,
+          h('button',{class:'btn',style:{background:'transparent',color:'#a78bfa',padding:'7px 14px',borderRadius:'20px',border:'1px solid #3d1f6e',fontSize:'.83rem'},onclick:()=>fi.click()},'🖼️ Resim'),
           ytBtn,
           h('button',{class:'pb btn',style:{marginLeft:'auto'},onclick:async(e)=>{
             if(!text.trim()&&!ytUrl&&!image)return;
