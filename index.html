@@ -1880,6 +1880,66 @@ async function botAriPuan(text, zorunluModel=null) {
 }
 
 // ── AKSİYONLAR (devam) ───────────────────────────────────────────────────────
+// ── Otomatik GIF (görsel/YouTube eklenmemiş paylaşımlar için) ───────────────
+// Kullanıcı ne bir görsel yükler ne de YouTube linki eklerse, şiirin temasına/
+// ruh haline uygun bir GIF'i arka planda otomatik bulup ekleriz. İki adım:
+//   1) Groq (mevcut GROQ_API_KEY, en ucuz/hızlı model) şiirden 2-4 İngilizce
+//      GIF arama anahtar kelimesi çıkarır (Giphy Türkçe aramada zayıf kalır).
+//   2) /api/giphy o anahtar kelimelerle Giphy'de arama yapar ve bir GIF döner.
+// Herhangi bir adım başarısız olursa (kota, eksik anahtar, ağ hatası vb.)
+// sessizce vazgeçilir — paylaşım akışı ASLA engellenmez, sadece görselsiz kalır.
+// Kurulum: Vercel → Settings → Environment Variables → GIPHY_API_KEY ekleyip
+// yeniden deploy edin (bkz. /api/giphy.js). Anahtar: developers.giphy.com
+async function siirIcinGifAnahtarKelimeleriGetir(title, text){
+  try{
+    const govde = {
+      model: 'llama-3.1-8b-instant',
+      max_tokens: 40,
+      temperature: 0.6,
+      messages: [
+        { role:'system', content:'Sana bir şiir verilecek. Bu şiirin ruh halini, temasını ve imgelerini en iyi yansıtan, Giphy GIF aramasında kullanılacak 2-4 kısa İNGİLİZCE anahtar kelime üret. SADECE virgülle ayrılmış kelimeleri yaz, başka hiçbir şey yazma, tırnak kullanma. Örnek çıktı: rain, loneliness, night sky' },
+        { role:'user', content:`Başlık: ${title||'(başlıksız)'}\n\nŞiir:\n${(text||'').slice(0,600)}` }
+      ]
+    };
+    const res = await fetch('/api/groq', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(govde) });
+    if(!res.ok) return null;
+    const data = await res.json();
+    const raw = data?.choices?.[0]?.message?.content?.trim();
+    if(!raw) return null;
+    return raw.replace(/["'.]/g,'').slice(0,100);
+  }catch{ return null; }
+}
+async function siirIcinOtomatikGifGetir(title, text){
+  const anahtarKelime = await siirIcinGifAnahtarKelimeleriGetir(title, text) || 'poetry mood aesthetic';
+  try{
+    const res = await fetch('/api/giphy', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ query: anahtarKelime }) });
+    if(!res.ok){
+      let mesaj='';
+      try{ const errBody=await res.json(); mesaj=errBody?.error?.message||''; }catch(_){}
+      console.warn('Otomatik GIF alınamadı:', mesaj || res.status);
+      return null;
+    }
+    const data = await res.json();
+    return data?.gifUrl || null;
+  }catch(e){ console.warn('Otomatik GIF alınamadı:', e.message); return null; }
+}
+// Bir paylaşımda ne görsel ne YouTube linki varsa arka planda otomatik GIF uygular.
+// Kullanıcı bu sırada kendi görselini/linkini eklerse üzerine yazmaz (race-condition koruması).
+function otomatikGifUygulaGerekirse(postId, title, text, mevcutGorsel, mevcutYoutube){
+  if(mevcutGorsel || ytId(mevcutYoutube)) return;
+  siirIcinOtomatikGifGetir(title, text).then(gifUrl=>{
+    if(!gifUrl) return;
+    const idx = S.posts.findIndex(p=>p.id===postId);
+    if(idx<0) return;
+    if(S.posts[idx].image || ytId(S.posts[idx].youtube)) return;
+    S.posts[idx].image = gifUrl;
+    S.posts[idx].autoGif = true;
+    save();
+    refreshCard(postId);
+    db.collection("posts").doc(postId).update({ image: gifUrl, autoGif: true }).catch(err=>console.error("Otomatik GIF kaydetme hatası:",err));
+  });
+}
+
 A.addPost = async function(pd){
     if(!S.me) return;
     // Bot puanları hesapla (önce bots, sonra async AI)
@@ -1936,6 +1996,7 @@ A.addPost = async function(pd){
     }
     db.collection("posts").doc(np.id).set(np).catch(err=>console.error("Kaydetme hatası:",err));
     facebookOnizlemeyiTazele(np.id);
+    otomatikGifUygulaGerekirse(np.id, np.title, np.text, np.image, np.youtube);
 
     // Takipçilere yeni paylaşım bildirimi gönder
     const takipciler = Object.keys(S.follows).filter(uid => (S.follows[uid]||[]).includes(S.me.id));
@@ -1966,6 +2027,8 @@ A.editPost = function(pid, updates){
     refreshCard(pid);
     db.collection("posts").doc(pid).update({...updates, edited:true}).catch(err=>console.error("Düzenleme hatası:",err));
     facebookOnizlemeyiTazele(pid);
+    const guncelPost = S.posts[pIndex];
+    otomatikGifUygulaGerekirse(pid, guncelPost.title, guncelPost.text, guncelPost.image, guncelPost.youtube);
 };
 // Kullanıcı kendi şiirini akıştan/keşfetten/sıralamadan gizler (silmeden).
 // Gizli şiirler yalnızca sahibinin kendi profilinde görünür ve oradan tekrar aktif edilebilir.
