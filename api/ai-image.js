@@ -71,30 +71,61 @@ async function tryPollinations(prompt) {
   const key = process.env.POLLINATIONS_API_KEY;
   if (!key) throw new Error('POLLINATIONS_API_KEY tanımlı değil.');
 
-  // Pollinations güncel API'si GET /image/{prompt} ve Bearer sk_ anahtarını destekler.
-  // Flux, genel amaçlı şiirsel/sinematik görseller için ikinci sağlayıcı olarak kullanılıyor.
-  const url = `https://gen.pollinations.ai/image/${encodeURIComponent(prompt)}?model=flux&width=1536&height=864&nologo=true`;
-  const r = await fetch(url, {
-    method: 'GET',
-    headers: { Authorization: `Bearer ${key}` }
+  // ÖNEMLİ: Uzun şiir promptunu GET /image/{prompt} ile göndermek URL uzunluğu
+  // sınırlarına takılabiliyor. Bu nedenle güncel OpenAI-uyumlu POST endpoint'i
+  // kullanıyoruz. Pollinations dokümanı POST /v1/images/generations ve
+  // response_format=b64_json desteğini açıkça belirtiyor.
+  const r = await fetch('https://gen.pollinations.ai/v1/images/generations', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${key}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      model: 'flux',
+      prompt,
+      n: 1,
+      size: '1536x864',
+      response_format: 'b64_json'
+    })
   });
 
+  const contentType = r.headers.get('content-type') || '';
+  let data = null;
+  if (contentType.includes('application/json')) {
+    data = await r.json().catch(() => null);
+  } else {
+    const body = await r.text().catch(() => '');
+    throw new Error(`Pollinations beklenmeyen yanıt verdi (HTTP ${r.status})${body ? ': ' + body.slice(0, 300) : ''}`);
+  }
+
   if (!r.ok) {
-    const body = await r.text().catch(() => '');
-    throw new Error(`Pollinations HTTP ${r.status}${body ? ': ' + body.slice(0, 300) : ''}`);
+    const msg = data?.error?.message || data?.error || data?.message || `Pollinations HTTP ${r.status}`;
+    throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg));
   }
 
-  const contentType = r.headers.get('content-type') || 'image/jpeg';
-  if (!contentType.startsWith('image/')) {
-    const body = await r.text().catch(() => '');
-    throw new Error(`Pollinations görsel yerine beklenmeyen yanıt döndürdü.${body ? ' ' + body.slice(0, 200) : ''}`);
+  const item = Array.isArray(data?.data) ? data.data[0] : null;
+  const b64 = item?.b64_json || item?.b64Json;
+  if (!b64) {
+    // Bazı OpenAI-uyumlu yanıtlarda URL dönebilir; onu da destekleyelim.
+    const url = item?.url;
+    if (url) {
+      const img = await fetch(url);
+      if (!img.ok) throw new Error(`Pollinations görsel URL'si alınamadı (HTTP ${img.status})`);
+      const buf = await img.arrayBuffer();
+      const mime = img.headers.get('content-type') || 'image/jpeg';
+      if (!buf.byteLength) throw new Error('Pollinations boş görsel döndürdü.');
+      return {
+        imageData: `data:${mime};base64,${base64FromBuffer(Buffer.from(buf))}`,
+        provider: 'pollinations',
+        model: 'flux'
+      };
+    }
+    throw new Error('Pollinations görsel verisi döndürmedi.');
   }
-
-  const buf = await r.arrayBuffer();
-  if (!buf.byteLength) throw new Error('Pollinations boş görsel döndürdü.');
 
   return {
-    imageData: `data:${contentType};base64,${base64FromBuffer(buf)}`,
+    imageData: `data:image/png;base64,${b64}`,
     provider: 'pollinations',
     model: 'flux'
   };

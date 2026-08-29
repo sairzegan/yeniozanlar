@@ -2974,7 +2974,7 @@ function postCard(post, forceExpand=false, autoOpenComments=false, hedefYorumId=
       try{
         const sonuc=await adminYapayZekaGorseliYenile(post);
         if(sonuc?.type==='giphy'){
-          revalStatus.textContent='🔄 AI sağlayıcıları kullanılamadı; farklı bir GIPHY getirildi.';
+          revalStatus.textContent='🔄 Gemini ve Pollinations kullanılamadı; farklı bir GIPHY getirildi.';
           revalStatus.style.color='#fbbf24';
         }else if(sonuc?.provider==='pollinations'){
           revalStatus.textContent='✅ Gemini kullanılamadı; Pollinations ile yeni AI görseli oluşturuldu.';
