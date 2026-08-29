@@ -2723,65 +2723,67 @@ async function adminYapayZekaGorseliYenile(post){
 
     clearTimeout(fluxTimeout);
 
-    // FLUX başarılı oldu. Şimdi Firebase Storage'a yükle.
-    // Bu adımın sonsuza kadar beklememesi için 30 saniyelik timeout kullanıyoruz.
-    const mime=blob.type||'image/jpeg';
-    const ext=(mime.split('/')[1]||'jpg').replace('jpeg','jpg');
-    const path=`ai-post-images/${post.id}/${Date.now()}.${ext}`;
-    const storageRef=storage.ref().child(path);
-    const uploadTask=storageRef.put(blob,{
-      contentType:mime,
-      cacheControl:'public,max-age=31536000'
+    // Firebase Storage kullanmıyoruz. Firebase Storage kotası dolu olsa bile
+    // FLUX görselini küçültüp doğrudan Firestore'da veri URL'si olarak saklıyoruz.
+    // Böylece Storage upload/timeout problemi tamamen devre dışı kalır.
+    const aiImageDataUrl=await new Promise((resolve,reject)=>{
+      const reader=new FileReader();
+      reader.onload=()=>{
+        const img=new Image();
+        img.onload=()=>{
+          // Firestore belge boyutunu güvenli tarafta tutmak için küçült.
+          const maxSide=768;
+          let w=img.naturalWidth||img.width||768;
+          let h=img.naturalHeight||img.height||768;
+          if(w>maxSide||h>maxSide){
+            if(w>=h){ h=Math.round(h*maxSide/w); w=maxSide; }
+            else { w=Math.round(w*maxSide/h); h=maxSide; }
+          }
+          const canvas=document.createElement('canvas');
+          canvas.width=w; canvas.height=h;
+          const ctx=canvas.getContext('2d');
+          if(!ctx){ reject(new Error('Görsel dönüştürücü başlatılamadı.')); return; }
+          ctx.drawImage(img,0,0,w,h);
+
+          // Türkçe şiir görselinde kaliteyi korurken veri boyutunu düşük tut.
+          let data=canvas.toDataURL('image/jpeg',0.78);
+
+          // Gerekirse daha da küçült; Firestore 1 MiB belge sınırına yaklaşmayalım.
+          if(data.length>850000){
+            data=canvas.toDataURL('image/jpeg',0.62);
+          }
+          if(data.length>950000){
+            const small=document.createElement('canvas');
+            small.width=Math.round(w*0.75);
+            small.height=Math.round(h*0.75);
+            const sctx=small.getContext('2d');
+            sctx.drawImage(canvas,0,0,small.width,small.height);
+            data=small.toDataURL('image/jpeg',0.58);
+          }
+          if(data.length>1000000){
+            reject(new Error('FLUX görseli Firestore sınırına sığmayacak kadar büyük.'));
+            return;
+          }
+          resolve(data);
+        };
+        img.onerror=()=>reject(new Error('FLUX görseli okunamadı.'));
+        img.src=reader.result;
+      };
+      reader.onerror=()=>reject(new Error('FLUX görseli okunamadı.'));
+      reader.readAsDataURL(blob);
     });
 
-    const downloadUrl=await new Promise((resolve,reject)=>{
-      let settled=false;
-      const timer=setTimeout(()=>{
-        if(settled) return;
-        settled=true;
-        try{ uploadTask.cancel(); }catch(_){ }
-        reject(new Error('Firebase Storage görsel yüklemesi 30 saniye içinde tamamlanmadı.'));
-      },30000);
-
-      uploadTask.on('state_changed',
-        snapshot=>{
-          const total=snapshot.totalBytes||0;
-          const sent=snapshot.bytesTransferred||0;
-          const status=document.querySelector('[data-flux-status]');
-          if(status && total>0){
-            const percent=Math.round((sent/total)*100);
-            status.textContent=`🖼️ AI görseli hazırlanıyor... %${percent}`;
-          }
-        },
-        error=>{
-          if(settled) return;
-          settled=true;
-          clearTimeout(timer);
-          console.error('Firebase Storage AI görsel yükleme hatası:',error);
-          reject(new Error(`Firebase Storage: ${error?.message||error?.code||'yükleme başarısız'}`));
-        },
-        async()=>{
-          if(settled) return;
-          try{
-            const url=await uploadTask.snapshot.ref.getDownloadURL();
-            settled=true;
-            clearTimeout(timer);
-            resolve(url);
-          }catch(error){
-            settled=true;
-            clearTimeout(timer);
-            reject(new Error(`Firebase görsel URL'si alınamadı: ${error?.message||error}`));
-          }
-        }
-      );
-    });
+    const status=document.querySelector('[data-flux-status]');
+    if(status){
+      status.textContent='💾 AI görseli kaydediliyor...';
+    }
 
     const idx=S.posts.findIndex(p=>p.id===post.id);
     if(idx<0) throw new Error('Paylaşım bulunamadı.');
 
     const now=Date.now();
     const updates={
-      image:downloadUrl,
+      image:aiImageDataUrl,
       autoGif:false,
       gifCaption:null,
       aiImage:true,
