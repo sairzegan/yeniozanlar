@@ -2679,7 +2679,8 @@ async function adminGiphyFallbackUygula(post){
 async function adminYapayZekaGorseliYenile(post){
   if(!S.me || S.me.username!==ADMIN_USERNAME) throw new Error('Bu işlem yalnızca admin içindir.');
   try{
-    const r=await fetch('/api/ai-image',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:post.title||'',text:post.text||''})});
+    // Gemini endpoint'i başarısız olsa bile Pollinations için ayrı endpoint'i doğrudan deniyoruz.
+    const r=await fetch('/api/pollinations-image',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:post.title||'',text:post.text||''})});
     const contentType=(r.headers.get('content-type')||'').split(';')[0].trim();
     let data=null;
     let blob=null;
