@@ -1,7 +1,7 @@
 // /api/pollinations-image.js
 // Dedicated Pollinations image endpoint for the admin "AI image" button.
 // Vercel Environment Variable required:
-//   POLLINATIONS_API_KEY = sk_...
+// POLLINATIONS_API_KEY = sk_...
 //
 // This endpoint intentionally uses Pollinations' documented GET /image/{prompt}
 // endpoint and returns JSON { imageData, provider, model } to the browser.
