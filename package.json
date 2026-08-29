@@ -1,6 +1,8 @@
 {
+  "name": "yeni-ozanlar-api",
   "private": true,
+  "type": "module",
   "dependencies": {
-    "@huggingface/inference": "4.13.28"
+    "@huggingface/inference": "^4.13.28"
   }
 }

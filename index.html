@@ -2718,13 +2718,13 @@ async function adminGiphyFallbackUygula(post){
   return data;
 }
 
-// ── AI görsel sağlayıcıları (Cloudflare FLUX → Pollinations → Hugging Face) ──
-// Üçü de aynı sözleşmeyi izler: (title, text, signal) alır, başarılıysa
+// ── AI görsel sağlayıcıları (Cloudflare FLUX → Pollinations → Hugging Face → Gemini) ──
+// Dördü de aynı sözleşmeyi izler: (title, text, signal) alır, başarılıysa
 // {blob, provider, model} döner, başarısızsa Error fırlatır. Bu sayede
 // adminYapayZekaGorseliYenile hepsini TEK bir döngüyle deneyebilir.
-// flux-image.js ve huggingface-image.js ham görsel binary'si (image/*) döner;
-// pollinations-image.js JSON içinde base64 data URL döner — ikisi de burada
-// aynı {blob} şekline normalize edilir.
+// flux-image.js, huggingface-image.js ve gemini-image.js ham görsel binary'si
+// (image/*) döner; pollinations-image.js JSON içinde base64 data URL döner —
+// hepsi burada aynı {blob} şekline normalize edilir.
 async function fluxGorselDene(title, text, signal){
   const r=await fetch('/api/flux-image',{
     method:'POST', headers:{'Content-Type':'application/json'}, signal,
@@ -2769,6 +2769,23 @@ async function huggingfaceGorselDene(title, text, signal){
   const blob=await r.blob();
   if(!blob || !blob.size) throw new Error('Hugging Face boş görsel döndürdü.');
   return { blob, provider:'huggingface', model:'black-forest-labs/FLUX.1-schnell' };
+}
+async function geminiGorselDene(title, text, signal){
+  const r=await fetch('/api/gemini-image',{
+    method:'POST', headers:{'Content-Type':'application/json'}, signal,
+    body:JSON.stringify({title,text})
+  });
+  const contentType=(r.headers.get('content-type')||'').split(';')[0].trim().toLowerCase();
+  if(!r.ok){
+    let hata='';
+    try{ const data=await r.json(); hata=data?.error||''; }
+    catch(_){ try{ hata=(await r.text()).slice(0,300); }catch(__){} }
+    throw new Error(`Gemini HTTP ${r.status}${hata?` — ${hata}`:''}`);
+  }
+  if(!contentType.startsWith('image/')) throw new Error(`Gemini görsel yerine ${contentType||'bilinmeyen veri'} döndürdü.`);
+  const blob=await r.blob();
+  if(!blob || !blob.size) throw new Error('Gemini boş görsel döndürdü.');
+  return { blob, provider:'gemini', model:'gemini-2.5-flash-image' };
 }
 // Herhangi bir sağlayıcıdan gelen görsel blob'unu makul bir boyuta küçültüp
 // Firestore'a sığacak bir JPEG data URL'sine çevirir. Firebase Storage
@@ -2818,12 +2835,15 @@ async function adminYapayZekaGorseliYenile(post){
   }
 
   // Sırasıyla denenecek AI sağlayıcıları: Cloudflare FLUX → Pollinations →
-  // Hugging Face. Biri kota/hata verirse otomatik olarak bir sonrakine geçilir
-  // ("yapay zeka yorumunda olduğu gibi" — Groq→Gemini→Claude kademesiyle aynı mantık).
+  // Hugging Face → Gemini. Biri kota/hata verirse otomatik olarak bir
+  // sonrakine geçilir ("yapay zeka yorumunda olduğu gibi" — Groq→Gemini→Claude
+  // kademesiyle aynı mantık). Gemini en sona eklendi; sırayı değiştirmek
+  // isterse admin bu listedeki satırların yerini değiştirmesi yeterli.
   const saglayicilar=[
     { ad:'Cloudflare FLUX', fn:fluxGorselDene, sure:90000, mesaj:'🧠 Cloudflare FLUX ile görsel oluşturuluyor...' },
     { ad:'Pollinations',    fn:pollinationsGorselDene, sure:60000, mesaj:'🧠 Cloudflare kullanılamadı, Pollinations deneniyor...' },
-    { ad:'Hugging Face',    fn:huggingfaceGorselDene, sure:60000, mesaj:'🧠 Pollinations da kullanılamadı, Hugging Face deneniyor...' }
+    { ad:'Hugging Face',    fn:huggingfaceGorselDene, sure:60000, mesaj:'🧠 Pollinations da kullanılamadı, Hugging Face deneniyor...' },
+    { ad:'Gemini',          fn:geminiGorselDene, sure:60000, mesaj:'🧠 Hugging Face de kullanılamadı, Gemini deneniyor...' }
   ];
 
   const hatalar=[];
@@ -2864,7 +2884,7 @@ async function adminYapayZekaGorseliYenile(post){
     }
   }
 
-  // Üç AI sağlayıcısı da başarısız oldu (kota/hata) → son çare GIPHY.
+  // Dört AI sağlayıcısı da başarısız oldu (kota/hata) → son çare GIPHY.
   try{
     const data=await adminGiphyFallbackUygula(post);
     return { type:'giphy', provider:'giphy', gifUrl:data?.gifUrl||null, fallbackReason:hatalar.join(' | ') };
@@ -3139,7 +3159,7 @@ function postCard(post, forceExpand=false, autoOpenComments=false, hedefYorumId=
       revalStatus.style.display='block'; revalStatus.style.color='#6b5b8a'; revalStatus.dataset.fluxStatus='true'; revalStatus.textContent='🧠 Şiir analiz ediliyor, AI sağlayıcıları deneniyor...';
       try{
         const sonuc=await adminYapayZekaGorseliYenile(post);
-        const saglayiciAdlari={cloudflare:'Cloudflare FLUX',pollinations:'Pollinations',huggingface:'Hugging Face (FLUX)'};
+        const saglayiciAdlari={cloudflare:'Cloudflare FLUX',pollinations:'Pollinations',huggingface:'Hugging Face (FLUX)',gemini:'Google Gemini (Nano Banana)'};
         if(sonuc?.type==='giphy'){
           revalStatus.textContent='🔄 Tüm AI sağlayıcıları kullanılamadı; farklı bir GIPHY getirildi.';
           revalStatus.style.color='#fbbf24';
@@ -3987,82 +4007,6 @@ function Profile(){
     kotaDiv.appendChild(geminiTestBtn);
     kotaDiv.appendChild(claudeTestBtn);
     adminPanel.appendChild(kotaDiv);
-
-    // ── Görsel AI Sağlayıcıları Durumu (Cloudflare FLUX / Pollinations / Hugging Face) ──
-    // Her sağlayıcıyı TEK BAŞINA (otomatik zincirin dışında) test eder, böylece
-    // admin hangisinin çalışmadığını ve TAM hata mesajını (kota/anahtar/model
-    // hatası vb.) doğrudan görebilir. Başarılı olursa küçük bir önizleme
-    // görseli de gösterilir — gerçekten şiire uygun bir görsel mi diye admin
-    // gözle kontrol edebilsin diye deneme şiiri kasıtlı olarak somut bir konu
-    // (kedi) içerir.
-    const gorselKotaDiv=h('div',{style:{background:'#0f0a1a',border:'1px solid #2d1b52',borderRadius:'10px',padding:'12px',marginBottom:'14px'}});
-    gorselKotaDiv.appendChild(h('p',{style:{color:'#a78bfa',fontSize:'.8rem',fontWeight:'bold',marginBottom:'8px'}},'🎨 Görsel AI Sağlayıcıları Durumu'));
-
-    const gorselTestSiiri = { title:'Test Şiiri', text:'Bahçede bir kedi uyur güneşin altında,\nKuyruğu kıvrık, huzurlu bir haldeydi.' };
-    const gorselSaglayicilar={
-      cloudflare:  {ad:'Cloudflare FLUX',    fn:fluxGorselDene,         son:null},
-      pollinations:{ad:'Pollinations',       fn:pollinationsGorselDene, son:null},
-      huggingface: {ad:'Hugging Face (FLUX)',fn:huggingfaceGorselDene,  son:null}
-    };
-
-    const gorselIcerik=h('div');
-    function gorselDurumGoster(){
-      gorselIcerik.innerHTML='';
-      Object.keys(gorselSaglayicilar).forEach(anahtar=>{
-        const d=gorselSaglayicilar[anahtar];
-        const satirDiv=h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',gap:'10px',marginBottom:'8px',paddingBottom:'8px',borderBottom:'1px solid #2d1b5244'}});
-        const solTaraf=h('div',{style:{flex:'1',minWidth:'0'}});
-        solTaraf.appendChild(h('p',{style:{color:'#e2e8f0',fontSize:'.78rem',fontWeight:'bold'}},d.ad));
-        if(!d.son){
-          solTaraf.appendChild(h('p',{style:{color:'#6b5b8a',fontSize:'.7rem',fontStyle:'italic'}},'Henüz test edilmedi.'));
-        } else if(d.son.ok){
-          solTaraf.appendChild(h('p',{style:{color:'#34d399',fontSize:'.72rem',fontWeight:'bold'}},`✅ Başarılı (${d.son.sure}sn)`));
-          solTaraf.appendChild(h('p',{style:{color:'#4b3d6b',fontSize:'.65rem'}},`Son test: ${d.son.zaman}`));
-        } else {
-          solTaraf.appendChild(h('p',{style:{color:'#f87171',fontSize:'.72rem',lineHeight:'1.4',wordBreak:'break-word'}},`❌ ${d.son.mesaj}`));
-          solTaraf.appendChild(h('p',{style:{color:'#4b3d6b',fontSize:'.65rem'}},`Son test: ${d.son.zaman}`));
-        }
-        satirDiv.appendChild(solTaraf);
-        if(d.son?.ok && d.son.onizlemeUrl){
-          satirDiv.appendChild(h('img',{src:d.son.onizlemeUrl,style:{width:'64px',height:'36px',objectFit:'cover',borderRadius:'6px',border:'1px solid #2d1b52',flexShrink:'0'}}));
-        }
-        gorselIcerik.appendChild(satirDiv);
-      });
-    }
-    gorselDurumGoster();
-
-    function gorselTestBtnOlustur(anahtar){
-      const d=gorselSaglayicilar[anahtar];
-      return h('button',{style:{marginTop:'4px',marginRight:'6px',fontSize:'.7rem',padding:'4px 10px',background:'transparent',color:'#34d399',border:'1px solid #1d5c3d',borderRadius:'8px',cursor:'pointer'},
-        onclick:async(ev)=>{
-          const btn=ev.currentTarget;
-          btn.disabled=true; const eski=btn.textContent; btn.textContent='⏳ Test ediliyor...';
-          const basla=Date.now();
-          const controller=new AbortController();
-          const zamanlayici=setTimeout(()=>controller.abort(),90000);
-          try{
-            const {blob}=await d.fn(gorselTestSiiri.title, gorselTestSiiri.text, controller.signal);
-            clearTimeout(zamanlayici);
-            if(d.son?.onizlemeUrl) URL.revokeObjectURL(d.son.onizlemeUrl);
-            d.son={ ok:true, sure:((Date.now()-basla)/1000).toFixed(1), zaman:new Date().toLocaleTimeString('tr-TR'), onizlemeUrl:URL.createObjectURL(blob) };
-          }catch(err){
-            clearTimeout(zamanlayici);
-            d.son={ ok:false, mesaj: err?.name==='AbortError' ? 'İstek 90 saniyede tamamlanmadı.' : (err?.message||'Bilinmeyen hata'), zaman:new Date().toLocaleTimeString('tr-TR') };
-          }
-          gorselDurumGoster();
-          btn.disabled=false; btn.textContent=eski;
-        }
-      }, `🔍 ${d.ad} Test Et`);
-    }
-
-    gorselKotaDiv.appendChild(gorselIcerik);
-    const gorselBtnRow=h('div',{style:{display:'flex',flexWrap:'wrap'}});
-    gorselBtnRow.appendChild(gorselTestBtnOlustur('cloudflare'));
-    gorselBtnRow.appendChild(gorselTestBtnOlustur('pollinations'));
-    gorselBtnRow.appendChild(gorselTestBtnOlustur('huggingface'));
-    gorselKotaDiv.appendChild(gorselBtnRow);
-    gorselKotaDiv.appendChild(h('p',{style:{color:'#4b3d6b',fontSize:'.65rem',fontStyle:'italic',marginTop:'6px'}},'Not: Bu testler otomatik zinciri (FLUX→Pollinations→Hugging Face→GIPHY) atlayıp sağlayıcıyı DOĞRUDAN çağırır; hangisinin neden başarısız olduğunu (kota, eksik/yanlış anahtar, model hatası vb.) tam mesajıyla görmek içindir.'));
-    adminPanel.appendChild(gorselKotaDiv);
     const durumEl=h('p',{style:{color:'#6b5b8a',fontSize:'.85rem',marginTop:'10px',fontStyle:'italic'}},'');
     const topluModelSecici=h('select',{class:'inp',style:{marginBottom:'8px',fontSize:'.82rem',padding:'8px',borderRadius:'8px'}},[
       h('option',{value:'auto'},'🔀 Groq — otomatik kademe (kota dolarsa sıradakine geçer)'),
