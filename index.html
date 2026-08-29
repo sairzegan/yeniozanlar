@@ -476,15 +476,37 @@ async function igHikayeCanvasOlustur(post, author){
     }
     y=MEDIA_H;
   } else if(isVideo){
-    const g2=ctx.createLinearGradient(0,0,IG_W,MEDIA_H);
-    g2.addColorStop(0,'#2d1060'); g2.addColorStop(1,'#0a0718');
-    ctx.fillStyle=g2; ctx.fillRect(0,0,IG_W,MEDIA_H);
-    ctx.textAlign='center'; ctx.textBaseline='middle';
-    ctx.font='140px sans-serif'; ctx.fillStyle='#fff';
-    ctx.fillText('▶️', IG_W/2, MEDIA_H/2-10);
-    ctx.font="36px 'Crimson Text'"; ctx.fillStyle='#c4b5fd';
-    ctx.fillText('🎵 Video Şiir', IG_W/2, MEDIA_H/2+120);
-    ctx.textAlign='left'; ctx.textBaseline='alphabetic';
+    const vid = ytId(post.youtube);
+    try{
+      await new Promise((res2,rej)=>{
+        const img=new Image();
+        img.onload=()=>{ igCoverCiz(ctx,img,0,0,IG_W,MEDIA_H); res2(); };
+        img.onerror=rej;
+        img.src=`/api/ytThumb?vid=${vid}`;
+      });
+      // ince bir karartma + oynat ikonu, video olduğu belli olsun
+      ctx.save();
+      const g3=ctx.createLinearGradient(0,MEDIA_H-260,0,MEDIA_H);
+      g3.addColorStop(0,'rgba(10,7,24,0)'); g3.addColorStop(1,'rgba(10,7,24,.55)');
+      ctx.fillStyle=g3; ctx.fillRect(0,MEDIA_H-260,IG_W,260);
+      ctx.restore();
+      ctx.textAlign='center'; ctx.textBaseline='middle';
+      ctx.font='96px sans-serif'; ctx.fillStyle='rgba(255,255,255,.95)';
+      ctx.shadowColor='rgba(0,0,0,.6)'; ctx.shadowBlur=14;
+      ctx.fillText('▶️', IG_W/2, MEDIA_H-90);
+      ctx.textAlign='left'; ctx.textBaseline='alphabetic'; ctx.shadowBlur=0;
+    }catch{
+      // Kapak görseli hiçbir boyutta yüklenemezse eski marka rozetine geri dön
+      const g2=ctx.createLinearGradient(0,0,IG_W,MEDIA_H);
+      g2.addColorStop(0,'#2d1060'); g2.addColorStop(1,'#0a0718');
+      ctx.fillStyle=g2; ctx.fillRect(0,0,IG_W,MEDIA_H);
+      ctx.textAlign='center'; ctx.textBaseline='middle';
+      ctx.font='140px sans-serif'; ctx.fillStyle='#fff';
+      ctx.fillText('▶️', IG_W/2, MEDIA_H/2-10);
+      ctx.font="36px 'Crimson Text'"; ctx.fillStyle='#c4b5fd';
+      ctx.fillText('🎵 Video Şiir', IG_W/2, MEDIA_H/2+120);
+      ctx.textAlign='left'; ctx.textBaseline='alphabetic';
+    }
     y=MEDIA_H;
   }
 
@@ -571,11 +593,34 @@ function instagramHikayeModal(post){
     h('h3',{style:{fontFamily:"'Playfair Display',serif",color:'#e9d5ff',fontSize:'1.05rem'}},'📸 Hikayede Paylaş'),
     h('button',{class:'btn',style:{background:'none',color:'#6b5b8a',fontSize:'1.4rem'},onclick:kapat},'✕')
   ]));
-  const linkChip=h('div',{style:{display:'flex',alignItems:'center',gap:'8px',background:'#0f0a1a',border:'1px solid #3d1f6e',borderRadius:'10px',padding:'8px 10px',marginBottom:'14px'}});
+  const linkChip=h('div',{style:{display:'flex',alignItems:'center',gap:'8px',background:'#0f0a1a',border:'1px solid #3d1f6e',borderRadius:'10px',padding:'8px 10px',marginBottom:'10px'}});
   linkChip.appendChild(h('span',{style:{fontSize:'.78rem',color:'#a78bfa',flex:'1',lineHeight:'1.4'}},'🔗 Linki kopyaladık. Hikayede "Link" etiketini ekleyip panodakini yapıştır — böylece tıklanabilir olur.'));
   const tekrarKopyalaBtn=h('button',{class:'btn',style:{background:'transparent',color:'#c084fc',border:'1px solid #5b21b6',borderRadius:'8px',padding:'6px 10px',fontSize:'.72rem',flexShrink:'0'},onclick:async()=>{const ok=await linkiPanoyaKopyala();toastGoster(ok?'🔗 Tekrar kopyalandı!':'Kopyalanamadı, tarayıcı izin vermedi.');}},'Kopyala');
   linkChip.appendChild(tekrarKopyalaBtn);
   modal.appendChild(linkChip);
+
+  // Etiketler görselin üzerine sadece dekoratif olarak basılıyor — Instagram, web'den
+  // gönderilen bir görsele gerçek/tıklanabilir hashtag ekletmiyor. Tıklanabilir olması
+  // için kullanıcının hikayede "Etiket" (hashtag) çıkartmasını ekleyip buradaki metni
+  // yapıştırması gerekiyor; bu yüzden linkte olduğu gibi kopyalanabilir hâle getiriyoruz.
+  const hashtagKopyala = async ()=>{
+    try{
+      if(navigator.clipboard && window.isSecureContext){
+        await navigator.clipboard.writeText(IG_HASHTAGS);
+      } else {
+        const ta=document.createElement('textarea');
+        ta.value=IG_HASHTAGS; ta.style.position='fixed'; ta.style.opacity='0';
+        document.body.appendChild(ta); ta.select();
+        document.execCommand('copy'); ta.remove();
+      }
+      return true;
+    }catch{ return false; }
+  };
+  const hashtagChip=h('div',{style:{display:'flex',alignItems:'center',gap:'8px',background:'#0f0a1a',border:'1px solid #3d1f6e',borderRadius:'10px',padding:'8px 10px',marginBottom:'14px'}});
+  hashtagChip.appendChild(h('span',{style:{fontSize:'.78rem',color:'#a78bfa',flex:'1',lineHeight:'1.4'}},`🏷️ Etiketlerin tıklanabilir olması için hikayede "Etiket" (hashtag) çıkartmasını ekleyip ${IG_HASHTAGS} yapıştır.`));
+  const hashtagKopyalaBtn=h('button',{class:'btn',style:{background:'transparent',color:'#c084fc',border:'1px solid #5b21b6',borderRadius:'8px',padding:'6px 10px',fontSize:'.72rem',flexShrink:'0'},onclick:async()=>{const ok=await hashtagKopyala();toastGoster(ok?'🏷️ Etiketler kopyalandı!':'Kopyalanamadı, tarayıcı izin vermedi.');}},'Kopyala');
+  hashtagChip.appendChild(hashtagKopyalaBtn);
+  modal.appendChild(hashtagChip);
   const yukleniyor=h('p',{style:{color:'#a78bfa',fontSize:'.85rem',textAlign:'center',padding:'40px 0'}},'⏳ Hazırlanıyor...');
   modal.appendChild(yukleniyor);
   bg.appendChild(modal);
