@@ -381,6 +381,7 @@ const IG_W = 1080;          // Instagram hikayesi standart genişliği
 const IG_PAD = 72;          // yatay iç boşluk
 const IG_MEDIA_H = 1080;    // üstteki görsel/video alanı (kare)
 const IG_LINE_H = 62;       // şiir satır yüksekliği
+const IG_HASHTAGS = '#yeniozanlar #şiir #şair'; // hikaye görselinin altına otomatik eklenen etiketler
 
 // Kullanılan özel fontların (Playfair Display / Crimson Text) canvas'a
 // çizilmeden önce tarayıcı tarafından yüklenmiş olmasını garantiler;
@@ -590,56 +591,99 @@ function instagramHikayeModal(post){
 
     yukleniyor.remove();
 
+    const H = kaynakCanvas.height;
+    const MIN_WINDOW = 320; // seçili alan en az bu kadar piksel yüksekliğinde kalsın
     const hasMedia = !!post.image || !!ytId(post.youtube);
     const MEDIA_H = hasMedia?IG_MEDIA_H:0;
-    let minCut = Math.min(kaynakCanvas.height, MEDIA_H+280);
-    let maxCut = kaynakCanvas.height;
-    if(minCut>=maxCut) minCut=Math.max(0,maxCut-40);
-    let cutY = Math.min(maxCut, Math.round(minCut+(maxCut-minCut)*0.4));
+    let topY = 0;
+    let altBaslangic = Math.min(H, MEDIA_H+280);
+    let bottomY = Math.min(H, Math.round(altBaslangic + (H-altBaslangic)*0.4));
+    if(bottomY-topY < MIN_WINDOW) bottomY = Math.min(H, topY+MIN_WINDOW);
 
     const DISPLAY_W = 260; // ekranda gösterilecek sabit genişlik
     const olcek = DISPLAY_W/IG_W;
+    const thumbH = H*olcek;
 
-    const previewWrap=h('div',{style:{position:'relative',width:DISPLAY_W+'px',margin:'0 auto',border:'2px solid #3d1f6e',borderRadius:'14px',overflow:'hidden',background:'#0a0718',touchAction:'none',cursor:'ns-resize'}});
-    const outCanvas=h('canvas',{width:String(IG_W),height:String(cutY)});
+    // Şiirin tamamının küçük önizlemesi + üstten/alttan sürüklenebilir kırpma tutamaçları
+    const thumbWrap=h('div',{style:{position:'relative',width:DISPLAY_W+'px',height:thumbH+'px',margin:'0 auto',border:'2px solid #3d1f6e',borderRadius:'14px',overflow:'hidden',background:'#0a0718',touchAction:'none'}});
+    const thumbImg=h('img',{style:{position:'absolute',top:'0',left:'0',width:DISPLAY_W+'px',height:thumbH+'px',display:'block',userSelect:'none',pointerEvents:'none'}});
+    thumbImg.draggable=false;
+    thumbImg.src=kaynakCanvas.toDataURL('image/png');
+    thumbWrap.appendChild(thumbImg);
+
+    const golgeUst=h('div',{style:{position:'absolute',top:'0',left:'0',width:'100%',background:'rgba(5,2,12,.72)',pointerEvents:'none'}});
+    const golgeAlt=h('div',{style:{position:'absolute',bottom:'0',left:'0',width:'100%',background:'rgba(5,2,12,.72)',pointerEvents:'none'}});
+    thumbWrap.appendChild(golgeUst); thumbWrap.appendChild(golgeAlt);
+
+    const tutamacGovde={width:'46px',height:'5px',borderRadius:'3px',background:'#c084fc',boxShadow:'0 0 0 3px rgba(15,10,26,.7)'};
+    const tutamacStil={position:'absolute',left:'0',width:'100%',height:'22px',cursor:'ns-resize',display:'flex',alignItems:'center',justifyContent:'center',touchAction:'none'};
+    const tutamacUst=h('div',{style:{...tutamacStil,top:'0'}},[h('div',{style:tutamacGovde})]);
+    const tutamacAlt=h('div',{style:{...tutamacStil,bottom:'0'}},[h('div',{style:tutamacGovde})]);
+    thumbWrap.appendChild(tutamacUst); thumbWrap.appendChild(tutamacAlt);
+
+    const yuzde=h('p',{style:{textAlign:'center',fontSize:'.7rem',color:'#6b5b8a',margin:'8px 0 0'}});
+
+    const previewWrap=h('div',{style:{position:'relative',width:DISPLAY_W+'px',margin:'12px auto 0',border:'2px solid #3d1f6e',borderRadius:'14px',overflow:'hidden',background:'#0a0718'}});
+    const outCanvas=h('canvas',{width:String(IG_W),height:String(bottomY-topY)});
     outCanvas.style.width=DISPLAY_W+'px';
-    outCanvas.style.height=(cutY*olcek)+'px';
     outCanvas.style.display='block';
     previewWrap.appendChild(outCanvas);
-    const surukleIpucu=h('div',{style:{position:'absolute',bottom:'8px',left:'50%',transform:'translateX(-50%)',background:'rgba(15,10,26,.75)',color:'#e9d5ff',fontSize:'.65rem',padding:'4px 10px',borderRadius:'20px',pointerEvents:'none'}},'⇕ sürükle');
-    previewWrap.appendChild(surukleIpucu);
 
-    const slider=h('input',{type:'range',min:String(minCut),max:String(maxCut),step:'10',style:{width:'100%',marginTop:'12px'}});
-    const yuzde=h('p',{style:{textAlign:'center',fontSize:'.7rem',color:'#6b5b8a',marginTop:'4px'}});
+    function tutamaclariYerlestir(){
+      const ty=topY*olcek, by=bottomY*olcek;
+      golgeUst.style.height=ty+'px';
+      golgeAlt.style.height=(thumbH-by)+'px';
+      tutamacUst.style.top=(ty-11)+'px';
+      tutamacAlt.style.top=(by-11)+'px';
+    }
 
     function ciz(){
-      outCanvas.width=IG_W; outCanvas.height=cutY;
-      outCanvas.style.height=(cutY*olcek)+'px';
+      const winH=bottomY-topY;
+      outCanvas.width=IG_W; outCanvas.height=winH;
+      outCanvas.style.height=(winH*olcek)+'px';
       const cctx=outCanvas.getContext('2d');
-      cctx.drawImage(kaynakCanvas,0,0,IG_W,cutY,0,0,IG_W,cutY);
-      slider.value=String(cutY);
-      const yuzdeVal = maxCut>minCut ? Math.round(((cutY-minCut)/(maxCut-minCut))*100) : 100;
+      cctx.clearRect(0,0,IG_W,winH);
+      cctx.drawImage(kaynakCanvas,0,topY,IG_W,winH,0,0,IG_W,winH);
+      // otomatik etiketler — kırpma nereden başlarsa başlasın görselin altında hep dursun
+      cctx.save();
+      cctx.textAlign='center';
+      cctx.font="600 32px 'Crimson Text'";
+      cctx.fillStyle='rgba(196,181,253,.92)';
+      cctx.shadowColor='rgba(0,0,0,.6)'; cctx.shadowBlur=8;
+      cctx.fillText(IG_HASHTAGS, IG_W/2, winH-36);
+      cctx.restore();
+      const yuzdeVal = H>0 ? Math.round((winH/H)*100) : 100;
       yuzde.textContent = `Şiirin ~%${yuzdeVal}'i görünüyor`;
+      tutamaclariYerlestir();
     }
-    slider.value=String(cutY);
-    slider.oninput=e=>{cutY=Number(e.target.value); ciz();};
 
-    let basY=null, basCut=cutY;
-    previewWrap.addEventListener('pointerdown',e=>{basY=e.clientY;basCut=cutY;try{previewWrap.setPointerCapture(e.pointerId);}catch{}});
-    previewWrap.addEventListener('pointermove',e=>{
-      if(basY==null)return;
-      const delta=(e.clientY-basY)/olcek;
-      cutY=Math.max(minCut,Math.min(maxCut,Math.round(basCut+delta)));
-      ciz();
-    });
-    const bitir=()=>{basY=null;};
-    previewWrap.addEventListener('pointerup',bitir);
-    previewWrap.addEventListener('pointercancel',bitir);
-    previewWrap.addEventListener('pointerleave',bitir);
+    function tutamacSurukle(tutamac, ustMu){
+      let basY=null, basTop=topY, basBottom=bottomY;
+      tutamac.addEventListener('pointerdown',e=>{
+        basY=e.clientY; basTop=topY; basBottom=bottomY;
+        try{tutamac.setPointerCapture(e.pointerId);}catch{}
+      });
+      tutamac.addEventListener('pointermove',e=>{
+        if(basY==null)return;
+        const delta=Math.round((e.clientY-basY)/olcek);
+        if(ustMu){
+          topY=Math.max(0, Math.min(basTop+delta, bottomY-MIN_WINDOW));
+        } else {
+          bottomY=Math.max(topY+MIN_WINDOW, Math.min(H, basBottom+delta));
+        }
+        ciz();
+      });
+      const bitir=()=>{basY=null;};
+      tutamac.addEventListener('pointerup',bitir);
+      tutamac.addEventListener('pointercancel',bitir);
+      tutamac.addEventListener('pointerleave',bitir);
+    }
+    tutamacSurukle(tutamacUst,true);
+    tutamacSurukle(tutamacAlt,false);
 
     ciz();
 
-    const ipucu=h('p',{style:{textAlign:'center',fontSize:'.72rem',color:'#7c6b9a',margin:'10px 0 2px'}},'👆 Önizlemeyi sürükle ya da kaydırıcıyı kullan: şiirin hangi kıtaya kadar görüneceğini sen seç.');
+    const ipucu=h('p',{style:{textAlign:'center',fontSize:'.72rem',color:'#7c6b9a',margin:'10px 0 2px'}},'👆 Üstteki küçük önizlemede mor tutamaçları sürükle: hem baştan hem sondan kırparak istediğin kıtayı seç. Etiketler görsele otomatik eklenir.');
 
     async function gorseliBlobaCevir(){
       return new Promise(resolve=>outCanvas.toBlob(b=>resolve(b),'image/png',0.95));
@@ -684,9 +728,11 @@ function instagramHikayeModal(post){
     btnRow.appendChild(paylasBtn); btnRow.appendChild(indirBtn);
 
 
-    modal.appendChild(previewWrap);
-    modal.appendChild(slider);
+    modal.appendChild(h('p',{style:{textAlign:'center',fontSize:'.68rem',color:'#7c6b9a',margin:'0 0 6px'}},'Tüm şiir — kırpma alanını seç'));
+    modal.appendChild(thumbWrap);
     modal.appendChild(yuzde);
+    modal.appendChild(h('p',{style:{textAlign:'center',fontSize:'.68rem',color:'#7c6b9a',margin:'14px 0 6px'}},'Paylaşılacak görsel'));
+    modal.appendChild(previewWrap);
     modal.appendChild(ipucu);
     modal.appendChild(btnRow);
   })();
