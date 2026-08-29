@@ -2680,14 +2680,24 @@ async function adminYapayZekaGorseliYenile(post){
   if(!S.me || S.me.username!==ADMIN_USERNAME) throw new Error('Bu işlem yalnızca admin içindir.');
   try{
     const r=await fetch('/api/ai-image',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:post.title||'',text:post.text||''})});
-    let data={}; try{data=await r.json();}catch(_){ }
-    if(!r.ok) throw new Error(data.error||('Sunucu hatası ('+r.status+')'));
-    if(!data.imageData) throw new Error('Yapay zeka görsel döndürmedi.');
-    const m=data.imageData.match(/^data:(image\/[^;]+);base64,(.+)$/);
-    if(!m) throw new Error('Görsel verisi geçersiz.');
-    const mime=m[1], bin=atob(m[2]);
-    const bytes=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) bytes[i]=bin.charCodeAt(i);
-    const blob=new Blob([bytes],{type:mime});
+    const contentType=(r.headers.get('content-type')||'').split(';')[0].trim();
+    let data=null;
+    let blob=null;
+    if(contentType.startsWith('image/')){
+      if(!r.ok) throw new Error('Görsel sunucusu hata verdi ('+r.status+')');
+      blob=await r.blob();
+      if(!blob.size) throw new Error('Yapay zeka boş görsel döndürdü.');
+    }else{
+      try{data=await r.json();}catch(_){data={};}
+      if(!r.ok) throw new Error(data.error||('Sunucu hatası ('+r.status+')'));
+      if(!data.imageData) throw new Error('Yapay zeka görsel döndürmedi.');
+      const m=data.imageData.match(/^data:(image\/[^;]+);base64,(.+)$/);
+      if(!m) throw new Error('Görsel verisi geçersiz.');
+      const mime=m[1], bin=atob(m[2]);
+      const bytes=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) bytes[i]=bin.charCodeAt(i);
+      blob=new Blob([bytes],{type:mime});
+    }
+    const mime=blob.type||'image/jpeg';
     const ext=(mime.split('/')[1]||'png').replace('jpeg','jpg');
     const path='ai-post-images/'+post.id+'/'+Date.now()+'.'+ext;
     const snap=await storage.ref().child(path).put(blob,{contentType:mime,cacheControl:'public,max-age=31536000'});
@@ -2697,7 +2707,7 @@ async function adminYapayZekaGorseliYenile(post){
     save();
     await db.collection('posts').doc(post.id).update({image:url,autoGif:false,gifCaption:null,aiImage:true,aiImageUpdatedAt:Date.now()});
     refreshCard(post.id);
-    return {type:'ai',provider:data.provider||'gemini',model:data.model||null};
+    return {type:'ai',provider:data?.provider||r.headers.get('X-AI-Provider')||'gemini',model:data?.model||r.headers.get('X-AI-Model')||null};
   }catch(err){
     // Gemini kotası dolduğunda (veya AI endpoint'i başka nedenle başarısız olduğunda)
     // buton çalışmaya devam eder: şiire uygun, mevcut GIF'ten farklı yeni bir GIPHY getirir.
@@ -2974,7 +2984,7 @@ function postCard(post, forceExpand=false, autoOpenComments=false, hedefYorumId=
       try{
         const sonuc=await adminYapayZekaGorseliYenile(post);
         if(sonuc?.type==='giphy'){
-          revalStatus.textContent='🔄 Gemini ve Pollinations kullanılamadı; farklı bir GIPHY getirildi.';
+          revalStatus.textContent='🔄 AI sağlayıcıları kullanılamadı; farklı bir GIPHY getirildi.';
           revalStatus.style.color='#fbbf24';
         }else if(sonuc?.provider==='pollinations'){
           revalStatus.textContent='✅ Gemini kullanılamadı; Pollinations ile yeni AI görseli oluşturuldu.';
