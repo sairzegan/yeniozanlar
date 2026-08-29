@@ -1,18 +1,35 @@
 // /api/huggingface-image.js
-// Hugging Face Inference API üzerinden FLUX.1-schnell ile görsel üretir.
+// Hugging Face "Inference Providers" üzerinden FLUX.1-schnell ile görsel üretir.
 // Cloudflare FLUX (kota/rate-limit) ve Pollinations ikisi de başarısız olursa
 // üçüncü AI sağlayıcısı olarak devreye girer (bkz. index.html içinde
 // adminYapayZekaGorseliYenile / huggingfaceGorselDene).
 //
+// ÖNEMLİ (düzeltme notu): Bu dosya daha önce doğrudan
+// "https://api-inference.huggingface.co/models/..." adresine POST atıyordu.
+// Hugging Face bu eski "serverless Inference API" adresini tamamen KALDIRDI
+// (artık 410/bağlantı hatası dönüyor: "no longer supported, use
+// router.huggingface.co instead"). Bu yüzden istekler "fetch failed" ile
+// başarısız oluyordu — bu bir kota sorunu DEĞİLDİ, kırılan bir endpoint'ti.
+//
+// Çözüm: resmi "@huggingface/inference" SDK'sı kullanılıyor. Bu SDK, isteği
+// otomatik olarak modelin o an hangi sağlayıcı (fal-ai, replicate, nebius vb.)
+// üzerinden servis edildiğini bulup doğru "router.huggingface.co" rotasına ve
+// doğru istek/cevap şemasına çevirir (provider:"auto" ile).
+//
 // Vercel Environment Variable:
 // HUGGINGFACE_API_TOKEN = hf_...
 //
+// Vercel Environment (package.json) bağımlılığı:
+// "@huggingface/inference" (bkz. package.json)
+//
 // flux-image.js ile aynı üslupta: ham görsel binary'sini (image/*) doğrudan
 // döndürür, JSON sarmalamaz — böylece istemci tarafı tek bir blob-işleme
-// koduyla üç sağlayıcıyı da aynı şekilde işleyebilir.
+// koduyla dört sağlayıcıyı da (Cloudflare, Pollinations, Hugging Face, Gemini)
+// aynı şekilde işleyebilir.
+
+import { InferenceClient } from '@huggingface/inference';
 
 const MODEL = 'black-forest-labs/FLUX.1-schnell';
-const HF_URL = `https://api-inference.huggingface.co/models/${MODEL}`;
 const TIMEOUT_MS = 60000;
 
 function buildPrompt(title, text) {
@@ -28,16 +45,6 @@ function buildPrompt(title, text) {
     heading ? `Turkish poem title: ${heading}` : '',
     `Turkish poem:\n${poem}`
   ].filter(Boolean).join('\n\n');
-}
-
-async function fetchWithTimeout(url, options = {}, timeoutMs = TIMEOUT_MS) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await fetch(url, { ...options, signal: controller.signal });
-  } finally {
-    clearTimeout(timer);
-  }
 }
 
 export const maxDuration = 60;
@@ -62,65 +69,47 @@ export default async function handler(req, res) {
   }
 
   const prompt = buildPrompt(title, text);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
   try {
-    const response = await fetchWithTimeout(HF_URL, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        Accept: 'image/png',
-        // Model "cold" ise (henüz belleğe yüklenmemişse) 503 yerine, model hazır
-        // olana kadar isteği bekletir — tek denemede başarı ihtimalini artırır.
-        'x-wait-for-model': 'true'
-      },
-      body: JSON.stringify({
+    const client = new InferenceClient(token);
+
+    // provider:"auto" → HF, modeli o an hangi sağlayıcı (fal-ai, replicate,
+    // nebius, vb.) canlı sunuyorsa otomatik olarak onu seçer. Elle sabit bir
+    // sağlayıcı (örn. sadece "hf-inference") seçmiyoruz çünkü hf-inference artık
+    // ağırlıklı olarak küçük/CPU modelleri servis ediyor, FLUX gibi modelleri değil.
+    const blob = await client.textToImage(
+      {
+        model: MODEL,
         inputs: prompt,
+        provider: 'auto',
         parameters: { num_inference_steps: 4 }
-      })
-    });
+      },
+      { signal: controller.signal }
+    );
 
-    const contentType = (response.headers.get('content-type') || '').toLowerCase();
+    clearTimeout(timer);
 
-    if (!response.ok) {
-      let detail = '';
-      try {
-        if (contentType.includes('application/json')) {
-          const data = await response.json();
-          detail = data?.error || JSON.stringify(data).slice(0, 300);
-        } else {
-          detail = (await response.text()).slice(0, 300);
-        }
-      } catch (_) {}
-      return res.status(response.status).json({
-        error: `Hugging Face HTTP ${response.status}${detail ? ` — ${detail}` : ''}`
-      });
+    if (!blob || typeof blob.arrayBuffer !== 'function') {
+      return res.status(502).json({ error: 'Hugging Face beklenmeyen bir cevap döndürdü.' });
     }
 
-    if (!contentType.startsWith('image/')) {
-      // HF nadiren 200 ile birlikte JSON hata da dönebiliyor.
-      let detail = '';
-      try {
-        const data = await response.json();
-        detail = data?.error || JSON.stringify(data).slice(0, 300);
-      } catch (_) {}
-      return res.status(502).json({
-        error: `Hugging Face görsel yerine ${contentType || 'bilinmeyen veri'} döndürdü.${detail ? ` — ${detail}` : ''}`
-      });
-    }
-
-    const buffer = Buffer.from(await response.arrayBuffer());
+    const buffer = Buffer.from(await blob.arrayBuffer());
     if (!buffer.length) {
       return res.status(502).json({ error: 'Hugging Face boş görsel döndürdü.' });
     }
 
-    res.setHeader('Content-Type', contentType || 'image/jpeg');
+    const contentType = blob.type && blob.type.startsWith('image/') ? blob.type : 'image/jpeg';
+
+    res.setHeader('Content-Type', contentType);
     res.setHeader('Content-Length', String(buffer.length));
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('X-AI-Provider', 'huggingface');
     res.setHeader('X-AI-Model', MODEL);
     return res.status(200).send(buffer);
   } catch (err) {
+    clearTimeout(timer);
     const msg =
       err?.name === 'AbortError'
         ? 'Hugging Face isteği zaman aşımına uğradı.'

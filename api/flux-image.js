@@ -533,8 +533,12 @@ export default async function handler(
     );
 
     res.setHeader(
+      // HTTP header değerleri yalnızca Latin-1 (ISO-8859-1) karakter kümesini kabul eder.
+      // fallback.query Türkçe karakterler (ş, ğ, ı, İ vb.) içerebiliyor ve bunlar bu
+      // aralığın dışında kalıyor; Node bu yüzden "Invalid character in header content"
+      // hatasıyla çöküyordu. encodeURIComponent ile her zaman ASCII-güvenli hale getiriyoruz.
       'X-GIPHY-Query',
-      fallback.query
+      encodeURIComponent(fallback.query)
     );
 
 
