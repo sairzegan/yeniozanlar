@@ -83,6 +83,20 @@
     .swipe-stars{display:flex;gap:2px;flex-wrap:wrap}
     .swipe-hint{text-align:center;color:#4b3d6b;font-size:.68rem;padding-bottom:6px;font-style:italic}
     .swipe-empty{display:flex;align-items:center;justify-content:center;height:100%;color:#6b5b8a;font-style:italic;text-align:center;padding:0 30px}
+    .comment-media{margin-top:8px;border-radius:10px;overflow:hidden;border:1px solid #2d1b52;background:#090612}
+    .comment-media img{display:block;width:100%;max-height:360px;object-fit:cover}
+    .comment-media video{display:block;width:100%;max-height:360px;background:#000}
+    .comment-media iframe{display:block;width:100%;aspect-ratio:16/9;border:0}
+    .comment-gif-credit{font-size:.62rem;color:#6b5b8a;padding:3px 7px;text-align:right}
+    .comment-tools{display:flex;gap:6px;flex-wrap:wrap;margin-top:7px}
+    .comment-tool{background:#0f0a1a;color:#a78bfa;border:1px solid #3d1f6e;border-radius:999px;padding:6px 9px;font-size:.72rem;cursor:pointer;font-family:'Crimson Text',serif}
+    .comment-tool:hover{border-color:#7c3aed;background:#1a0f2e}
+    .comment-preview{margin-top:7px;position:relative;background:#0f0a1a;border:1px solid #3d1f6e;border-radius:10px;padding:7px}
+    .comment-preview img,.comment-preview video{display:block;width:100%;max-height:180px;object-fit:cover;border-radius:7px}
+    .comment-preview-remove{position:absolute;right:7px;top:7px;background:#ef4444;color:#fff;border:0;border-radius:50%;width:25px;height:25px;cursor:pointer}
+    .comment-suggestions{display:flex;gap:6px;flex-wrap:wrap;margin-top:7px}
+    .comment-suggestion{background:linear-gradient(135deg,#1a0f2e,#241040);border:1px solid #4c1d95;color:#ddd6fe;border-radius:10px;padding:7px 9px;font-size:.72rem;cursor:pointer;text-align:left}
+    .comment-suggestion:hover{border-color:#a855f7}
   </style>
 
 </head>
@@ -93,6 +107,7 @@
 </div></div>
 <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-storage-compat.js"></script>
 <script>
 // Firebase Ayarları
 const firebaseConfig = {
@@ -111,6 +126,7 @@ if (!firebase.apps.length) {
   firebase.initializeApp(firebaseConfig);
 }
 const db = firebase.firestore();
+const storage = firebase.storage();
 
 const adminProfileObj = {
   id: "admin_root",
@@ -2254,26 +2270,24 @@ A.ratePost = function(pid,score){
       db.collection("posts").doc(pid).update({ userRatings: S.posts[pIndex].userRatings });
     }
 };
-A.addComment = function(pid,text,parentId=null){
+A.addComment = function(pid,text,parentId=null,media=null){
     if(!S.me) return;
     const pIndex = S.posts.findIndex(p=>p.id===pid);
     if(pIndex > -1) {
       const post=S.posts[pIndex];
-      // Yanıtlar tek seviyede düz tutulur: bir yanıta yanıt verilirse, o yanıtın
-      // ait olduğu asıl (üst seviye) yorumun altına eklenir.
       let gercekParentId = null;
       if(parentId){
         const parentYorum = (post.comments||[]).find(c=>c.id===parentId);
         gercekParentId = parentYorum ? (parentYorum.parentId || parentYorum.id) : null;
       }
-      const newComment = {id:uid(),authorId:S.me.id,text,date:now(),parentId:gercekParentId};
+      const newComment = {id:uid(),authorId:S.me.id,text:(text||'').trim(),date:now(),parentId:gercekParentId};
+      if(media) newComment.media=media;
       const updatedComments = [...(post.comments || []), newComment];
       S.posts[pIndex].comments = updatedComments;
       save();
       refreshCard(pid);
       const postTitle=post.title||post.text?.slice(0,20)||'şiirinize';
       if(gercekParentId){
-        // Yanıt: bildirim asıl yorumu yazan kişiye gider (şiir sahibine değil)
         const asilYorum = (post.comments||[]).find(c=>c.id===gercekParentId);
         if(asilYorum){
           A.addNotif(asilYorum.authorId, `Sizin "${postTitle}" şiirine yazdığınız yoruma ${S.me.name||S.me.username} yanıt verdi.`, {postId:post.id,tur:'yanit',commentId:gercekParentId});
@@ -2281,9 +2295,174 @@ A.addComment = function(pid,text,parentId=null){
       } else {
         A.addNotif(post.authorId, `${S.me.name||S.me.username} sizin "${postTitle}" başlıklı şiirinize yorum yaptı.`, {postId:post.id,tur:'yorum',commentId:newComment.id});
       }
-      db.collection("posts").doc(pid).update({ comments: updatedComments });
+      db.collection("posts").doc(pid).update({ comments: updatedComments }).catch(err=>console.error("Yorum kaydetme hatası:",err));
     }
 };
+
+// ── YORUM MEDYA / ÖNERİ MOTORU ─────────────────────────────────────────────
+const YORUM_ONERILERI = [
+  'Bazı dizeler okunmaz, insanın içinde yankılanır.',
+  'Bu şiir sessizliğe bırakılmış güzel bir iz.',
+  'Kelimeler burada duygunun gölgesine dönüşmüş.',
+  'Bir dize bazen koskoca bir geceyi anlatır.',
+  'Şiirin en güzel yanı, hissettirdiği şeyi açıklamaması.',
+  'Bu dizelerde kalbin eski bir sesi var.',
+  'Sözcükler susmuş, hisler konuşmuş.',
+  'Bir şiirden çok, içten kopmuş bir nefes gibi.',
+  'Bazı mısralar insana kendini hatırlatır.',
+  'Bu şiirde hüzün bile zarif duruyor.',
+  'Kelimelerin arasındaki sessizlik çok şey söylüyor.',
+  'Okumadım; biraz yaşadım bu dizeleri.',
+  'Bir şiirin gücü, bittikten sonra devam etmesidir.',
+  'Duygu kelimeye, kelime hatıraya dönüşmüş.',
+  'Bu dizelerde gece biraz daha uzun.',
+  'Kalbe dokunan şiirin açıklamaya ihtiyacı yok.',
+  'Her mısra başka bir kapıya açılıyor.',
+  'Sade kelimeler, derin bir yankı bırakmış.',
+  'Şiir bazen anlatmaz; sadece hissettirir.',
+  'Bu dizeler sustuktan sonra bile konuşmaya devam ediyor.'
+];
+
+async function yorumDosyasiYukle(file){
+  if(!file || !S.me) return null;
+  const isImage=file.type.startsWith('image/');
+  const isVideo=file.type.startsWith('video/');
+  if(!isImage && !isVideo){ toastGoster('Sadece resim veya video ekleyebilirsin.'); return null; }
+  if(isImage && file.size>10*1024*1024){ toastGoster('Resim en fazla 10 MB olabilir.'); return null; }
+  if(isVideo && file.size>30*1024*1024){ toastGoster('Video en fazla 30 MB olabilir.'); return null; }
+  try{
+    const temizAd=file.name.replace(/[^a-zA-Z0-9._-]/g,'_').slice(-80);
+    const yol=`comments/${S.me.id}/${Date.now()}_${temizAd}`;
+    const snap=await storage.ref().child(yol).put(file,{contentType:file.type});
+    const url=await snap.ref.getDownloadURL();
+    return {type:isImage?'image':'video',url,name:file.name};
+  }catch(err){
+    console.error('Yorum medya yükleme hatası:',err);
+    toastGoster('Medya yüklenemedi. Firebase Storage izinlerini kontrol edin.');
+    return null;
+  }
+}
+
+async function yorumIcinGifGetir(post){
+  try{
+    const metin=[post?.title||'',post?.text||''].join(' ').slice(0,700);
+    const result=await groqBotCall(
+      'Sen şiir temalarından GIPHY araması için kısa İngilizce anahtar kelimeler üreten asistansın. Yalnızca JSON döndür.',
+      `Şu şiirin ruhuna uygun, GIPHY aramasında işe yarayacak 2-4 İngilizce kelime üret. Genel meme yerine sinematik/duygusal görselleri hedefle. JSON: {"query":"..."}\nŞiir: ${metin}`
+    );
+    const query=(result?.query||'poetry emotional aesthetic').toString().slice(0,100);
+    const r=await fetch('/api/giphy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query})});
+    const data=await r.json();
+    if(!r.ok) throw new Error(data?.error?.message||'GIPHY hatası');
+    return {type:'gif',url:data.gifUrl,title:data.title||'',query};
+  }catch(err){
+    console.warn('Yorum GIF hatası:',err);
+    toastGoster('GIF getirilemedi; tekrar deneyin.');
+    return null;
+  }
+}
+
+async function yorumAIonerileriGetir(post){
+  try{
+    const result=await groqBotCall(
+      'Sen Yeni Ozanlar için şiirsel ama doğal yorumlar üreten bir asistansın. Kısa, özgün, klişeden uzak yorumlar yaz. Yalnızca JSON döndür.',
+      `Şu şiire uygun 3 kısa kullanıcı yorumu üret. Her biri 1 cümle, en fazla 14 kelime olsun. Şiirin içeriğini gerçekten dikkate al; sadece "çok güzel" deme. JSON: {"yorumlar":["...","...","..."]}\nBaşlık: ${post?.title||''}\nŞiir: ${(post?.text||'').slice(0,1800)}`
+    );
+    return Array.isArray(result?.yorumlar) ? result.yorumlar.filter(x=>String(x).trim()).slice(0,3).map(x=>String(x).trim()) : [];
+  }catch(err){
+    console.warn('Yorum AI öneri hatası:',err);
+    return [];
+  }
+}
+
+function yorumMedyaGoster(media){
+  if(!media?.url) return null;
+  const wrap=h('div',{class:'comment-media'});
+  if(media.type==='image') wrap.appendChild(h('img',{src:media.url,loading:'lazy',alt:'Yorum görseli'}));
+  else if(media.type==='video') wrap.appendChild(h('video',{src:media.url,controls:true,preload:'metadata'}));
+  else if(media.type==='youtube'){
+    const id=ytId(media.url);
+    if(id) wrap.appendChild(h('iframe',{src:`https://www.youtube.com/embed/${id}`,allow:'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture',allowFullscreen:true}));
+    else return null;
+  } else if(media.type==='gif'){
+    wrap.appendChild(h('img',{src:media.url,loading:'lazy',alt:'GIF yorum'}));
+    wrap.appendChild(h('div',{class:'comment-gif-credit'},'Powered by GIPHY'));
+  }
+  return wrap;
+}
+
+function yorumBestesi(post,parentId=null){
+  const wrap=h('div',{style:{display:'flex',gap:'8px',marginTop:'6px',alignItems:'flex-end',flexWrap:'wrap'}});
+  const col=h('div',{style:{flex:'1',minWidth:'220px'}});
+  const ci=h('textarea',{placeholder:parentId?'Yanıt yaz...':'Düşünceni paylaş... Şiir hakkındaki düşüncelerini yaz.',class:'inp',rows:'3',style:{borderRadius:'14px',resize:'none',lineHeight:'1.6',fontSize:'.95rem'}});
+  const fileInput=h('input',{type:'file',accept:'image/*,video/*',style:{display:'none'}});
+  let media=null;
+  let youtubeUrl='';
+  const preview=h('div',{class:'comment-preview',style:{display:'none'}});
+  const suggestions=h('div',{class:'comment-suggestions',style:{display:'none'}});
+  const ytInput=h('input',{class:'inp',placeholder:'YouTube bağlantısını yapıştır...',style:{display:'none',marginTop:'6px',fontSize:'.82rem',padding:'8px 10px'}});
+
+  function onMedia(m){ media=m; preview.innerHTML=''; preview.style.display=m?'block':'none'; if(m){ const x=yorumMedyaGoster(m); if(x) preview.appendChild(x); preview.appendChild(h('button',{class:'comment-preview-remove',title:'Kaldır',onclick:e=>{e.stopPropagation();media=null;preview.style.display='none';}},'×')); } }
+  fileInput.onchange=async e=>{const f=e.target.files?.[0];if(!f)return; toastGoster('⏳ Medya yükleniyor...'); const m=await yorumDosyasiYukle(f); if(m) onMedia(m); fileInput.value='';};
+  ytInput.oninput=e=>youtubeUrl=e.target.value.trim();
+  ytInput.onchange=()=>{if(youtubeUrl&&ytId(youtubeUrl)) onMedia({type:'youtube',url:youtubeUrl});};
+  ci.onclick=e=>e.stopPropagation(); ytInput.onclick=e=>e.stopPropagation();
+  ci.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();e.stopPropagation();gonder();}});
+
+  const gonder=()=>{
+    const text=ci.value.trim();
+    if(!text && !media){toastGoster('Yorum metni veya medya ekleyin.');return;}
+    if(girisGerekli())return;
+    A.addComment(post.id,text,parentId,media);
+    ci.value=''; media=null; youtubeUrl=''; ytInput.value=''; ytInput.style.display='none'; preview.style.display='none'; suggestions.style.display='none';
+  };
+  const oneriGoster=async()=>{
+    suggestions.style.display='flex';
+    suggestions.innerHTML='';
+    const yerel=[...YORUM_ONERILERI].sort(()=>Math.random()-.5).slice(0,3);
+    yerel.forEach(x=>{
+      suggestions.appendChild(h('button',{class:'comment-suggestion',onclick:e=>{e.stopPropagation();ci.value=x;}},'🪶 '+x));
+    });
+    const aiBtn=h('button',{class:'comment-suggestion',onclick:async e=>{
+      e.stopPropagation();
+      aiBtn.disabled=true;
+      aiBtn.textContent='⏳ AI yazıyor...';
+      const ai=await yorumAIonerileriGetir(post);
+      ai.forEach(x=>{
+        suggestions.appendChild(h('button',{class:'comment-suggestion',onclick:e2=>{e2.stopPropagation();ci.value=x;}},'✨ '+x));
+      });
+      aiBtn.remove();
+    }},'✨ AI’dan 3 yeni öner');
+    suggestions.appendChild(aiBtn);
+  };
+  const gifBtn=async e=>{
+    e.stopPropagation();
+    gifButton.disabled=true; gifButton.textContent='⏳ GIF...';
+    const m=await yorumIcinGifGetir(post);
+    if(m)onMedia(m);
+    gifButton.disabled=false; gifButton.textContent='GIF';
+  };
+  const gifButton=h('button',{class:'comment-tool',onclick:gifBtn},'GIF');
+  const hazirSozler=()=>{
+    suggestions.style.display='flex';
+    suggestions.innerHTML='';
+    [...YORUM_ONERILERI].sort(()=>Math.random()-.5).slice(0,5).forEach(x=>{
+      suggestions.appendChild(h('button',{class:'comment-suggestion',onclick:e=>{e.stopPropagation();ci.value=x;}},'🪶 '+x));
+    });
+  };
+  const tools=h('div',{class:'comment-tools'},[
+    h('button',{class:'comment-tool',onclick:e=>{e.stopPropagation();fileInput.click();}},'📷 Resim / 🎥 Video'),
+    h('button',{class:'comment-tool',onclick:e=>{e.stopPropagation();ytInput.style.display=ytInput.style.display==='none'?'block':'none';if(ytInput.style.display==='block')ytInput.focus();}},'▶ YouTube'),
+    gifButton,
+    h('button',{class:'comment-tool',onclick:e=>{e.stopPropagation();oneriGoster();}},'✨ Öner'),
+    h('button',{class:'comment-tool',onclick:e=>{e.stopPropagation();hazirSozler();}},'🪶 Hazır Sözler')
+  ]);
+  col.appendChild(ci);col.appendChild(fileInput);col.appendChild(ytInput);col.appendChild(preview);col.appendChild(tools);col.appendChild(suggestions);
+  wrap.appendChild(av(S.me,28));wrap.appendChild(col);
+  wrap.appendChild(h('button',{class:'pb btn',style:{padding:'8px 14px',fontSize:'.85rem',flexShrink:'0'},onclick:e=>{e.stopPropagation();gonder();}},parentId?'↩':'↩'));
+  return wrap;
+}
+
 A.deleteComment = function(pid,cid){
     if(!confirm("Bu yorum kalıcı olarak silinecek. Emin misiniz?")) return;
     const pIndex = S.posts.findIndex(p=>p.id===pid);
@@ -2737,40 +2916,28 @@ function postCard(post, forceExpand=false, autoOpenComments=false, hedefYorumId=
     const canDel=isAdmin||isCommentOwner;
     const icDiv=h('div',{style:{background:'#0f0a1a',borderRadius:'10px',padding:'8px 70px 8px 12px',flex:'1',border:'1px solid #2d1b52',display:'flex',flexDirection:'column'}},[
       h('span',{style:{fontFamily:"'Playfair Display',serif",fontSize:'.8rem',color:'#c084fc'}},ca?.name||''),
-      h('p',{style:{fontSize:'.9rem',color:'#ddd6fe',marginTop:'2px'}},c.text)
+      c.text?h('p',{style:{fontSize:'.9rem',color:'#ddd6fe',marginTop:'2px',whiteSpace:'pre-wrap'}},c.text):null,
+      yorumMedyaGoster(c.media)
     ]);
     if(yanitlaTiklandi){
       icDiv.appendChild(h('button',{class:'btn',style:{background:'none',color:'#8b7ab8',fontSize:'.72rem',padding:'2px 0',alignSelf:'flex-start',marginTop:'4px'},onclick:(e)=>{e.stopPropagation();yanitlaTiklandi();}},'↪ Yanıtla'));
     }
     return h('div',{class:'comment-item','data-comment-id':c.id,style:girintiliMi?{marginLeft:'32px'}:{}},[
-      av(ca,28),
-      icDiv,
-      canDel?h('button',{class:'absolute-del-comment',onclick:(e)=>{e.stopPropagation();A.deleteComment(post.id,c.id);}},'Sil ✕'):null
+      av(ca,28),icDiv,canDel?h('button',{class:'absolute-del-comment',onclick:(e)=>{e.stopPropagation();A.deleteComment(post.id,c.id);}},'Sil ✕'):null
     ]);
   }
 
   const tumYorumlar=post.comments||[];
   const ustYorumlar=tumYorumlar.filter(c=>!c.parentId);
   ustYorumlar.forEach(c=>{
-    // Bu yorum dizisine (thread) ait yanıt kutusu — "Yanıtla"ya basılınca açılır/kapanır
-    const ri=h('textarea',{placeholder:'Yanıt yaz...',class:'inp',rows:'2',style:{borderRadius:'12px',flex:'1',resize:'none',lineHeight:'1.5',fontSize:'.88rem'}});
-    ri.onclick=e=>e.stopPropagation();
-    const replyRow=h('div',{style:{display:'none',gap:'6px',marginTop:'6px',marginBottom:'10px',marginLeft:'32px',alignItems:'flex-end'}});
-    const gonderYanit=()=>{if(!ri.value.trim())return;if(girisGerekli())return;A.addComment(post.id,ri.value.trim(),c.id);ri.value='';};
-    ri.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();e.stopPropagation();gonderYanit();}});
-    replyRow.appendChild(ri);
-    replyRow.appendChild(h('button',{class:'pb btn',style:{padding:'6px 12px',fontSize:'.78rem',flexShrink:'0'},onclick:(e)=>{e.stopPropagation();gonderYanit();}},'↩'));
-    const yanitToggle=()=>{replyRow.style.display=replyRow.style.display==='none'?'flex':'none';if(replyRow.style.display==='flex')ri.focus();};
-
+    const replyRow=h('div',{style:{display:'none',marginBottom:'10px',marginLeft:'32px'}});
+    const yanitToggle=()=>{replyRow.style.display=replyRow.style.display==='none'?'block':'none';if(replyRow.style.display==='block' && !replyRow.firstChild){replyRow.appendChild(yorumBestesi(post,c.id));}};
     cbody.appendChild(yorumOgesiOlustur(c,false,yanitToggle));
     tumYorumlar.filter(r=>r.parentId===c.id).forEach(r=>cbody.appendChild(yorumOgesiOlustur(r,true,yanitToggle)));
     cbody.appendChild(replyRow);
   });
   if(!tumYorumlar.length) cbody.appendChild(h('p',{style:{fontSize:'.82rem',color:'#6b5b8a',fontStyle:'italic',marginBottom:'8px'}},'Ozan seni bekliyor! 🌙'));
-  const ci=h('textarea',{placeholder:'Düşünceni paylaş... Şiir hakkındaki düşüncelerini, hissettirdiklerini yaz.',class:'inp',rows:'3',style:{borderRadius:'14px',flex:'1',resize:'none',lineHeight:'1.6',fontSize:'.95rem'}});
-  ci.onclick=e=>e.stopPropagation();
-  ci.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();e.stopPropagation();if(!ci.value.trim())return;if(girisGerekli())return;A.addComment(post.id,ci.value.trim());ci.value='';}})
-  cbody.appendChild(h('div',{style:{display:'flex',gap:'8px',marginTop:'6px',alignItems:'flex-end'}},[av(S.me,28),ci,h('button',{class:'pb btn',style:{padding:'8px 14px',fontSize:'.85rem',flexShrink:'0'},onclick:(e)=>{e.stopPropagation();if(!ci.value.trim())return;if(girisGerekli())return;A.addComment(post.id,ci.value.trim());ci.value='';}}, '↩')]));
+  cbody.appendChild(yorumBestesi(post));
   full.appendChild(cbtn);full.appendChild(cbody);
 
   // Bir bildirimden belirli bir yoruma tıklanarak gelindiyse: o yorumu bul, kaydır ve kısaca vurgula
