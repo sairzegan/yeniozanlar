@@ -2718,139 +2718,158 @@ async function adminGiphyFallbackUygula(post){
   return data;
 }
 
+// ── AI görsel sağlayıcıları (Cloudflare FLUX → Pollinations → Hugging Face) ──
+// Üçü de aynı sözleşmeyi izler: (title, text, signal) alır, başarılıysa
+// {blob, provider, model} döner, başarısızsa Error fırlatır. Bu sayede
+// adminYapayZekaGorseliYenile hepsini TEK bir döngüyle deneyebilir.
+// flux-image.js ve huggingface-image.js ham görsel binary'si (image/*) döner;
+// pollinations-image.js JSON içinde base64 data URL döner — ikisi de burada
+// aynı {blob} şekline normalize edilir.
+async function fluxGorselDene(title, text, signal){
+  const r=await fetch('/api/flux-image',{
+    method:'POST', headers:{'Content-Type':'application/json'}, signal,
+    body:JSON.stringify({title,text})
+  });
+  const contentType=(r.headers.get('content-type')||'').split(';')[0].trim().toLowerCase();
+  if(!r.ok){
+    let hata='';
+    try{ const data=await r.json(); hata=data?.error||data?.detail||data?.message||''; }
+    catch(_){ try{ hata=(await r.text()).slice(0,500); }catch(__){} }
+    throw new Error(`Cloudflare FLUX HTTP ${r.status}${hata?` — ${hata}`:''}`);
+  }
+  if(!contentType.startsWith('image/')) throw new Error(`FLUX görsel yerine ${contentType||'bilinmeyen veri'} döndürdü.`);
+  const blob=await r.blob();
+  if(!blob || !blob.size) throw new Error('FLUX boş görsel döndürdü.');
+  return { blob, provider:'cloudflare', model:'@cf/black-forest-labs/flux-1-schnell' };
+}
+async function pollinationsGorselDene(title, text, signal){
+  const r=await fetch('/api/pollinations-image',{
+    method:'POST', headers:{'Content-Type':'application/json'}, signal,
+    body:JSON.stringify({title,text})
+  });
+  let data={}; try{ data=await r.json(); }catch(_){}
+  if(!r.ok || !data?.imageData) throw new Error(data?.error || `Pollinations HTTP ${r.status}`);
+  const blob=await (await fetch(data.imageData)).blob(); // data: URL → Blob (basit, güvenilir dönüşüm)
+  if(!blob || !blob.size) throw new Error('Pollinations boş görsel döndürdü.');
+  return { blob, provider:'pollinations', model:data.model||'flux' };
+}
+async function huggingfaceGorselDene(title, text, signal){
+  const r=await fetch('/api/huggingface-image',{
+    method:'POST', headers:{'Content-Type':'application/json'}, signal,
+    body:JSON.stringify({title,text})
+  });
+  const contentType=(r.headers.get('content-type')||'').split(';')[0].trim().toLowerCase();
+  if(!r.ok){
+    let hata='';
+    try{ const data=await r.json(); hata=data?.error||''; }
+    catch(_){ try{ hata=(await r.text()).slice(0,300); }catch(__){} }
+    throw new Error(`Hugging Face HTTP ${r.status}${hata?` — ${hata}`:''}`);
+  }
+  if(!contentType.startsWith('image/')) throw new Error(`Hugging Face görsel yerine ${contentType||'bilinmeyen veri'} döndürdü.`);
+  const blob=await r.blob();
+  if(!blob || !blob.size) throw new Error('Hugging Face boş görsel döndürdü.');
+  return { blob, provider:'huggingface', model:'black-forest-labs/FLUX.1-schnell' };
+}
+// Herhangi bir sağlayıcıdan gelen görsel blob'unu makul bir boyuta küçültüp
+// Firestore'a sığacak bir JPEG data URL'sine çevirir. Firebase Storage
+// KULLANILMAZ — üretilen görsel doğrudan Firestore alanına (post.image) yazılır,
+// bu yüzden hiçbir sağlayıcı Storage kotasını doldurmaz.
+function blobToCompressedDataUrl(blob){
+  return new Promise((resolve,reject)=>{
+    const reader=new FileReader();
+    reader.onload=()=>{
+      const img=new Image();
+      img.onload=()=>{
+        const maxSide=768;
+        let w=img.naturalWidth||img.width||768;
+        let h=img.naturalHeight||img.height||768;
+        if(w>maxSide||h>maxSide){
+          if(w>=h){h=Math.round(h*maxSide/w);w=maxSide;}
+          else{w=Math.round(w*maxSide/h);h=maxSide;}
+        }
+        const canvas=document.createElement('canvas');
+        canvas.width=w;canvas.height=h;
+        const ctx=canvas.getContext('2d');
+        if(!ctx){reject(new Error('Görsel dönüştürücü başlatılamadı.'));return;}
+        ctx.drawImage(img,0,0,w,h);
+        let data=canvas.toDataURL('image/jpeg',0.78);
+        if(data.length>850000)data=canvas.toDataURL('image/jpeg',0.62);
+        if(data.length>950000){
+          const small=document.createElement('canvas');
+          small.width=Math.round(w*0.75);small.height=Math.round(h*0.75);
+          const sctx=small.getContext('2d');
+          sctx.drawImage(canvas,0,0,small.width,small.height);
+          data=small.toDataURL('image/jpeg',0.58);
+        }
+        if(data.length>1000000){reject(new Error('Görsel Firestore sınırına sığmayacak kadar büyük.'));return;}
+        resolve(data);
+      };
+      img.onerror=()=>reject(new Error('Görsel okunamadı.'));
+      img.src=reader.result;
+    };
+    reader.onerror=()=>reject(new Error('Görsel okunamadı.'));
+    reader.readAsDataURL(blob);
+  });
+}
+
 async function adminYapayZekaGorseliYenile(post){
   if(!S.me || S.me.username!==ADMIN_USERNAME){
     throw new Error('Bu işlem yalnızca admin içindir.');
   }
 
-  // FLUX başarısız olursa (özellikle Cloudflare 429 kota/rate-limit)
-  // aynı buton içinde otomatik olarak GIPHY'ye düşeriz.
-  async function giphyFallback(fluxMessage){
+  // Sırasıyla denenecek AI sağlayıcıları: Cloudflare FLUX → Pollinations →
+  // Hugging Face. Biri kota/hata verirse otomatik olarak bir sonrakine geçilir
+  // ("yapay zeka yorumunda olduğu gibi" — Groq→Gemini→Claude kademesiyle aynı mantık).
+  const saglayicilar=[
+    { ad:'Cloudflare FLUX', fn:fluxGorselDene, sure:90000, mesaj:'🧠 Cloudflare FLUX ile görsel oluşturuluyor...' },
+    { ad:'Pollinations',    fn:pollinationsGorselDene, sure:60000, mesaj:'🧠 Cloudflare kullanılamadı, Pollinations deneniyor...' },
+    { ad:'Hugging Face',    fn:huggingfaceGorselDene, sure:60000, mesaj:'🧠 Pollinations da kullanılamadı, Hugging Face deneniyor...' }
+  ];
+
+  const hatalar=[];
+  for(const s of saglayicilar){
+    const status=document.querySelector('[data-flux-status]');
+    if(status) status.textContent=s.mesaj;
+    const controller=new AbortController();
+    const zamanlayici=setTimeout(()=>controller.abort(), s.sure);
     try{
-      const data=await adminGiphyFallbackUygula(post);
-      return {
-        type:'giphy',
-        provider:'giphy',
-        gifUrl:data?.gifUrl||null,
-        fallbackReason:fluxMessage||'FLUX kullanılamadı.'
+      const {blob, provider, model}=await s.fn(post.title||'', post.text||'', controller.signal);
+      clearTimeout(zamanlayici);
+
+      if(status) status.textContent='💾 AI görseli kaydediliyor...';
+      const aiImageDataUrl=await blobToCompressedDataUrl(blob);
+
+      const idx=S.posts.findIndex(p=>p.id===post.id);
+      if(idx<0) throw new Error('Paylaşım bulunamadı.');
+
+      const now=Date.now();
+      const updates={
+        image:aiImageDataUrl, autoGif:false, gifCaption:null,
+        aiImage:true, aiImageUpdatedAt:now,
+        aiImageProvider:provider, aiImageModel:model
       };
-    }catch(giphyErr){
-      throw new Error(`FLUX kullanılamadı (${fluxMessage||'bilinmeyen hata'}). GIPHY yedeği de başarısız: ${giphyErr?.message||giphyErr}`);
+      S.posts[idx]={...S.posts[idx],...updates};
+      save();
+      await db.collection('posts').doc(post.id).update(updates);
+      refreshCard(post.id);
+
+      return { type:'ai', provider, model };
+    }catch(err){
+      clearTimeout(zamanlayici);
+      const mesaj = err?.name==='AbortError'
+        ? `${s.ad} isteği ${Math.round(s.sure/1000)} saniyede tamamlanmadı.`
+        : (err?.message || `${s.ad} başarısız oldu.`);
+      console.warn(`${s.ad} başarısız:`, mesaj);
+      hatalar.push(`${s.ad}: ${mesaj}`);
     }
   }
 
-  let fluxError='';
+  // Üç AI sağlayıcısı da başarısız oldu (kota/hata) → son çare GIPHY.
   try{
-    const controller=new AbortController();
-    const fluxTimeout=setTimeout(()=>controller.abort(),90000);
-
-    let r;
-    try{
-      r=await fetch('/api/flux-image',{
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        signal:controller.signal,
-        body:JSON.stringify({title:post.title||'',text:post.text||''})
-      });
-    }catch(err){
-      clearTimeout(fluxTimeout);
-      fluxError=err?.name==='AbortError'?'FLUX isteği 90 saniyede tamamlanmadı.':(err?.message||'FLUX bağlantı hatası.');
-      return await giphyFallback(fluxError);
-    }
-    clearTimeout(fluxTimeout);
-
-    const contentType=(r.headers.get('content-type')||'').split(';')[0].trim().toLowerCase();
-
-    if(!r.ok){
-      let hata='';
-      try{
-        const data=await r.json();
-        hata=data?.error||data?.detail||data?.message||'';
-      }catch(_){
-        try{ hata=(await r.text()).slice(0,500); }catch(__){}
-      }
-      fluxError=`Cloudflare FLUX HTTP ${r.status}${hata?` — ${hata}`:''}`;
-      // 429 kota/rate-limit dahil tüm FLUX HTTP hatalarında GIPHY yedeği.
-      return await giphyFallback(fluxError);
-    }
-
-    if(!contentType.startsWith('image/')){
-      fluxError=`FLUX görsel yerine ${contentType||'bilinmeyen veri'} döndürdü.`;
-      return await giphyFallback(fluxError);
-    }
-
-    const blob=await r.blob();
-    if(!blob || !blob.size){
-      fluxError='FLUX boş görsel döndürdü.';
-      return await giphyFallback(fluxError);
-    }
-
-    // Firebase Storage kullanmıyoruz. Görsel küçültülüp Firestore'a data URL
-    // olarak kaydedilir; böylece Storage kotası/timeout'u bu akışı engellemez.
-    const aiImageDataUrl=await new Promise((resolve,reject)=>{
-      const reader=new FileReader();
-      reader.onload=()=>{
-        const img=new Image();
-        img.onload=()=>{
-          const maxSide=768;
-          let w=img.naturalWidth||img.width||768;
-          let h=img.naturalHeight||img.height||768;
-          if(w>maxSide||h>maxSide){
-            if(w>=h){h=Math.round(h*maxSide/w);w=maxSide;}
-            else{w=Math.round(w*maxSide/h);h=maxSide;}
-          }
-          const canvas=document.createElement('canvas');
-          canvas.width=w;canvas.height=h;
-          const ctx=canvas.getContext('2d');
-          if(!ctx){reject(new Error('Görsel dönüştürücü başlatılamadı.'));return;}
-          ctx.drawImage(img,0,0,w,h);
-          let data=canvas.toDataURL('image/jpeg',0.78);
-          if(data.length>850000)data=canvas.toDataURL('image/jpeg',0.62);
-          if(data.length>950000){
-            const small=document.createElement('canvas');
-            small.width=Math.round(w*0.75);small.height=Math.round(h*0.75);
-            const sctx=small.getContext('2d');
-            sctx.drawImage(canvas,0,0,small.width,small.height);
-            data=small.toDataURL('image/jpeg',0.58);
-          }
-          if(data.length>1000000){reject(new Error('FLUX görseli Firestore sınırına sığmayacak kadar büyük.'));return;}
-          resolve(data);
-        };
-        img.onerror=()=>reject(new Error('FLUX görseli okunamadı.'));
-        img.src=reader.result;
-      };
-      reader.onerror=()=>reject(new Error('FLUX görseli okunamadı.'));
-      reader.readAsDataURL(blob);
-    });
-
-    const status=document.querySelector('[data-flux-status]');
-    if(status)status.textContent='💾 AI görseli kaydediliyor...';
-
-    const idx=S.posts.findIndex(p=>p.id===post.id);
-    if(idx<0)throw new Error('Paylaşım bulunamadı.');
-
-    const now=Date.now();
-    const updates={
-      image:aiImageDataUrl,
-      autoGif:false,
-      gifCaption:null,
-      aiImage:true,
-      aiImageUpdatedAt:now,
-      aiImageProvider:'cloudflare',
-      aiImageModel:'@cf/black-forest-labs/flux-1-schnell'
-    };
-
-    S.posts[idx]={...S.posts[idx],...updates};
-    save();
-    await db.collection('posts').doc(post.id).update(updates);
-    refreshCard(post.id);
-
-    return {type:'ai',provider:'cloudflare',model:'@cf/black-forest-labs/flux-1-schnell'};
-  }catch(err){
-    console.error('AI görsel oluşturma hatası:',err);
-    // FLUX yanıtı geldikten sonra tarayıcıda dönüştürme/kayıt gibi bir adım
-    // hata verirse de kullanıcıyı boşta bırakma; GIPHY yedeğini dene.
-    return await giphyFallback(err?.message||'FLUX görsel işlemi başarısız oldu.');
+    const data=await adminGiphyFallbackUygula(post);
+    return { type:'giphy', provider:'giphy', gifUrl:data?.gifUrl||null, fallbackReason:hatalar.join(' | ') };
+  }catch(giphyErr){
+    throw new Error(`Tüm AI sağlayıcıları başarısız oldu (${hatalar.join(' | ')}). GIPHY yedeği de başarısız: ${giphyErr?.message||giphyErr}`);
   }
 }
 
@@ -3117,17 +3136,15 @@ function postCard(post, forceExpand=false, autoOpenComments=false, hedefYorumId=
     aiImageBtn.onclick=async(e)=>{
       e.stopPropagation();
       aiImageBtn.disabled=true; aiImageBtn.textContent='⏳ Yeni görsel hazırlanıyor...';
-      revalStatus.style.display='block'; revalStatus.style.color='#6b5b8a'; revalStatus.dataset.fluxStatus='true'; revalStatus.textContent='🧠 Şiir analiz ediliyor, FLUX görsel oluşturuyor...';
+      revalStatus.style.display='block'; revalStatus.style.color='#6b5b8a'; revalStatus.dataset.fluxStatus='true'; revalStatus.textContent='🧠 Şiir analiz ediliyor, AI sağlayıcıları deneniyor...';
       try{
         const sonuc=await adminYapayZekaGorseliYenile(post);
+        const saglayiciAdlari={cloudflare:'Cloudflare FLUX',pollinations:'Pollinations',huggingface:'Hugging Face (FLUX)'};
         if(sonuc?.type==='giphy'){
-          revalStatus.textContent='🔄 AI sağlayıcıları kullanılamadı; farklı bir GIPHY getirildi.';
+          revalStatus.textContent='🔄 Tüm AI sağlayıcıları kullanılamadı; farklı bir GIPHY getirildi.';
           revalStatus.style.color='#fbbf24';
-        }else if(sonuc?.provider==='cloudflare'){
-          revalStatus.textContent='✅ FLUX ile yeni AI görseli oluşturuldu.';
-          revalStatus.style.color='#34d399';
         }else{
-          revalStatus.textContent='✅ AI görseli yenilendi.';
+          revalStatus.textContent=`✅ ${saglayiciAdlari[sonuc?.provider]||'AI'} ile yeni görsel oluşturuldu.`;
           revalStatus.style.color='#34d399';
         }
       }catch(err){ revalStatus.textContent='❌ Görsel/GIPHY hatası: '+err.message; revalStatus.style.color='#f87171'; }
@@ -3970,6 +3987,82 @@ function Profile(){
     kotaDiv.appendChild(geminiTestBtn);
     kotaDiv.appendChild(claudeTestBtn);
     adminPanel.appendChild(kotaDiv);
+
+    // ── Görsel AI Sağlayıcıları Durumu (Cloudflare FLUX / Pollinations / Hugging Face) ──
+    // Her sağlayıcıyı TEK BAŞINA (otomatik zincirin dışında) test eder, böylece
+    // admin hangisinin çalışmadığını ve TAM hata mesajını (kota/anahtar/model
+    // hatası vb.) doğrudan görebilir. Başarılı olursa küçük bir önizleme
+    // görseli de gösterilir — gerçekten şiire uygun bir görsel mi diye admin
+    // gözle kontrol edebilsin diye deneme şiiri kasıtlı olarak somut bir konu
+    // (kedi) içerir.
+    const gorselKotaDiv=h('div',{style:{background:'#0f0a1a',border:'1px solid #2d1b52',borderRadius:'10px',padding:'12px',marginBottom:'14px'}});
+    gorselKotaDiv.appendChild(h('p',{style:{color:'#a78bfa',fontSize:'.8rem',fontWeight:'bold',marginBottom:'8px'}},'🎨 Görsel AI Sağlayıcıları Durumu'));
+
+    const gorselTestSiiri = { title:'Test Şiiri', text:'Bahçede bir kedi uyur güneşin altında,\nKuyruğu kıvrık, huzurlu bir haldeydi.' };
+    const gorselSaglayicilar={
+      cloudflare:  {ad:'Cloudflare FLUX',    fn:fluxGorselDene,         son:null},
+      pollinations:{ad:'Pollinations',       fn:pollinationsGorselDene, son:null},
+      huggingface: {ad:'Hugging Face (FLUX)',fn:huggingfaceGorselDene,  son:null}
+    };
+
+    const gorselIcerik=h('div');
+    function gorselDurumGoster(){
+      gorselIcerik.innerHTML='';
+      Object.keys(gorselSaglayicilar).forEach(anahtar=>{
+        const d=gorselSaglayicilar[anahtar];
+        const satirDiv=h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',gap:'10px',marginBottom:'8px',paddingBottom:'8px',borderBottom:'1px solid #2d1b5244'}});
+        const solTaraf=h('div',{style:{flex:'1',minWidth:'0'}});
+        solTaraf.appendChild(h('p',{style:{color:'#e2e8f0',fontSize:'.78rem',fontWeight:'bold'}},d.ad));
+        if(!d.son){
+          solTaraf.appendChild(h('p',{style:{color:'#6b5b8a',fontSize:'.7rem',fontStyle:'italic'}},'Henüz test edilmedi.'));
+        } else if(d.son.ok){
+          solTaraf.appendChild(h('p',{style:{color:'#34d399',fontSize:'.72rem',fontWeight:'bold'}},`✅ Başarılı (${d.son.sure}sn)`));
+          solTaraf.appendChild(h('p',{style:{color:'#4b3d6b',fontSize:'.65rem'}},`Son test: ${d.son.zaman}`));
+        } else {
+          solTaraf.appendChild(h('p',{style:{color:'#f87171',fontSize:'.72rem',lineHeight:'1.4',wordBreak:'break-word'}},`❌ ${d.son.mesaj}`));
+          solTaraf.appendChild(h('p',{style:{color:'#4b3d6b',fontSize:'.65rem'}},`Son test: ${d.son.zaman}`));
+        }
+        satirDiv.appendChild(solTaraf);
+        if(d.son?.ok && d.son.onizlemeUrl){
+          satirDiv.appendChild(h('img',{src:d.son.onizlemeUrl,style:{width:'64px',height:'36px',objectFit:'cover',borderRadius:'6px',border:'1px solid #2d1b52',flexShrink:'0'}}));
+        }
+        gorselIcerik.appendChild(satirDiv);
+      });
+    }
+    gorselDurumGoster();
+
+    function gorselTestBtnOlustur(anahtar){
+      const d=gorselSaglayicilar[anahtar];
+      return h('button',{style:{marginTop:'4px',marginRight:'6px',fontSize:'.7rem',padding:'4px 10px',background:'transparent',color:'#34d399',border:'1px solid #1d5c3d',borderRadius:'8px',cursor:'pointer'},
+        onclick:async(ev)=>{
+          const btn=ev.currentTarget;
+          btn.disabled=true; const eski=btn.textContent; btn.textContent='⏳ Test ediliyor...';
+          const basla=Date.now();
+          const controller=new AbortController();
+          const zamanlayici=setTimeout(()=>controller.abort(),90000);
+          try{
+            const {blob}=await d.fn(gorselTestSiiri.title, gorselTestSiiri.text, controller.signal);
+            clearTimeout(zamanlayici);
+            if(d.son?.onizlemeUrl) URL.revokeObjectURL(d.son.onizlemeUrl);
+            d.son={ ok:true, sure:((Date.now()-basla)/1000).toFixed(1), zaman:new Date().toLocaleTimeString('tr-TR'), onizlemeUrl:URL.createObjectURL(blob) };
+          }catch(err){
+            clearTimeout(zamanlayici);
+            d.son={ ok:false, mesaj: err?.name==='AbortError' ? 'İstek 90 saniyede tamamlanmadı.' : (err?.message||'Bilinmeyen hata'), zaman:new Date().toLocaleTimeString('tr-TR') };
+          }
+          gorselDurumGoster();
+          btn.disabled=false; btn.textContent=eski;
+        }
+      }, `🔍 ${d.ad} Test Et`);
+    }
+
+    gorselKotaDiv.appendChild(gorselIcerik);
+    const gorselBtnRow=h('div',{style:{display:'flex',flexWrap:'wrap'}});
+    gorselBtnRow.appendChild(gorselTestBtnOlustur('cloudflare'));
+    gorselBtnRow.appendChild(gorselTestBtnOlustur('pollinations'));
+    gorselBtnRow.appendChild(gorselTestBtnOlustur('huggingface'));
+    gorselKotaDiv.appendChild(gorselBtnRow);
+    gorselKotaDiv.appendChild(h('p',{style:{color:'#4b3d6b',fontSize:'.65rem',fontStyle:'italic',marginTop:'6px'}},'Not: Bu testler otomatik zinciri (FLUX→Pollinations→Hugging Face→GIPHY) atlayıp sağlayıcıyı DOĞRUDAN çağırır; hangisinin neden başarısız olduğunu (kota, eksik/yanlış anahtar, model hatası vb.) tam mesajıyla görmek içindir.'));
+    adminPanel.appendChild(gorselKotaDiv);
     const durumEl=h('p',{style:{color:'#6b5b8a',fontSize:'.85rem',marginTop:'10px',fontStyle:'italic'}},'');
     const topluModelSecici=h('select',{class:'inp',style:{marginBottom:'8px',fontSize:'.82rem',padding:'8px',borderRadius:'8px'}},[
       h('option',{value:'auto'},'🔀 Groq — otomatik kademe (kota dolarsa sıradakine geçer)'),
