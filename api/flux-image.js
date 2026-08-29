@@ -1,75 +1,184 @@
-// Vercel Serverless Function
-// Hugging Face Inference Providers -> FLUX.1-schnell
+// api/flux-image.js
+// Hugging Face Inference API - FLUX.1-schnell
 // Vercel Environment Variable: HF_TOKEN
 
-const MODEL='black-forest-labs/FLUX.1-schnell';
-const TIMEOUT_MS=70000;
+const MODEL = "black-forest-labs/FLUX.1-schnell";
+const ENDPOINT =
+  `https://router.huggingface.co/hf-inference/models/${MODEL}`;
 
-function buildPrompt(title,text){
-  const poem=String(text||'').trim().slice(0,12000);
-  const heading=String(title||'').trim().slice(0,500);
+function createPrompt(title, text) {
+  const poem = String(text || "").trim().slice(0, 14000);
+  const poemTitle = String(title || "").trim().slice(0, 500);
+
   return [
-    'Create one original landscape image directly inspired by the Turkish poem below.',
-    'The poem is the primary source. Show its concrete setting, people, objects, actions, symbols, metaphors and emotions.',
-    'Do not create a generic poetry image and do not add unrelated subjects.',
-    'Style: cinematic photography, poetic atmosphere, emotional realism, elegant composition, natural dramatic lighting, depth of field, subtle film color grading.',
-    "Reflect the poem's actual mood: romantic, melancholic, nostalgic, hopeful, dark or dreamy only when appropriate.",
-    'No readable text, letters, captions, logos, watermark, collage or GIF elements inside the image.',
-    'Landscape 16:9 composition suitable for a poetry post.',
-    heading ? `Poem title: ${heading}` : '',
-    'Turkish poem:', poem
-  ].filter(Boolean).join('\n\n');
+    "Create one original landscape image inspired directly by this Turkish poem.",
+    "The poem is the primary source of the image.",
+    "The image must visually represent the setting, objects, people, actions, symbols and emotions described in the poem.",
+    "Do not create a generic poetry image.",
+    "Do not add unrelated objects or subjects.",
+    "Style: cinematic, poetic, realistic, emotional, atmospheric, elegant composition, dramatic natural lighting, subtle film look, depth of field.",
+    "Match the emotional atmosphere of the poem.",
+    "If appropriate, reflect romantic, melancholic, nostalgic, dreamy, hopeful or dark emotions.",
+    "No text inside the generated image.",
+    "No letters, captions, typography, logo, watermark, collage or GIF elements.",
+    "Landscape composition suitable for a poetry website.",
+    poemTitle ? `Poem title: ${poemTitle}` : "",
+    "Turkish poem:",
+    poem
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 }
 
-function errText(err){
-  const msg=err?.message||String(err||'Bilinmeyen hata');
-  return msg.slice(0,2500);
+async function getError(response) {
+  let raw = "";
+
+  try {
+    raw = await response.text();
+  } catch (_) {}
+
+  try {
+    const json = JSON.parse(raw);
+
+    return (
+      json?.error?.message ||
+      json?.error ||
+      json?.message ||
+      raw ||
+      `HTTP ${response.status}`
+    );
+  } catch (_) {
+    return raw || `HTTP ${response.status}`;
+  }
 }
 
-export const maxDuration=75;
+export default async function handler(req, res) {
+  if (req.method !== "POST") {
+    return res.status(405).json({
+      error: "Yalnızca POST isteği kabul edilir."
+    });
+  }
 
-export default async function handler(req,res){
-  if(req.method!=='POST') return res.status(405).json({error:'Yalnızca POST destekleniyor.'});
+  const token = String(process.env.HF_TOKEN || "").trim();
 
-  const token=String(process.env.HF_TOKEN||'').trim();
-  if(!token) return res.status(500).json({error:'HF_TOKEN Vercel Environment Variable bulunamadı.'});
+  if (!token) {
+    return res.status(500).json({
+      error:
+        "HF_TOKEN bulunamadı. Vercel Environment Variables bölümünde HF_TOKEN tanımlı değil."
+    });
+  }
 
-  const title=req.body?.title||'';
-  const text=req.body?.text||'';
-  if(!String(text).trim()) return res.status(400).json({error:'Şiir metni boş.'});
+  let body;
 
-  const controller=new AbortController();
-  const timer=setTimeout(()=>controller.abort(),TIMEOUT_MS);
+  try {
+    body =
+      typeof req.body === "string"
+        ? JSON.parse(req.body)
+        : req.body || {};
+  } catch (_) {
+    return res.status(400).json({
+      error: "Geçersiz JSON isteği."
+    });
+  }
 
-  try{
-    const {InferenceClient}=await import('@huggingface/inference');
-    const client=new InferenceClient(token);
+  const title = body.title || "";
+  const text = body.text || "";
 
-    // FLUX.1-schnell için Hugging Face'in resmi Inference Providers yönlendirmesi.
-    // fal-ai şu anda model için desteklenen bir text-to-image sağlayıcısıdır.
-    const imageBlob=await client.textToImage({
-      model:MODEL,
-      provider:'fal-ai',
-      inputs:buildPrompt(title,text),
-      parameters:{width:1024,height:576,num_inference_steps:4}
+  if (!String(text).trim()) {
+    return res.status(400).json({
+      error: "Şiir metni boş."
+    });
+  }
+
+  const prompt = createPrompt(title, text);
+
+  try {
+    const response = await fetch(ENDPOINT, {
+      method: "POST",
+
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+        Accept: "image/png"
+      },
+
+      body: JSON.stringify({
+        inputs: prompt,
+
+        parameters: {
+          width: 1024,
+          height: 576,
+          num_inference_steps: 4
+        },
+
+        options: {
+          wait_for_model: true,
+          use_cache: false
+        }
+      })
     });
 
-    if(!imageBlob) throw new Error('Hugging Face boş yanıt döndürdü.');
-    const buffer=Buffer.from(await imageBlob.arrayBuffer());
-    if(!buffer.length) throw new Error('FLUX boş görsel döndürdü.');
+    if (!response.ok) {
+      const error = await getError(response);
 
-    const mime=imageBlob.type||'image/png';
-    res.setHeader('Content-Type',mime);
-    res.setHeader('Content-Length',String(buffer.length));
-    res.setHeader('Cache-Control','no-store');
-    res.setHeader('X-AI-Provider','huggingface');
-    res.setHeader('X-AI-Model',MODEL);
-    return res.status(200).send(buffer);
-  }catch(err){
-    const msg=err?.name==='AbortError'?'Hugging Face FLUX isteği 70 saniyede tamamlanmadı.':errText(err);
-    console.error('FLUX error:',msg);
-    return res.status(502).json({error:`FLUX görsel üretimi başarısız: ${msg}`,provider:'huggingface',model:MODEL});
-  }finally{
-    clearTimeout(timer);
+      console.error("Hugging Face FLUX error:", response.status, error);
+
+      return res.status(502).json({
+        error: `FLUX HTTP ${response.status}: ${String(error).slice(
+          0,
+          2000
+        )}`,
+
+        provider: "huggingface-hf-inference",
+        model: MODEL
+      });
+    }
+
+    const contentType =
+      response.headers.get("content-type") || "image/png";
+
+    const arrayBuffer = await response.arrayBuffer();
+
+    if (!arrayBuffer || arrayBuffer.byteLength === 0) {
+      return res.status(502).json({
+        error: "FLUX boş bir görsel döndürdü.",
+        provider: "huggingface-hf-inference",
+        model: MODEL
+      });
+    }
+
+    const imageBuffer = Buffer.from(arrayBuffer);
+
+    res.setHeader("Content-Type", contentType);
+    res.setHeader(
+      "Content-Length",
+      String(imageBuffer.length)
+    );
+
+    res.setHeader(
+      "Cache-Control",
+      "no-store, no-cache, must-revalidate"
+    );
+
+    res.setHeader(
+      "X-AI-Provider",
+      "huggingface-hf-inference"
+    );
+
+    res.setHeader("X-AI-Model", MODEL);
+
+    return res.status(200).send(imageBuffer);
+
+  } catch (error) {
+    console.error("FLUX request failed:", error);
+
+    return res.status(502).json({
+      error:
+        "FLUX bağlantı hatası: " +
+        String(error?.message || error).slice(0, 2000),
+
+      provider: "huggingface-hf-inference",
+      model: MODEL
+    });
   }
 }
