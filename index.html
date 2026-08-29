@@ -57,11 +57,6 @@
     .absolute-hide-post:hover{background:#b45309 !important;transform:scale(1.05)}
     .absolute-hide-post.active-hidden{background:#16a34a !important}
     .absolute-hide-post.active-hidden:hover{background:#15803d !important}
-    .absolute-pin-post{position:absolute !important;top:142px !important;right:12px !important;z-index:9999 !important;background:#0e7490 !important;color:#fff !important;border:none !important;border-radius:6px !important;padding:5px 12px !important;font-size:0.8rem !important;font-weight:bold !important;cursor:pointer !important;box-shadow:0 2px 8px rgba(0,0,0,0.5) !important}
-    .absolute-pin-post:hover{background:#0891b2 !important;transform:scale(1.05)}
-    .absolute-pin-post.active-pinned{background:#16a34a !important}
-    .absolute-pin-post.active-pinned:hover{background:#15803d !important}
-    .ai-image-status{font-size:.75rem;color:#6b5b8a;margin-top:6px;text-align:center;display:none}
     .hidden-badge{display:inline-flex;align-items:center;gap:4px;background:#3b2a0d;border:1px solid #92661a;color:#fbbf24;border-radius:20px;padding:2px 10px;font-size:.68rem;font-weight:700;flex-shrink:0}
     .swipe-entry-btn{width:100%;margin-bottom:14px;background:linear-gradient(135deg,#0891b2,#0e7490);border:none;border-radius:14px;padding:14px;color:#fff;font-family:'Playfair Display',serif;font-size:.95rem;display:flex;align-items:center;justify-content:center;gap:10px}
     .swipe-nav-btn{background:#1a0f2e !important;color:#c084fc !important;border:1px solid #3d1f6e !important;border-radius:50% !important;width:34px;height:34px;font-size:1rem !important;display:flex;align-items:center;justify-content:center;padding:0 !important}
@@ -185,8 +180,8 @@ let S = {
 
 const parseDate=d=>{if(!d)return 0;try{const p=d.split(' ');const dmy=p[0].split('.');const hms=p[1]?.split(':');return new Date(dmy[2],dmy[1]-1,dmy[0],hms?.[0]||0,hms?.[1]||0,hms?.[2]||0).getTime();}catch{return 0;}};
 const postSirala = arr => arr.sort((a,b)=>{
-  const ap=Number(a?.pinnedAt||0), bp=Number(b?.pinnedAt||0);
-  if(ap||bp) return bp-ap;
+  const ap = Number(a.pinnedAt||0), bp = Number(b.pinnedAt||0);
+  if(ap || bp){ if(ap !== bp) return bp-ap; }
   return (b.ts||parseDate(b.date))-(a.ts||parseDate(a.date));
 });
 
@@ -2010,73 +2005,100 @@ async function botAriPuan(text, zorunluModel=null) {
 // JSON vb.) sessizce vazgeçilir — paylaşım akışı ASLA engellenmez.
 // Kurulum: Vercel → Settings → Environment Variables → GIPHY_API_KEY ekleyip
 // yeniden deploy edin (bkz. /api/giphy.js). Anahtar: developers.giphy.com
-async function siirIcinAiGorselGetir(title, text){
+async function siirIcinGifVerileriGetir(title, text){
   try{
-    const res=await fetch('/api/ai-image',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:title||'',text:(text||'').slice(0,5000)})});
-    const data=await res.json().catch(()=>({}));
-    if(!res.ok) throw new Error(data?.error?.message||data?.error||`AI görsel servisi ${res.status}`);
-    if(!data?.imageData) throw new Error('AI görsel servisi görsel döndürmedi.');
-    return data;
-  }catch(err){ console.warn('AI görsel alınamadı:',err); return null; }
+    const govde = {
+      model: 'llama-3.1-8b-instant',
+      max_tokens: 220,
+      temperature: 0.7,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role:'system', content:'Sen bir şiirden GIF arama terimi ve görsel üzerine bindirilecek kısa bir Türkçe alıntı/aforizma çıkaran bir asistansın. SADECE geçerli JSON döndürürsün, başka hiçbir şey yazmazsın.' },
+        { role:'user', content:
+          `Aşağıdaki şiiri oku.\n\n"""\n${(text||'').slice(0,800)}\n"""\n\nBaşlık: ${title||'(başlıksız)'}\n\n`+
+          `Şunları üret:\n`+
+          `1) "subject": Şiirde geçen, GÖRSEL OLARAK ÇİZİLEBİLİR/ÇEKİLEBİLİR somut ana konu (bir hayvan, nesne, doğa öğesi, eylem, mekan vb. — örn. "kedi" varsa "cat", "deniz" varsa "ocean", "yağmur" varsa "rain"). Şiir soyut/duygusal ve somut bir varlık/nesne/hayvan geçmiyorsa en baskın somut imgeyi seç (örn. "gece", "ateş", "yıldız"). Bu alan İNGİLİZCE, TEK bir kelime veya kısa öbek olmalı, ASLA boş bırakma.\n`+
+          `2) "mood": Şiirin ruh halini/tonunu yansıtan, "subject" ile BİRLİKTE Giphy'de aratılacak, İNGİLİZCE tek bir kelime (örn. "cute", "calm", "melancholic", "playful", "peaceful"). Şiir kedi/köpek gibi sevimli bir konudaysa "cute" veya "funny" gibi kelimeler tercih et.\n`+
+          `3) "caption": Görselin üzerine bindirilecek, TÜRKÇE, en fazla 12 kelimelik kısa bir metin. Şiirde temayla çok uyumlu, güçlü ve en fazla 12 kelimelik bir mısra varsa onu OLDUĞU GİBİ (kelimesi kelimesine, değiştirmeden) kullan. Uygun bir mısra yoksa, şiirin konusuna uygun ÖZGÜN kısa bir Türkçe aforizma yaz (şiirden birebir alıntı değil, senin ürettiğin, klişe olmayan).\n\n`+
+          `SADECE şu JSON ile yanıt ver, başka hiçbir şey yazma:\n{"subject":"...","mood":"...","caption":"..."}`
+        }
+      ]
+    };
+    const res = await fetch('/api/groq', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(govde) });
+    if(!res.ok) return null;
+    const data = await res.json();
+    const raw = data?.choices?.[0]?.message?.content?.trim();
+    if(!raw) return null;
+    const clean = raw.replace(/```json|```/g,'').trim();
+    const jsonStr = clean.slice(clean.indexOf('{'), clean.lastIndexOf('}')+1);
+    const parsed = JSON.parse(jsonStr);
+    const subject = (parsed.subject||'').toString().replace(/["'.]/g,'').trim().slice(0,40) || null;
+    const mood = (parsed.mood||'').toString().replace(/["'.]/g,'').trim().slice(0,30) || null;
+    const caption = (parsed.caption||'').toString().replace(/^["'“”]+|["'“”]+$/g,'').trim().slice(0,140) || null;
+    // "subject" ana/zorunlu arama terimi; "mood" ona eşlik eder. subject boşsa
+    // (nadiren) mood'u tek başına kullan; ikisi de boşsa null dön (aşağıda yerel yedek devreye girer).
+    const keywords = subject && mood ? `${subject} ${mood}` : (subject || mood || null);
+    return { keywords, subject, mood, caption };
+  }catch{ return null; }
 }
-
-async function aiGorseliFirebaseStorageyaYukle(postId,imageData,mimeType='image/png'){
-  if(!imageData || !S.me) return null;
-  try{
-    const parcalar=imageData.split(',');
-    const base64=parcalar.length>1?parcalar[1]:parcalar[0];
-    const byteChars=atob(base64);
-    const bytes=new Uint8Array(byteChars.length);
-    for(let i=0;i<byteChars.length;i++) bytes[i]=byteChars.charCodeAt(i);
-    const blob=new Blob([bytes],{type:mimeType});
-    const uzanti=mimeType.includes('jpeg')||mimeType.includes('jpg')?'jpg':'png';
-    const yol=`ai-post-images/${postId}/${Date.now()}.${uzanti}`;
-    const snap=await storage.ref().child(yol).put(blob,{contentType:mimeType,customMetadata:{source:'gemini-ai-image'}});
-    return await snap.ref.getDownloadURL();
-  }catch(err){
-    console.error('AI görsel Firebase Storage yükleme hatası:',err);
-    throw new Error("AI görseli Firebase Storage'a yüklenemedi.");
+// Groq tamamen başarısız olursa (kota, ağ, JSON hatası) devreye giren, şiirde geçen
+// sık kullanılan Türkçe kelimelerden basit bir İngilizce arama terimi üreten yerel
+// yedek. Amaç: en azından şiirin çok bariz somut konusunu (kedi, deniz, yağmur vb.)
+// yakalayıp tamamen alakasız bir gif gelmesini önlemek.
+const TR_EN_ANAHTAR_SOZLUK = [
+  [/\bkedi(ler)?\b/i,'cat'], [/\bköpek|köpeğ/i,'dog'], [/\bkuş(lar)?\b/i,'bird'],
+  [/\bdeniz/i,'ocean'], [/\byağmur/i,'rain'], [/\bkar\b|\bkarlar/i,'snow'],
+  [/\bgüneş/i,'sun'], [/\bay\b|\bayışığı/i,'moon'], [/\byıldız/i,'stars'],
+  [/\bçiçe(k|kler)/i,'flowers'], [/\bağaç/i,'tree'], [/\borman/i,'forest'],
+  [/\bateş/i,'fire'], [/\brüzgar|rüzgâr/i,'wind'], [/\bgece/i,'night'],
+  [/\bsabah/i,'sunrise'], [/\başk/i,'love'], [/\bkalp/i,'heart'],
+  [/\bgözyaşı|ağla/i,'tears'], [/\byalnız/i,'loneliness'], [/\bdağ(lar)?\b/i,'mountains'],
+  [/\bnehir|ırmak/i,'river'], [/\bçocuk/i,'child'], [/\banne\b/i,'mother'],
+  [/\bkahve/i,'coffee'], [/\bkitap/i,'book'], [/\bmüzik/i,'music'],
+];
+function turkceMetindenYerelAnahtarKelime(title, text){
+  const birlesik = `${title||''} ${text||''}`;
+  for(const [regex, en] of TR_EN_ANAHTAR_SOZLUK){
+    if(regex.test(birlesik)) return en;
   }
+  return null;
 }
-
-async function aiGorselUretVeKaydet(postId, opts={}){
-  const idx=S.posts.findIndex(p=>p.id===postId);
-  if(idx<0) throw new Error('Şiir bulunamadı.');
-  const post=S.posts[idx];
-  if(S.me?.username!==ADMIN_USERNAME && !opts.automatic) throw new Error('Bu işlem yalnızca admin içindir.');
-  const result=await siirIcinAiGorselGetir(post.title,post.text);
-  if(!result?.imageData) throw new Error('AI görsel oluşturulamadı.');
-  const imageUrl=await aiGorseliFirebaseStorageyaYukle(postId,result.imageData,result.mimeType||'image/png');
-  if(!imageUrl) throw new Error("AI görsel URL'si alınamadı.");
-  const updates={image:imageUrl,autoAiImage:true,autoGif:false,gifCaption:null,aiImageExcerpt:result.excerpt||null,aiImagePrompt:result.prompt||null,aiImageModel:result.model||'gemini-3.1-flash-image',aiImageUpdatedAt:Date.now()};
-  S.posts[idx]={...S.posts[idx],...updates};
-  save();
-  await db.collection('posts').doc(postId).update(updates);
-  facebookOnizlemeyiTazele(postId);
-  refreshCard(postId);
-  return updates;
+async function siirIcinOtomatikGifGetir(title, text){
+  let veri = await siirIcinGifVerileriGetir(title, text);
+  if(!veri?.keywords){
+    const yerel = turkceMetindenYerelAnahtarKelime(title, text);
+    veri = { ...(veri||{}), keywords: yerel ? `${yerel} aesthetic` : 'nature calm aesthetic' };
+  }
+  try{
+    const res = await fetch('/api/giphy', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ query: veri.keywords }) });
+    if(!res.ok){
+      let mesaj='';
+      try{ const errBody=await res.json(); mesaj=errBody?.error?.message||''; }catch(_){}
+      console.warn('Otomatik GIF alınamadı:', mesaj || res.status);
+      return null;
+    }
+    const data = await res.json();
+    if(!data?.gifUrl) return null;
+    return { gifUrl: data.gifUrl, caption: veri?.caption || null };
+  }catch(e){ console.warn('Otomatik GIF alınamadı:', e.message); return null; }
 }
-
-// Görsel/YouTube eklenmemiş yeni şiirlere arka planda otomatik AI görseli ekler.
-function otomatikAiGorselUygulaGerekirse(postId,title,text,mevcutGorsel,mevcutYoutube){
+// Bir paylaşımda ne görsel ne YouTube linki varsa arka planda otomatik GIF+alıntı uygular.
+// Kullanıcı bu sırada kendi görselini/linkini eklerse üzerine yazmaz (race-condition koruması).
+function otomatikGifUygulaGerekirse(postId, title, text, mevcutGorsel, mevcutYoutube){
   if(mevcutGorsel || ytId(mevcutYoutube)) return;
-  const idx=S.posts.findIndex(p=>p.id===postId);
-  if(idx<0 || S.posts[idx].image || ytId(S.posts[idx].youtube)) return;
-  siirIcinAiGorselGetir(title,text).then(async sonuc=>{
-    if(!sonuc?.imageData) return;
-    const current=S.posts.findIndex(p=>p.id===postId);
-    if(current<0 || S.posts[current].image || ytId(S.posts[current].youtube)) return;
-    try{
-      const imageUrl=await aiGorseliFirebaseStorageyaYukle(postId,sonuc.imageData,sonuc.mimeType||'image/png');
-      if(!imageUrl) return;
-      const updates={image:imageUrl,autoAiImage:true,autoGif:false,gifCaption:null,aiImageExcerpt:sonuc.excerpt||null,aiImagePrompt:sonuc.prompt||null,aiImageModel:sonuc.model||'gemini-3.1-flash-image',aiImageUpdatedAt:Date.now()};
-      S.posts[current]={...S.posts[current],...updates};
-      save(); refreshCard(postId);
-      db.collection('posts').doc(postId).update(updates).catch(err=>console.error('Otomatik AI görsel kaydetme hatası:',err));
-    }catch(err){ console.warn('Otomatik AI görsel yükleme başarısız:',err); }
+  siirIcinOtomatikGifGetir(title, text).then(sonuc=>{
+    if(!sonuc?.gifUrl) return;
+    const idx = S.posts.findIndex(p=>p.id===postId);
+    if(idx<0) return;
+    if(S.posts[idx].image || ytId(S.posts[idx].youtube)) return;
+    S.posts[idx].image = sonuc.gifUrl;
+    S.posts[idx].autoGif = true;
+    S.posts[idx].gifCaption = sonuc.caption || null;
+    save();
+    refreshCard(postId);
+    db.collection("posts").doc(postId).update({ image: sonuc.gifUrl, autoGif: true, gifCaption: sonuc.caption || null }).catch(err=>console.error("Otomatik GIF kaydetme hatası:",err));
   });
 }
-
 // Otomatik bulunmuş bir GIF'in (post.autoGif) üzerine, varsa post.gifCaption metnini
 // alt kısımda okunaklı bir gradyan üzerinde bindirir. imgEl'i saran, position:relative
 // bir wrapper döndürür; caption yoksa imgEl aynen (değişmeden) geri döner.
@@ -2163,7 +2185,7 @@ A.addPost = async function(pd){
     }
     db.collection("posts").doc(np.id).set(np).catch(err=>console.error("Kaydetme hatası:",err));
     facebookOnizlemeyiTazele(np.id);
-    otomatikAiGorselUygulaGerekirse(np.id, np.title, np.text, np.image, np.youtube);
+    otomatikGifUygulaGerekirse(np.id, np.title, np.text, np.image, np.youtube);
 
     // Takipçilere yeni paylaşım bildirimi gönder
     const takipciler = Object.keys(S.follows).filter(uid => (S.follows[uid]||[]).includes(S.me.id));
@@ -2182,19 +2204,6 @@ A.deletePost = function(pid){
 // Şiir sahibi kendi paylaşımının başlığını/metnini/görselini/YouTube linkini düzenler.
 // AI puanı ve mevcut yorumlar korunur (yeniden değerlendirme yapılmaz), sadece
 // "(düzenlendi)" ibaresi eklenir.
-A.pinPost = function(pid){
-    if(!S.me || S.me.username!==ADMIN_USERNAME) return;
-    const pIndex=S.posts.findIndex(p=>p.id===pid);
-    if(pIndex<0) return;
-    const post=S.posts[pIndex];
-    const sabitle=!(post.pinnedAt||0);
-    const pinnedAt=sabitle?Date.now():null;
-    S.posts[pIndex]={...post,pinnedAt};
-    postSirala(S.posts);
-    save(); render();
-    db.collection('posts').doc(pid).update({pinnedAt}).catch(err=>console.error('Üste taşıma hatası:',err));
-    toastGoster(sabitle?'📌 Şiir en üste taşındı.':'📍 Şiir normal sıralamaya döndü.');
-};
 A.editPost = function(pid, updates){
     if(!S.me) return;
     const pIndex = S.posts.findIndex(p=>p.id===pid);
@@ -2208,10 +2217,21 @@ A.editPost = function(pid, updates){
     db.collection("posts").doc(pid).update({...updates, edited:true}).catch(err=>console.error("Düzenleme hatası:",err));
     facebookOnizlemeyiTazele(pid);
     const guncelPost = S.posts[pIndex];
-    if(!guncelPost.image && !ytId(guncelPost.youtube)){ otomatikAiGorselUygulaGerekirse(pid, guncelPost.title, guncelPost.text, guncelPost.image, guncelPost.youtube); }
+    otomatikGifUygulaGerekirse(pid, guncelPost.title, guncelPost.text, guncelPost.image, guncelPost.youtube);
 };
 // Kullanıcı kendi şiirini akıştan/keşfetten/sıralamadan gizler (silmeden).
 // Gizli şiirler yalnızca sahibinin kendi profilinde görünür ve oradan tekrar aktif edilebilir.
+A.togglePostPinned = function(pid){
+    if(!S.me || S.me.username !== ADMIN_USERNAME) return;
+    const idx = S.posts.findIndex(p=>p.id===pid);
+    if(idx<0) return;
+    const post = S.posts[idx];
+    const yeniPinnedAt = post.pinnedAt ? null : Date.now();
+    S.posts[idx] = {...post, pinnedAt: yeniPinnedAt};
+    save(); render();
+    db.collection('posts').doc(pid).update({pinnedAt: yeniPinnedAt}).catch(err=>console.error('Üste taşıma hatası:',err));
+};
+
 A.togglePostHidden = function(pid){
     if(!S.me) return;
     const pIndex = S.posts.findIndex(p=>p.id===pid);
@@ -2625,6 +2645,28 @@ function navBar(){
 }
 
 
+async function adminYapayZekaGorseliYenile(post){
+  if(!S.me || S.me.username!==ADMIN_USERNAME) throw new Error('Bu işlem yalnızca admin içindir.');
+  const r=await fetch('/api/ai-image',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:post.title||'',text:post.text||''})});
+  let data={}; try{data=await r.json();}catch(_){ }
+  if(!r.ok) throw new Error(data.error||('Sunucu hatası ('+r.status+')'));
+  if(!data.imageData) throw new Error('Yapay zeka görsel döndürmedi.');
+  const m=data.imageData.match(/^data:(image\/[^;]+);base64,(.+)$/);
+  if(!m) throw new Error('Görsel verisi geçersiz.');
+  const mime=m[1], bin=atob(m[2]);
+  const bytes=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) bytes[i]=bin.charCodeAt(i);
+  const blob=new Blob([bytes],{type:mime});
+  const ext=(mime.split('/')[1]||'png').replace('jpeg','jpg');
+  const path='ai-post-images/'+post.id+'/'+Date.now()+'.'+ext;
+  const snap=await storage.ref().child(path).put(blob,{contentType:mime,cacheControl:'public,max-age=31536000'});
+  const url=await snap.ref.getDownloadURL();
+  const idx=S.posts.findIndex(p=>p.id===post.id); if(idx<0) throw new Error('Paylaşım bulunamadı.');
+  S.posts[idx]={...S.posts[idx],image:url,autoGif:false,gifCaption:null,aiImage:true,aiImageUpdatedAt:Date.now()};
+  save();
+  await db.collection('posts').doc(post.id).update({image:url,autoGif:false,gifCaption:null,aiImage:true,aiImageUpdatedAt:Date.now()});
+  refreshCard(post.id);
+}
+
 function postCard(post, forceExpand=false, autoOpenComments=false, hedefYorumId=null){
   const author=byId(post.authorId);
   const vid=ytId(post.youtube);
@@ -2660,11 +2702,10 @@ function postCard(post, forceExpand=false, autoOpenComments=false, hedefYorumId=
     card.appendChild(hideBtn);
   }
 
-  // SADECE ADMIN: paylaşımı akışın en üstüne sabitle / sabitlemeyi kaldır
   if(isAdmin){
-    const pinBtn=h('button',{class:'absolute-pin-post'+(post.pinnedAt?' active-pinned':''),onclick:(e)=>{
+    const pinBtn=h('button',{class:'btn',style:{position:'absolute',top:'8px',right:'8px',zIndex:'5',padding:'5px 9px',fontSize:'.7rem',borderRadius:'18px',background:post.pinnedAt?'#3b1d6b':'#140d22',border:'1px solid #7c3aed',color:'#c4b5fd'},onclick:(e)=>{
       e.stopPropagation();
-      A.pinPost(post.id);
+      A.togglePostPinned(post.id);
     }},post.pinnedAt?'📍 Üstten Kaldır':'📌 Üste Taşı');
     card.appendChild(pinBtn);
   }
@@ -2821,30 +2862,8 @@ function postCard(post, forceExpand=false, autoOpenComments=false, hedefYorumId=
     modelSecici.value=adminSecilenSaglayici;
     modelSecici.onclick=e=>e.stopPropagation();
     modelSecici.onchange=e=>{adminSecilenSaglayici=e.target.value;};
-    const revalBtn2=h('button',{class:'btn',style:{flex:'1',minWidth:'220px',background:'linear-gradient(135deg,#1e1040,#2d1b52)',color:'#a78bfa',border:'1px solid #5b21b6',fontSize:'.8rem',padding:'8px'}}, '🤖 Yapay Zeka ile Yeniden Değerlendir');
+    const revalBtn2=h('button',{class:'btn',style:{width:'100%',background:'linear-gradient(135deg,#1e1040,#2d1b52)',color:'#a78bfa',border:'1px solid #5b21b6',fontSize:'.8rem',padding:'8px'}}, '🤖 Yapay Zeka ile Yeniden Değerlendir');
     const revalStatus=h('p',{class:'reval-status',style:{fontSize:'.75rem',color:'#6b5b8a',marginTop:'6px',textAlign:'center',display:'none'}});
-    const aiImageBtn=h('button',{class:'btn',style:{flex:'1',background:'linear-gradient(135deg,#064e3b,#065f46)',color:'#a7f3d0',border:'1px solid #059669',fontSize:'.8rem',padding:'8px'}},'🎨 AI Görseli Yenile');
-    const aiImageStatus=h('p',{class:'ai-image-status'});
-    aiImageBtn.onclick=async(e)=>{
-      e.stopPropagation();
-      aiImageBtn.disabled=true;
-      revalBtn2.disabled=true;
-      aiImageBtn.textContent='⏳ Görsel hazırlanıyor...';
-      aiImageStatus.style.display='block';
-      aiImageStatus.textContent='Gemini şiirin konusunu ve uygun mısrayı analiz ediyor...';
-      try{
-        await aiGorselUretVeKaydet(post.id,{automatic:false});
-        aiImageStatus.textContent='✅ Görsel yenilendi.';
-        aiImageStatus.style.color='#34d399';
-      }catch(err){
-        aiImageStatus.textContent='❌ Hata: '+err.message;
-        aiImageStatus.style.color='#f87171';
-      }finally{
-        aiImageBtn.disabled=false;
-        revalBtn2.disabled=false;
-        aiImageBtn.textContent='🎨 AI Görseli Yenile';
-      }
-    };
     revalBtn2.onclick=async(e)=>{
       e.stopPropagation();
       revalBtn2.disabled=true;
@@ -2907,11 +2926,19 @@ function postCard(post, forceExpand=false, autoOpenComments=false, hedefYorumId=
       revalBtn2.disabled=false;
       revalBtn2.textContent='🤖 Yapay Zeka ile Yeniden Değerlendir';
     };
+    const aiImageBtn=h('button',{class:'btn',style:{width:'100%',marginTop:'6px',background:'linear-gradient(135deg,#10251d,#123b2c)',color:'#86efac',border:'1px solid #166534',fontSize:'.8rem',padding:'8px'}},'🎨 Yapay Zeka ile Yeniden Resim Oluştur');
+    aiImageBtn.onclick=async(e)=>{
+      e.stopPropagation();
+      aiImageBtn.disabled=true; aiImageBtn.textContent='⏳ Yeni görsel hazırlanıyor...';
+      revalStatus.style.display='block'; revalStatus.style.color='#6b5b8a'; revalStatus.textContent='Şiir analiz ediliyor ve yeni görsel oluşturuluyor...';
+      try{ await adminYapayZekaGorseliYenile(post); revalStatus.textContent='✅ Görsel yenilendi.'; revalStatus.style.color='#34d399'; }
+      catch(err){ revalStatus.textContent='❌ Görsel hatası: '+err.message; revalStatus.style.color='#f87171'; }
+      aiImageBtn.disabled=false; aiImageBtn.textContent='🎨 Yapay Zeka ile Yeniden Resim Oluştur';
+    };
+    const actionRow=h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'6px'}},[revalBtn2,aiImageBtn]);
     revalDiv.appendChild(modelSecici);
-    const adminAiRow=h('div',{style:{display:'flex',gap:'8px',flexWrap:'wrap'}},[revalBtn2,aiImageBtn]);
-    revalDiv.appendChild(adminAiRow);
+    revalDiv.appendChild(actionRow);
     revalDiv.appendChild(revalStatus);
-    revalDiv.appendChild(aiImageStatus);
     full.appendChild(revalDiv);
   }
   if(avg!==null) full.appendChild(h('p',{style:{fontSize:'.82rem',color:scoreColor(avg),textAlign:'center',marginBottom:'10px'}},scoreBadge(avg)));
