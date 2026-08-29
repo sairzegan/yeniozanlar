@@ -1880,25 +1880,36 @@ async function botAriPuan(text, zorunluModel=null) {
 }
 
 // ── AKSİYONLAR (devam) ───────────────────────────────────────────────────────
-// ── Otomatik GIF (görsel/YouTube eklenmemiş paylaşımlar için) ───────────────
+// ── Otomatik GIF + Türkçe alıntı/aforizma (görsel/YouTube eklenmemiş paylaşımlar için) ──
 // Kullanıcı ne bir görsel yükler ne de YouTube linki eklerse, şiirin temasına/
-// ruh haline uygun bir GIF'i arka planda otomatik bulup ekleriz. İki adım:
-//   1) Groq (mevcut GROQ_API_KEY, en ucuz/hızlı model) şiirden 2-4 İngilizce
-//      GIF arama anahtar kelimesi çıkarır (Giphy Türkçe aramada zayıf kalır).
+// ruh haline uygun bir GIF'i, üzerine bindirilecek Türkçe bir mısra/aforizma ile
+// birlikte arka planda otomatik bulup ekleriz. İki adım:
+//   1) Groq (mevcut GROQ_API_KEY, en ucuz/hızlı model) tek çağrıda hem Giphy
+//      aramasında kullanılacak 2-4 İngilizce anahtar kelimeyi (Giphy Türkçe
+//      aramada zayıf kalır) HEM DE görselin üzerine yazılacak kısa Türkçe metni
+//      üretir — mümkünse şiirden birebir uygun bir mısra, yoksa temaya uygun
+//      özgün bir aforizma.
 //   2) /api/giphy o anahtar kelimelerle Giphy'de arama yapar ve bir GIF döner.
-// Herhangi bir adım başarısız olursa (kota, eksik anahtar, ağ hatası vb.)
-// sessizce vazgeçilir — paylaşım akışı ASLA engellenmez, sadece görselsiz kalır.
+// Herhangi bir adım başarısız olursa (kota, eksik anahtar, ağ hatası, geçersiz
+// JSON vb.) sessizce vazgeçilir — paylaşım akışı ASLA engellenmez.
 // Kurulum: Vercel → Settings → Environment Variables → GIPHY_API_KEY ekleyip
 // yeniden deploy edin (bkz. /api/giphy.js). Anahtar: developers.giphy.com
-async function siirIcinGifAnahtarKelimeleriGetir(title, text){
+async function siirIcinGifVerileriGetir(title, text){
   try{
     const govde = {
       model: 'llama-3.1-8b-instant',
-      max_tokens: 40,
-      temperature: 0.6,
+      max_tokens: 220,
+      temperature: 0.8,
+      response_format: { type: 'json_object' },
       messages: [
-        { role:'system', content:'Sana bir şiir verilecek. Bu şiirin ruh halini, temasını ve imgelerini en iyi yansıtan, Giphy GIF aramasında kullanılacak 2-4 kısa İNGİLİZCE anahtar kelime üret. SADECE virgülle ayrılmış kelimeleri yaz, başka hiçbir şey yazma, tırnak kullanma. Örnek çıktı: rain, loneliness, night sky' },
-        { role:'user', content:`Başlık: ${title||'(başlıksız)'}\n\nŞiir:\n${(text||'').slice(0,600)}` }
+        { role:'system', content:'Sen bir şiirden GIF arama anahtar kelimesi ve görsel üzerine bindirilecek kısa bir Türkçe alıntı/aforizma çıkaran bir asistansın. SADECE geçerli JSON döndürürsün, başka hiçbir şey yazmazsın.' },
+        { role:'user', content:
+          `Aşağıdaki şiiri oku.\n\n"""\n${(text||'').slice(0,800)}\n"""\n\nBaşlık: ${title||'(başlıksız)'}\n\n`+
+          `Şunları üret:\n`+
+          `1) "keywords": Bu şiirin ruh halini/temasını/imgelerini yansıtan, Giphy GIF aramasında kullanılacak 2-4 kısa İNGİLİZCE kelime (virgülle ayrılmış tek bir metin, tırnak yok).\n`+
+          `2) "caption": Görselin üzerine bindirilecek, TÜRKÇE, en fazla 12 kelimelik kısa bir metin. Şiirde temayla çok uyumlu, güçlü ve en fazla 12 kelimelik bir mısra varsa onu OLDUĞU GİBİ (kelimesi kelimesine, değiştirmeden) kullan. Uygun bir mısra yoksa, şiirin konusuna uygun ÖZGÜN kısa bir Türkçe aforizma yaz (şiirden birebir alıntı değil, senin ürettiğin, klişe olmayan).\n\n`+
+          `SADECE şu JSON ile yanıt ver, başka hiçbir şey yazma:\n{"keywords":"...","caption":"..."}`
+        }
       ]
     };
     const res = await fetch('/api/groq', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(govde) });
@@ -1906,11 +1917,17 @@ async function siirIcinGifAnahtarKelimeleriGetir(title, text){
     const data = await res.json();
     const raw = data?.choices?.[0]?.message?.content?.trim();
     if(!raw) return null;
-    return raw.replace(/["'.]/g,'').slice(0,100);
+    const clean = raw.replace(/```json|```/g,'').trim();
+    const jsonStr = clean.slice(clean.indexOf('{'), clean.lastIndexOf('}')+1);
+    const parsed = JSON.parse(jsonStr);
+    const keywords = (parsed.keywords||'').toString().replace(/["'.]/g,'').trim().slice(0,100) || null;
+    const caption = (parsed.caption||'').toString().replace(/^["'“”]+|["'“”]+$/g,'').trim().slice(0,140) || null;
+    return { keywords, caption };
   }catch{ return null; }
 }
 async function siirIcinOtomatikGifGetir(title, text){
-  const anahtarKelime = await siirIcinGifAnahtarKelimeleriGetir(title, text) || 'poetry mood aesthetic';
+  const veri = await siirIcinGifVerileriGetir(title, text);
+  const anahtarKelime = veri?.keywords || 'poetry mood aesthetic';
   try{
     const res = await fetch('/api/giphy', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ query: anahtarKelime }) });
     if(!res.ok){
@@ -1920,24 +1937,55 @@ async function siirIcinOtomatikGifGetir(title, text){
       return null;
     }
     const data = await res.json();
-    return data?.gifUrl || null;
+    if(!data?.gifUrl) return null;
+    return { gifUrl: data.gifUrl, caption: veri?.caption || null };
   }catch(e){ console.warn('Otomatik GIF alınamadı:', e.message); return null; }
 }
-// Bir paylaşımda ne görsel ne YouTube linki varsa arka planda otomatik GIF uygular.
+// Bir paylaşımda ne görsel ne YouTube linki varsa arka planda otomatik GIF+alıntı uygular.
 // Kullanıcı bu sırada kendi görselini/linkini eklerse üzerine yazmaz (race-condition koruması).
 function otomatikGifUygulaGerekirse(postId, title, text, mevcutGorsel, mevcutYoutube){
   if(mevcutGorsel || ytId(mevcutYoutube)) return;
-  siirIcinOtomatikGifGetir(title, text).then(gifUrl=>{
-    if(!gifUrl) return;
+  siirIcinOtomatikGifGetir(title, text).then(sonuc=>{
+    if(!sonuc?.gifUrl) return;
     const idx = S.posts.findIndex(p=>p.id===postId);
     if(idx<0) return;
     if(S.posts[idx].image || ytId(S.posts[idx].youtube)) return;
-    S.posts[idx].image = gifUrl;
+    S.posts[idx].image = sonuc.gifUrl;
     S.posts[idx].autoGif = true;
+    S.posts[idx].gifCaption = sonuc.caption || null;
     save();
     refreshCard(postId);
-    db.collection("posts").doc(postId).update({ image: gifUrl, autoGif: true }).catch(err=>console.error("Otomatik GIF kaydetme hatası:",err));
+    db.collection("posts").doc(postId).update({ image: sonuc.gifUrl, autoGif: true, gifCaption: sonuc.caption || null }).catch(err=>console.error("Otomatik GIF kaydetme hatası:",err));
   });
+}
+// Otomatik bulunmuş bir GIF'in (post.autoGif) üzerine, varsa post.gifCaption metnini
+// alt kısımda okunaklı bir gradyan üzerinde bindirir. imgEl'i saran, position:relative
+// bir wrapper döndürür; caption yoksa imgEl aynen (değişmeden) geri döner.
+// opts.marginBottom / opts.borderRadius, imgEl'in ORİJİNAL inline stilinden wrapper'a taşınır
+// (imgEl kendisi marginBottom:0 olur), böylece dış görünüm/aralıklar bozulmaz.
+function gifUzeriAforizmaBindir(imgEl, post, opts={}){
+  if(!post?.autoGif || !post?.gifCaption) return imgEl;
+  const marginBottom = opts.marginBottom || '0';
+  const borderRadius = opts.borderRadius || '0';
+  imgEl.style.marginBottom = '0';
+  imgEl.style.display = 'block';
+  const wrap = h('div',{style:{position:'relative',width:'100%',marginBottom,borderRadius,overflow:'hidden'}});
+  wrap.appendChild(imgEl);
+  const capBox = h('div',{style:{
+    position:'absolute',left:'0',right:'0',bottom:'0',
+    padding:'26px 16px 12px',
+    background:'linear-gradient(to top, rgba(10,7,20,.92), rgba(10,7,20,.05) 80%, transparent)',
+    pointerEvents:'none'
+  }});
+  const capText = h('p',{style:{
+    fontFamily:"'Playfair Display',serif",fontStyle:'italic',fontWeight:'700',
+    color:'#f5edff',fontSize:'.92rem',lineHeight:'1.45',textAlign:'center',
+    textShadow:'0 2px 10px rgba(0,0,0,.7)'
+  }});
+  capText.textContent = `"${post.gifCaption}"`;
+  capBox.appendChild(capText);
+  wrap.appendChild(capBox);
+  return wrap;
 }
 
 A.addPost = async function(pd){
@@ -2321,7 +2369,8 @@ function postCard(post, forceExpand=false, autoOpenComments=false, hedefYorumId=
   const preview=h('div',{style:{cursor:'pointer'}});
   // görsel varsa üstte
   if(post.image){
-    preview.appendChild(h('img',{src:post.image,style:{width:'100%',borderRadius:'10px',marginBottom:'10px',height:'300px',objectFit:'cover'}}));
+    const previewImg=h('img',{src:post.image,style:{width:'100%',borderRadius:'10px',marginBottom:'10px',height:'300px',objectFit:'cover'}});
+    preview.appendChild(gifUzeriAforizmaBindir(previewImg, post, {marginBottom:'10px', borderRadius:'10px'}));
   } else if(vid){
     const yt=h('div',{style:{width:'100%',height:'300px',borderRadius:'10px',marginBottom:'10px',overflow:'hidden',position:'relative',background:'#000'}});
     yt.innerHTML=`<img src="https://img.youtube.com/vi/${vid}/mqdefault.jpg" style="width:100%;height:100%;object-fit:cover;opacity:.8"><div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center"><span style="font-size:2.5rem">▶️</span></div>`;
@@ -2378,7 +2427,10 @@ function postCard(post, forceExpand=false, autoOpenComments=false, hedefYorumId=
 
   if(post.title){const t=h('h3',{style:{fontFamily:"'Playfair Display',serif",fontSize:'1.1rem',color:'#e9d5ff',fontStyle:'italic',marginBottom:'10px',paddingBottom:'8px',borderBottom:'1px solid #2d1b52'}},`"${post.title}"`);full.appendChild(t);}
   if(post.text) full.appendChild(h('p',{style:{fontFamily:"'Crimson Text',serif",fontSize:'1.05rem',color:'#ddd6fe',lineHeight:'1.9',whiteSpace:'pre-wrap',marginBottom:'14px'}},post.text));
-  if(post.image) full.appendChild(h('img',{src:post.image,style:{width:'100%',height:'auto',borderRadius:'12px',marginBottom:'14px',display:'block'}}));
+  if(post.image){
+    const fullImg=h('img',{src:post.image,style:{width:'100%',height:'auto',borderRadius:'12px',marginBottom:'14px',display:'block'}});
+    full.appendChild(gifUzeriAforizmaBindir(fullImg, post, {marginBottom:'14px', borderRadius:'12px'}));
+  }
   if(vid){const w=h('div',{style:{borderRadius:'12px',overflow:'hidden',marginBottom:'14px'}});w.innerHTML=`<iframe src="https://www.youtube.com/embed/${vid}" allowfullscreen style="width:100%;aspect-ratio:16/9;border:none;border-radius:12px"></iframe>`;full.appendChild(w);}
 
   // Instagram Hikayede paylaş (tam görünümde, gözden kaçmasın diye tam genişlik buton)
@@ -3020,7 +3072,8 @@ function swipeCard(post,sonrakineGec){
 
   // Görsel/video varsa üstte; aşağı kaydırınca altındaki şiir metni okunur.
   if(post.image){
-    scroller.appendChild(h('img',{src:post.image,class:'swipe-media-img'}));
+    const swipeImg=h('img',{src:post.image,class:'swipe-media-img'});
+    scroller.appendChild(gifUzeriAforizmaBindir(swipeImg, post, {marginBottom:'16px', borderRadius:'14px'}));
   } else if(vid){
     const w=h('div',{class:'swipe-media-video'});
     w.innerHTML=`<iframe src="https://www.youtube.com/embed/${vid}?autoplay=1&mute=1&playsinline=1&rel=0&modestbranding=1" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe>`;
