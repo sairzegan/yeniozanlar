@@ -2697,7 +2697,7 @@ async function adminYapayZekaGorseliYenile(post){
     save();
     await db.collection('posts').doc(post.id).update({image:url,autoGif:false,gifCaption:null,aiImage:true,aiImageUpdatedAt:Date.now()});
     refreshCard(post.id);
-    return {type:'ai'};
+    return {type:'ai',provider:data.provider||'gemini',model:data.model||null};
   }catch(err){
     // Gemini kotası dolduğunda (veya AI endpoint'i başka nedenle başarısız olduğunda)
     // buton çalışmaya devam eder: şiire uygun, mevcut GIF'ten farklı yeni bir GIPHY getirir.
@@ -2974,10 +2974,13 @@ function postCard(post, forceExpand=false, autoOpenComments=false, hedefYorumId=
       try{
         const sonuc=await adminYapayZekaGorseliYenile(post);
         if(sonuc?.type==='giphy'){
-          revalStatus.textContent='🔄 Gemini kotası dolu/AI kullanılamıyor; farklı bir GIPHY getirildi.';
+          revalStatus.textContent='🔄 AI sağlayıcıları kullanılamadı; farklı bir GIPHY getirildi.';
           revalStatus.style.color='#fbbf24';
+        }else if(sonuc?.provider==='pollinations'){
+          revalStatus.textContent='✅ Gemini kullanılamadı; Pollinations ile yeni AI görseli oluşturuldu.';
+          revalStatus.style.color='#34d399';
         }else{
-          revalStatus.textContent='✅ Görsel yenilendi.';
+          revalStatus.textContent='✅ Gemini ile yeni görsel yenilendi.';
           revalStatus.style.color='#34d399';
         }
       }catch(err){ revalStatus.textContent='❌ Görsel/GIPHY hatası: '+err.message; revalStatus.style.color='#f87171'; }
