@@ -40,7 +40,11 @@ export default async function handler(req, res) {
     }
 
     // Hep aynı sonucu vermesin diye ilk birkaç sonuç arasından rastgele seç.
-    const havuz = results.slice(0, Math.min(5, results.length));
+    // Havuz kasıtlı olarak DAR tutuluyor (3): arama terimi ne kadar somut/spesifik
+    // olursa olsun, Giphy'nin 4-5. sıradaki sonuçları alakasını kaybedebiliyor
+    // (ör. "cat" araması genel bir "meme" gif'ine kayabiliyor). İlk 3 sonuç
+    // alaka sıralamasında en güvenilir olanlar.
+    const havuz = results.slice(0, Math.min(3, results.length));
     const pick = havuz[Math.floor(Math.random() * havuz.length)];
 
     const gifUrl =
