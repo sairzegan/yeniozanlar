@@ -1899,16 +1899,17 @@ async function siirIcinGifVerileriGetir(title, text){
     const govde = {
       model: 'llama-3.1-8b-instant',
       max_tokens: 220,
-      temperature: 0.8,
+      temperature: 0.7,
       response_format: { type: 'json_object' },
       messages: [
-        { role:'system', content:'Sen bir şiirden GIF arama anahtar kelimesi ve görsel üzerine bindirilecek kısa bir Türkçe alıntı/aforizma çıkaran bir asistansın. SADECE geçerli JSON döndürürsün, başka hiçbir şey yazmazsın.' },
+        { role:'system', content:'Sen bir şiirden GIF arama terimi ve görsel üzerine bindirilecek kısa bir Türkçe alıntı/aforizma çıkaran bir asistansın. SADECE geçerli JSON döndürürsün, başka hiçbir şey yazmazsın.' },
         { role:'user', content:
           `Aşağıdaki şiiri oku.\n\n"""\n${(text||'').slice(0,800)}\n"""\n\nBaşlık: ${title||'(başlıksız)'}\n\n`+
           `Şunları üret:\n`+
-          `1) "keywords": Bu şiirin ruh halini/temasını/imgelerini yansıtan, Giphy GIF aramasında kullanılacak 2-4 kısa İNGİLİZCE kelime (virgülle ayrılmış tek bir metin, tırnak yok).\n`+
-          `2) "caption": Görselin üzerine bindirilecek, TÜRKÇE, en fazla 12 kelimelik kısa bir metin. Şiirde temayla çok uyumlu, güçlü ve en fazla 12 kelimelik bir mısra varsa onu OLDUĞU GİBİ (kelimesi kelimesine, değiştirmeden) kullan. Uygun bir mısra yoksa, şiirin konusuna uygun ÖZGÜN kısa bir Türkçe aforizma yaz (şiirden birebir alıntı değil, senin ürettiğin, klişe olmayan).\n\n`+
-          `SADECE şu JSON ile yanıt ver, başka hiçbir şey yazma:\n{"keywords":"...","caption":"..."}`
+          `1) "subject": Şiirde geçen, GÖRSEL OLARAK ÇİZİLEBİLİR/ÇEKİLEBİLİR somut ana konu (bir hayvan, nesne, doğa öğesi, eylem, mekan vb. — örn. "kedi" varsa "cat", "deniz" varsa "ocean", "yağmur" varsa "rain"). Şiir soyut/duygusal ve somut bir varlık/nesne/hayvan geçmiyorsa en baskın somut imgeyi seç (örn. "gece", "ateş", "yıldız"). Bu alan İNGİLİZCE, TEK bir kelime veya kısa öbek olmalı, ASLA boş bırakma.\n`+
+          `2) "mood": Şiirin ruh halini/tonunu yansıtan, "subject" ile BİRLİKTE Giphy'de aratılacak, İNGİLİZCE tek bir kelime (örn. "cute", "calm", "melancholic", "playful", "peaceful"). Şiir kedi/köpek gibi sevimli bir konudaysa "cute" veya "funny" gibi kelimeler tercih et.\n`+
+          `3) "caption": Görselin üzerine bindirilecek, TÜRKÇE, en fazla 12 kelimelik kısa bir metin. Şiirde temayla çok uyumlu, güçlü ve en fazla 12 kelimelik bir mısra varsa onu OLDUĞU GİBİ (kelimesi kelimesine, değiştirmeden) kullan. Uygun bir mısra yoksa, şiirin konusuna uygun ÖZGÜN kısa bir Türkçe aforizma yaz (şiirden birebir alıntı değil, senin ürettiğin, klişe olmayan).\n\n`+
+          `SADECE şu JSON ile yanıt ver, başka hiçbir şey yazma:\n{"subject":"...","mood":"...","caption":"..."}`
         }
       ]
     };
@@ -1920,16 +1921,45 @@ async function siirIcinGifVerileriGetir(title, text){
     const clean = raw.replace(/```json|```/g,'').trim();
     const jsonStr = clean.slice(clean.indexOf('{'), clean.lastIndexOf('}')+1);
     const parsed = JSON.parse(jsonStr);
-    const keywords = (parsed.keywords||'').toString().replace(/["'.]/g,'').trim().slice(0,100) || null;
+    const subject = (parsed.subject||'').toString().replace(/["'.]/g,'').trim().slice(0,40) || null;
+    const mood = (parsed.mood||'').toString().replace(/["'.]/g,'').trim().slice(0,30) || null;
     const caption = (parsed.caption||'').toString().replace(/^["'“”]+|["'“”]+$/g,'').trim().slice(0,140) || null;
-    return { keywords, caption };
+    // "subject" ana/zorunlu arama terimi; "mood" ona eşlik eder. subject boşsa
+    // (nadiren) mood'u tek başına kullan; ikisi de boşsa null dön (aşağıda yerel yedek devreye girer).
+    const keywords = subject && mood ? `${subject} ${mood}` : (subject || mood || null);
+    return { keywords, subject, mood, caption };
   }catch{ return null; }
 }
+// Groq tamamen başarısız olursa (kota, ağ, JSON hatası) devreye giren, şiirde geçen
+// sık kullanılan Türkçe kelimelerden basit bir İngilizce arama terimi üreten yerel
+// yedek. Amaç: en azından şiirin çok bariz somut konusunu (kedi, deniz, yağmur vb.)
+// yakalayıp tamamen alakasız bir gif gelmesini önlemek.
+const TR_EN_ANAHTAR_SOZLUK = [
+  [/\bkedi(ler)?\b/i,'cat'], [/\bköpek|köpeğ/i,'dog'], [/\bkuş(lar)?\b/i,'bird'],
+  [/\bdeniz/i,'ocean'], [/\byağmur/i,'rain'], [/\bkar\b|\bkarlar/i,'snow'],
+  [/\bgüneş/i,'sun'], [/\bay\b|\bayışığı/i,'moon'], [/\byıldız/i,'stars'],
+  [/\bçiçe(k|kler)/i,'flowers'], [/\bağaç/i,'tree'], [/\borman/i,'forest'],
+  [/\bateş/i,'fire'], [/\brüzgar|rüzgâr/i,'wind'], [/\bgece/i,'night'],
+  [/\bsabah/i,'sunrise'], [/\başk/i,'love'], [/\bkalp/i,'heart'],
+  [/\bgözyaşı|ağla/i,'tears'], [/\byalnız/i,'loneliness'], [/\bdağ(lar)?\b/i,'mountains'],
+  [/\bnehir|ırmak/i,'river'], [/\bçocuk/i,'child'], [/\banne\b/i,'mother'],
+  [/\bkahve/i,'coffee'], [/\bkitap/i,'book'], [/\bmüzik/i,'music'],
+];
+function turkceMetindenYerelAnahtarKelime(title, text){
+  const birlesik = `${title||''} ${text||''}`;
+  for(const [regex, en] of TR_EN_ANAHTAR_SOZLUK){
+    if(regex.test(birlesik)) return en;
+  }
+  return null;
+}
 async function siirIcinOtomatikGifGetir(title, text){
-  const veri = await siirIcinGifVerileriGetir(title, text);
-  const anahtarKelime = veri?.keywords || 'poetry mood aesthetic';
+  let veri = await siirIcinGifVerileriGetir(title, text);
+  if(!veri?.keywords){
+    const yerel = turkceMetindenYerelAnahtarKelime(title, text);
+    veri = { ...(veri||{}), keywords: yerel ? `${yerel} aesthetic` : 'nature calm aesthetic' };
+  }
   try{
-    const res = await fetch('/api/giphy', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ query: anahtarKelime }) });
+    const res = await fetch('/api/giphy', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ query: veri.keywords }) });
     if(!res.ok){
       let mesaj='';
       try{ const errBody=await res.json(); mesaj=errBody?.error?.message||''; }catch(_){}
