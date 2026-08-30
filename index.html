@@ -2649,10 +2649,52 @@ function yorumBestesi(post,parentId=null){
   return wrap;
 }
 
-async function profilMedyaYukle(file,tip){
+// PROFİL RESMİ / KAPAK FOTOĞRAFI CLOUDINARY'YE YÜKLENİR.
+// Firebase Storage profil yüklemesinde oluşan CORS/preflight sorununu tamamen
+// devre dışı bırakmak için yalnızca profil medyasını Cloudinary kullanır.
+// Yorumlardaki mevcut Firebase Storage yükleme sistemi değiştirilmemiştir.
+const CLOUDINARY_CLOUD_NAME = 'f2iuce5z';
+const CLOUDINARY_PROFILE_PRESET = 'site_unsigned';
+
+async function cloudinaryProfilYukle(file,tip){
   if(!file || !S.me) return null;
-  const m=await medyaStorageaYukle(file,`profiles/${tip}`,1200);
-  return m?.url||null;
+  if(!file.type || !file.type.startsWith('image/')){
+    toastGoster('Profil resmi ve kapak fotoğrafı yalnızca resim olabilir.');
+    return null;
+  }
+  if(file.size > 10*1024*1024){
+    toastGoster('Resim en fazla 10 MB olabilir.');
+    return null;
+  }
+
+  try{
+    // Tarayıcıda resmi küçültüp JPEG'e çeviriyoruz.
+    const yuklenecek=await resimSikistir(file,1200,0.82);
+    const form=new FormData();
+    form.append('file',yuklenecek,file.name.replace(/[^a-zA-Z0-9._-]/g,'_').slice(-80));
+    form.append('upload_preset',CLOUDINARY_PROFILE_PRESET);
+    form.append('folder',`profiles/${tip}`);
+
+    const endpoint=`https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/image/upload`;
+    const response=await fetch(endpoint,{method:'POST',body:form});
+    const data=await response.json().catch(()=>({}));
+
+    if(!response.ok || !data.secure_url){
+      console.error('Cloudinary profil yükleme hatası:',data);
+      toastGoster(`Profil fotoğrafı yüklenemedi (${response.status}). Cloudinary upload presetini kontrol edin.`);
+      return null;
+    }
+
+    return data.secure_url;
+  }catch(err){
+    console.error('Cloudinary profil yükleme hatası:',err);
+    toastGoster('Profil fotoğrafı yüklenemedi. İnternet bağlantısını kontrol edin.');
+    return null;
+  }
+}
+
+async function profilMedyaYukle(file,tip){
+  return cloudinaryProfilYukle(file,tip);
 }
 
 A.updateProfile = async function(fields, avatarFile=null, coverFile=null){
@@ -2661,11 +2703,13 @@ A.updateProfile = async function(fields, avatarFile=null, coverFile=null){
   if(idx<0) return false;
 
   const btnFields={...fields};
+
   if(avatarFile){
     const url=await profilMedyaYukle(avatarFile,'avatar');
     if(!url) return false;
     btnFields.avatarUrl=url;
   }
+
   if(coverFile){
     const url=await profilMedyaYukle(coverFile,'cover');
     if(!url) return false;
@@ -2677,7 +2721,7 @@ A.updateProfile = async function(fields, avatarFile=null, coverFile=null){
   S.me=updated;
   save();
 
-  // Firestore'a yalnızca küçük profil bilgileri + Storage URL'leri yazılır.
+  // Firestore'a profil bilgileri ve Cloudinary URL'leri yazılır.
   await db.collection('users').doc(updated.id).set(updated,{merge:true});
   return true;
 };
@@ -2717,7 +2761,7 @@ function profilDuzenleModal(onClose){
       h('div',{},[h('button',{class:'btn',style:{width:'100%',padding:'9px'},onclick:()=>avatarInput.click()},'📷 Profil Resmi Seç'),avatarInput,avatarDurum]),
       h('div',{},[h('button',{class:'btn',style:{width:'100%',padding:'9px'},onclick:()=>coverInput.click()},'🖼️ Kapak Fotoğrafı Seç'),coverInput,coverDurum])
     ]),
-    h('p',{style:{color:'#6b5b8a',fontSize:'.7rem',marginTop:'12px',lineHeight:'1.5'}},"Fotoğraflar Firebase Storage'da tutulur; Firestore'a yalnızca küçük profil bilgileri ve fotoğraf bağlantıları yazılır."),
+    h('p',{style:{color:'#6b5b8a',fontSize:'.7rem',marginTop:'12px',lineHeight:'1.5'}} ,"Profil ve kapak fotoğrafları Cloudinary'ye yüklenir; Firestore'a yalnızca profil bilgileri ve fotoğraf bağlantıları yazılır."),
     h('div',{style:{display:'flex',justifyContent:'flex-end',marginTop:'14px'}},[kaydet])
   ]);
   modal.appendChild(ic);
