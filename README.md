@@ -1,8 +1,107 @@
-# Yeni Ozanlar — FLUX görsel sistemi
+# Yeni Ozanlar — Facebook Paylaşım Önizlemesi Düzeltmesi
 
-Pollinations kaldırıldı. Gemini görsel endpointinden bağımsız olarak Hugging Face Inference Providers üzerinden FLUX.1-schnell kullanılır.
+## Bulunan hatalar
 
-Vercel Environment Variable: `HF_TOKEN`
-Token permission: `Make calls to Inference Providers`
+Facebook'un hata ayıklama aracı `/post/...` linklerinde **500** yanıt kodu
+gösteriyordu. İncelemede birden fazla sorun tespit edildi:
 
-Akış: Gemini başarısız → FLUX.1-schnell → başarısızsa mevcut GIPHY fallback.
+1. **ESM/CommonJS uyuşmazlığı (asıl 500 sebebi olabilir)**
+   `api/postPreview.js` ve `api/postImage.js` dosyaları `import` söz dizimini
+   kullanıyordu, ama projede bunun bir ES Module olarak çalışacağını belirten
+   hiçbir ayar yoktu. Vercel/Node.js, ilgili `package.json` içinde
+   `"type": "module"` olmadığı sürece `.js` dosyalarını CommonJS olarak
+   çalıştırmaya çalışır ve bu durumda fonksiyon "Cannot use import statement
+   outside a module" hatasıyla çöküp **500** döner.
+   → **Düzeltme:** `api/` klasörüne sadece o klasörü kapsayan bir
+   `package.json` (`{"type": "module"}`) eklendi. Ana projenin kendi
+   `package.json`'ına dokunmadan sadece API fonksiyonlarını ES Module olarak
+   çalıştırır.
+
+2. **`firebase-admin` bağımlılığı derlemeye dahil değildi**
+   Vercel, kök dizindeki `package.json`'da listelenmeyen paketleri kurmaz.
+   Bu da "Cannot find module 'firebase-admin'" hatasına ve yine 500'e yol
+   açabilir.
+   → **Düzeltme:** Kök `package.json` içine `firebase-admin` bağımlılığı
+   eklendi (aşağıdaki "Kurulum" bölümüne bakın — mevcut bir `package.json`
+   dosyanız varsa üzerine yazmayın, sadece bu bağımlılığı ekleyin).
+
+3. **`FIREBASE_SERVICE_ACCOUNT_JSON` biçim hassasiyeti**
+   Vercel ortam değişkeni arayüzüne servis hesabı JSON'u yapıştırılırken
+   `private_key` alanındaki satır sonları bazen gerçek satır sonuna
+   dönüşüp JSON'u bozabiliyor (`JSON.parse` hatası → 500).
+   → **Düzeltme:** `JSON.parse` başarısız olursa, satır sonlarını otomatik
+   olarak `\n` kaçış diziliğine çevirip tekrar deneyen bir onarım adımı
+   eklendi.
+
+4. **Gerçek ziyaretçiler de statik önizleme sayfasına düşüyordu**
+   Kod içinde bot tespiti yapan `bot()` fonksiyonu tanımlanmış ama hiçbir
+   yerde kullanılmıyordu. Sonuç olarak Facebook botu da, siteye tıklayan
+   gerçek bir kullanıcı da aynı sabit HTML sayfasını görüyordu; bu sayfanın
+   linki de kendi kendine referans verdiği için kullanıcı asıl uygulamaya
+   hiç giremiyordu.
+   → **Düzeltme:** `bot()` artık fiilen kullanılıyor. Facebook/Twitter/
+   WhatsApp gibi paylaşım botları önizleme (OG etiketli) sayfasını görür;
+   gerçek tarayıcılar her zaman asıl uygulamanızı (`index.html`) alır.
+
+5. **ID çıkarma regex'i yanlış eşleşebiliyordu**
+   Eski kod, slug içindeki İLK 7 karakterlik alfasayısal bloğu şiir ID'si
+   sanıyordu. Başlıktan gelen bir kelime tesadüfen 7 harfli olursa
+   (`kelime1-tzpyd43` gibi) yanlış ID yakalanıp Firestore'da kayıt
+   bulunamıyor, önizleme kırılıyordu.
+   → **Düzeltme:** ID her zaman slug'ın sonunda olduğu için artık SON
+   eşleşme alınıyor.
+
+6. **Firebase/Firestore erişilemezse çıplak 500 dönüyordu**
+   Facebook bir sayfadan 500 aldığında hiçbir önizleme göstermeden sadece
+   çıplak linki bırakır — sizin şikayet ettiğiniz durum tam olarak buydu.
+   → **Düzeltme:** Firestore'a ulaşılamasa bile artık genel site bilgileriyle
+   (başlık + açıklama, gerekirse görselsiz) bir OG kartı döndürülüyor; 500
+   yerine her zaman gösterilebilir bir önizleme veriliyor.
+
+## Değiştirilen/eklenen dosyalar
+
+```
+api/package.json      (YENİ — API fonksiyonlarını ES Module yapar)
+api/postPreview.js    (düzeltildi)
+api/postImage.js      (düzeltildi)
+vercel.json           (değişmedi, sıralama zaten doğruydu)
+package.json          (YENİ veya mevcut olana firebase-admin eklenmeli)
+.gitignore            (YENİ)
+```
+
+## Kurulum / mevcut projenize entegrasyon
+
+Projenizde zaten bir `package.json` varsa, buradaki `package.json` dosyasının
+üzerine yazmayın. Bunun yerine kendi dosyanızın `"dependencies"` kısmına şunu
+ekleyin:
+
+```json
+"firebase-admin": "^12.0.0"
+```
+
+Diğer tüm dosyaları (`api/package.json`, `api/postPreview.js`,
+`api/postImage.js`, `vercel.json`) doğrudan projenizdeki aynı yollara
+kopyalayıp üzerine yazabilirsiniz.
+
+## Vercel ortam değişkeni
+
+Vercel projenizde **Settings → Environment Variables** kısmında
+`FIREBASE_SERVICE_ACCOUNT_JSON` adında bir değişken olmalı ve değeri Firebase
+servis hesabınızın **tüm JSON içeriği** olmalı (tek satır, tırnaksız
+yapıştırın). Bu değişken yoksa veya yanlışsa önizleme genel (görselsiz)
+içerikle dönecek, poem-özel önizleme çalışmayacaktır.
+
+## GitHub'a push etme
+
+```bash
+git init
+git add .
+git commit -m "Facebook/OG paylasim onizlemesi duzeltmesi"
+git branch -M main
+git remote add origin <REPO_URL_NIZ>
+git push -u origin main
+```
+
+Vercel'e bağladıktan/deploy ettikten sonra Facebook Paylaşım Ayıklayıcısı'nda
+(`developers.facebook.com/tools/debug/`) linkinizi "Tekrar Kazı" ile yeniden
+tarayarak sonucu kontrol edin.

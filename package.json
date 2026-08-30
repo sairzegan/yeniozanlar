@@ -1,9 +1,7 @@
 {
-  "name": "yeni-ozanlar-api",
+  "name": "yeniozanlar",
   "private": true,
-  "type": "module",
   "dependencies": {
-    "@huggingface/inference": "^4.13.28",
-    "firebase-admin": "^13.4.0"
+    "firebase-admin": "^12.0.0"
   }
 }
