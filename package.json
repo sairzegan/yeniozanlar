@@ -3,7 +3,6 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@huggingface/inference": "^4.13.28",
-    "firebase-admin": "^12.7.0"
+    "@huggingface/inference": "^4.13.28"
   }
 }
