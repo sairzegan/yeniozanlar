@@ -8,9 +8,16 @@ const APP_URL = "https://yeniozanlar.vercel.app";
 // ve önizlemede görsel göstermiyor. Bu yüzden görseli olmayan şiirlerde ve
 // Firebase/Firestore'a hiç ulaşılamayan durumlarda da HER ZAMAN bir görsel
 // göstermek için varsayılan bir site görseli tanımlanıyor.
-// Bu dosyayı /public/og-default.jpg olarak deponuza eklemeniz yeterli
-// (1200x630 px, jpg/png, ideal boyut Facebook'un önerdiği ölçüdür).
-const DEFAULT_OG_IMAGE = `${APP_URL}/og-default.jpg`;
+//
+// ÖNEMLİ: Bu projede statik dosyalar (sitemap.xml, robots.txt gibi) gerçekte
+// "/public/..." yolunda duruyor ve kök yoldaki (örn. "/sitemap.xml") istekler
+// vercel.json'daki özel rewrite kurallarıyla oraya yönlendiriliyor. Kök yolda
+// böyle bir rewrite'ı olmayan "/og-default.jpg" isteği ise vercel.json'daki
+// son genel kurala ("/(.*)" -> "/index.html") takılıp HTML (index.html)
+// döndürüyordu — Facebook bu yüzden "invalid content type" hatası veriyordu.
+// Bu yüzden görsele doğrudan gerçek konumundan, "/public/og-default.jpg"
+// yolundan erişiyoruz.
+const DEFAULT_OG_IMAGE = `${APP_URL}/public/og-default.jpg`;
 const DEFAULT_OG_IMAGE_TYPE = "image/jpeg";
 
 const DEFAULT_OG = {

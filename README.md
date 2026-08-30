@@ -81,6 +81,32 @@ site banner'ı vb.) eklemek. Dosya orada olduğu sürece kod otomatik olarak
 onu kullanır; eklemezseniz sadece o görsel linki kırık olur, site geri kalanı
 etkilenmez.
 
+## Güncelleme (v3): "Invalid Image Content Type" hatası
+
+`og-default.jpg` dosyasını `public/` klasörüne eklediğinizde Facebook şu hatayı
+verdi:
+
+> Provided og:image URL, https://yeniozanlar.vercel.app/og-default.jpg could
+> not be processed as an image because it has an invalid content type.
+
+**Sebep:** Bu projede statik dosyalar gerçekte `/public/...` yolunda duruyor
+(`sitemap.xml` ve `robots.txt` için de tam olarak bu yüzden özel rewrite
+kuralları var). Kökten (`/og-default.jpg`) yapılan istek hiçbir kurala
+uymadığı için `vercel.json`'daki en sondaki genel kurala
+(`"/(.*)" -> "/index.html"`) takılıp HTML (index.html) döndürüyordu. Facebook
+görsel beklerken HTML aldığı için "invalid content type" diyordu.
+
+**Düzeltme:**
+- Kod artık görseli doğrudan gerçek konumundan, `/public/og-default.jpg`
+  yolundan çekiyor.
+- `vercel.json`'a diğer statik dosyalarla (sitemap.xml, robots.txt) tutarlı
+  şekilde `/og-default.jpg -> /public/og-default.jpg` rewrite'ı da eklendi;
+  isterseniz temiz kısa adresi de kullanabilirsiniz.
+
+Bu değişiklikten sonra sizin ekstra bir şey yapmanıza gerek yok — dosya zaten
+`public/` klasöründe duruyor, sadece güncellenmiş `api/postPreview.js` ve
+`vercel.json` dosyalarını deploy etmeniz yeterli.
+
 ## Değiştirilen/eklenen dosyalar
 
 ```
