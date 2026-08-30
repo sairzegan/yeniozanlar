@@ -1,0 +1,26 @@
+[
+  {
+    "origin": [
+      "https://yeniozanlar.vercel.app",
+      "http://localhost:3000",
+      "http://localhost:5173"
+    ],
+    "method": [
+      "GET",
+      "POST",
+      "PUT",
+      "DELETE",
+      "OPTIONS"
+    ],
+    "responseHeader": [
+      "Content-Type",
+      "Content-Length",
+      "Content-Range",
+      "ETag",
+      "Cache-Control",
+      "X-Goog-Upload-Status",
+      "X-Goog-Upload-URL"
+    ],
+    "maxAgeSeconds": 3600
+  }
+]

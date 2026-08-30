@@ -1864,7 +1864,7 @@ const A = {
     const usernameClean = u.trim().toLowerCase();
     if(usernameClean === ADMIN_USERNAME) return 'Bu kullanıcı adı rezerve edilmiştir.';
     if(S.users.find(x=>x.username===usernameClean))return 'Bu kullanıcı adı alınmış.';
-    const user={id:uid(),name:u.trim(),username:usernameClean,password:p,bio:'',avatar:u.slice(0,2).toUpperCase(),color:`hsl(${Math.random()*360},70%,65%)`};
+    const user={id:uid(),name:u.trim(),username:usernameClean,password:p,bio:'',avatar:u.slice(0,2).toUpperCase(),avatarUrl:'',coverUrl:'',color:`hsl(${Math.random()*360},70%,65%)`};
     
     S.me=user;
     S.users.push(user);
@@ -2495,7 +2495,7 @@ const YORUM_ONERILERI = [
   'Bu dizeler sustuktan sonra bile konuşmaya devam ediyor.'
 ];
 
-async function yorumDosyasiYukle(file){
+async function medyaStorageaYukle(file, klasor, maxImageSide=1280){
   if(!file || !S.me) return null;
   const isImage=file.type.startsWith('image/');
   const isVideo=file.type.startsWith('video/');
@@ -2503,16 +2503,30 @@ async function yorumDosyasiYukle(file){
   if(isImage && file.size>10*1024*1024){ toastGoster('Resim en fazla 10 MB olabilir.'); return null; }
   if(isVideo && file.size>30*1024*1024){ toastGoster('Video en fazla 30 MB olabilir.'); return null; }
   try{
+    let yuklenecek=file;
+    let contentType=file.type;
+
+    // Resimleri küçültüyoruz; böylece Storage alanı ve trafik gereksiz büyümez.
+    if(isImage){
+      yuklenecek=await resimSikistir(file,maxImageSide,0.78);
+      contentType='image/jpeg';
+    }
+
     const temizAd=file.name.replace(/[^a-zA-Z0-9._-]/g,'_').slice(-80);
-    const yol=`comments/${S.me.id}/${Date.now()}_${temizAd}`;
-    const snap=await storage.ref().child(yol).put(file,{contentType:file.type});
+    const uzanti=isImage?'jpg':(temizAd.includes('.')?temizAd.split('.').pop():'mp4');
+    const yol=`${klasor}/${S.me.id}/${Date.now()}_${Math.random().toString(36).slice(2,7)}.${uzanti}`;
+    const snap=await storage.ref().child(yol).put(yuklenecek,{contentType});
     const url=await snap.ref.getDownloadURL();
     return {type:isImage?'image':'video',url,name:file.name};
   }catch(err){
-    console.error('Yorum medya yükleme hatası:',err);
-    toastGoster('Medya yüklenemedi. Firebase Storage izinlerini kontrol edin.');
+    console.error('Storage medya yükleme hatası:',err);
+    toastGoster('Medya yüklenemedi. Storage izin/CORS ayarını kontrol edin.');
     return null;
   }
+}
+
+async function yorumDosyasiYukle(file){
+  return medyaStorageaYukle(file,'comments',1280);
 }
 
 async function yorumIcinGifGetir(post){
@@ -2635,6 +2649,81 @@ function yorumBestesi(post,parentId=null){
   return wrap;
 }
 
+async function profilMedyaYukle(file,tip){
+  if(!file || !S.me) return null;
+  const m=await medyaStorageaYukle(file,`profiles/${tip}`,1200);
+  return m?.url||null;
+}
+
+A.updateProfile = async function(fields, avatarFile=null, coverFile=null){
+  if(!S.me) return false;
+  const idx=S.users.findIndex(u=>u.id===S.me.id);
+  if(idx<0) return false;
+
+  const btnFields={...fields};
+  if(avatarFile){
+    const url=await profilMedyaYukle(avatarFile,'avatar');
+    if(!url) return false;
+    btnFields.avatarUrl=url;
+  }
+  if(coverFile){
+    const url=await profilMedyaYukle(coverFile,'cover');
+    if(!url) return false;
+    btnFields.coverUrl=url;
+  }
+
+  const updated={...S.users[idx],...btnFields};
+  S.users[idx]=updated;
+  S.me=updated;
+  save();
+
+  // Firestore'a yalnızca küçük profil bilgileri + Storage URL'leri yazılır.
+  await db.collection('users').doc(updated.id).set(updated,{merge:true});
+  return true;
+};
+
+function profilDuzenleModal(onClose){
+  if(!S.me) return null;
+  const modal=h('div',{class:'modal-bg'});
+  modal.onclick=e=>{if(e.target===modal)onClose();};
+
+  const bio=h('textarea',{class:'inp',rows:'5',placeholder:'Kendinden birkaç satır söz et... (özgeçmiş, şiir anlayışın, ilgi alanların vb.)',style:{resize:'vertical',lineHeight:'1.6'}},[S.me.bio||'']);
+  const ad=h('input',{class:'inp',value:S.me.name||'',placeholder:'Ad / Görünen ad'});
+  const avatarInput=h('input',{type:'file',accept:'image/*',style:{display:'none'}});
+  const coverInput=h('input',{type:'file',accept:'image/*',style:{display:'none'}});
+  const avatarDurum=h('p',{style:{color:'#6b5b8a',fontSize:'.75rem',marginTop:'5px'}},S.me.avatarUrl?'Mevcut profil resmi var.':'Henüz profil resmi yok.');
+  const coverDurum=h('p',{style:{color:'#6b5b8a',fontSize:'.75rem',marginTop:'5px'}},S.me.coverUrl?'Mevcut kapak fotoğrafı var.':'Henüz kapak fotoğrafı yok.');
+
+  avatarInput.onchange=()=>{if(avatarInput.files?.[0])avatarDurum.textContent=`Seçildi: ${avatarInput.files[0].name}`;};
+  coverInput.onchange=()=>{if(coverInput.files?.[0])coverDurum.textContent=`Seçildi: ${coverInput.files[0].name}`;};
+
+  const kaydet=h('button',{class:'pb btn',onclick:async()=>{
+    kaydet.disabled=true;kaydet.textContent='⏳ Kaydediliyor...';
+    try{
+      const ok=await A.updateProfile({name:ad.value.trim()||S.me.name,bio:bio.value.trim().slice(0,500)},avatarInput.files?.[0]||null,coverInput.files?.[0]||null);
+      if(ok){toastGoster('Profilin güncellendi.');onClose();render();}
+    }catch(err){console.error(err);toastGoster('Profil kaydedilemedi.');}
+    finally{kaydet.disabled=false;kaydet.textContent='Kaydet';}
+  }},'Kaydet');
+
+  const ic=h('div',{class:'modal',style:{maxWidth:'620px'}},[
+    h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'16px'}},[
+      h('h3',{style:{fontFamily:"'Playfair Display',serif",color:'#e9d5ff'}},'👤 Profili Düzenle'),
+      h('button',{class:'btn',style:{background:'none',color:'#6b5b8a',fontSize:'1.4rem'},onclick:onClose},'✕')
+    ]),
+    h('label',{style:{color:'#a78bfa',fontSize:'.85rem'}},'Görünen ad'),ad,
+    h('label',{style:{color:'#a78bfa',fontSize:'.85rem'}},'Kendini tanıt / Özgeçmiş'),bio,
+    h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'10px',marginTop:'8px'}},[
+      h('div',{},[h('button',{class:'btn',style:{width:'100%',padding:'9px'},onclick:()=>avatarInput.click()},'📷 Profil Resmi Seç'),avatarInput,avatarDurum]),
+      h('div',{},[h('button',{class:'btn',style:{width:'100%',padding:'9px'},onclick:()=>coverInput.click()},'🖼️ Kapak Fotoğrafı Seç'),coverInput,coverDurum])
+    ]),
+    h('p',{style:{color:'#6b5b8a',fontSize:'.7rem',marginTop:'12px',lineHeight:'1.5'}},"Fotoğraflar Firebase Storage'da tutulur; Firestore'a yalnızca küçük profil bilgileri ve fotoğraf bağlantıları yazılır."),
+    h('div',{style:{display:'flex',justifyContent:'flex-end',marginTop:'14px'}},[kaydet])
+  ]);
+  modal.appendChild(ic);
+  return modal;
+}
+
 A.deleteComment = function(pid,cid){
     if(!confirm("Bu yorum kalıcı olarak silinecek. Emin misiniz?")) return;
     const pIndex = S.posts.findIndex(p=>p.id===pid);
@@ -2732,8 +2821,15 @@ function h(tag,props={},kids=[]){
 function av(user,size=40,onClick){
   if(!user) return h('div',{class:'av',style:{width:size+'px',height:size+'px',background:'#3d1f6e',color:'#fff'}},['?']);
   const isAdm = user.username === ADMIN_USERNAME;
-  const d=h('div',{class:'av',style:{width:size+'px',height:size+'px',fontSize:(size*.36)+'px',background:isAdm?'linear-gradient(135deg,#f59e0b,#d97706)':`linear-gradient(135deg,${user.color||'#7c3aed'},#a855f7)`,color:'#fff',cursor:onClick?'pointer':'default'}});
-  d.textContent=isAdm?'👑':(user.avatar||user.name?.slice(0,2).toUpperCase()||'?');
+  const d=h('div',{class:'av',style:{width:size+'px',height:size+'px',fontSize:(size*.36)+'px',background:isAdm?'linear-gradient(135deg,#f59e0b,#d97706)':`linear-gradient(135deg,${user.color||'#7c3aed'},#a855f7)`,color:'#fff',cursor:onClick?'pointer':'default',overflow:'hidden',position:'relative'}});
+  if(isAdm){
+    d.textContent='👑';
+  }else if(user.avatarUrl){
+    const img=h('img',{src:user.avatarUrl,alt:'Profil resmi',loading:'lazy',style:{width:'100%',height:'100%',objectFit:'cover',display:'block'}});
+    d.appendChild(img);
+  }else{
+    d.textContent=user.avatar||user.name?.slice(0,2).toUpperCase()||'?';
+  }
   if(onClick)d.onclick=onClick;
   return d;
 }
@@ -4066,15 +4162,25 @@ function Profile(){
   const avg=sp.length?(sp.reduce((s,p)=>s+calcAvg(p.userRatings,p.aiScore),0)/sp.length).toFixed(1):null;
   const fc=Object.values(S.follows).filter(l=>l.includes(tid)).length;
   const fg=(S.follows[tid]||[]).length;
-  const card=h('div',{class:'card fade',style:{textAlign:'center'}});
-  card.appendChild(h('div',{style:{display:'flex',justifyContent:'center',marginBottom:'12px'}},[av(user,72)]));
-  card.appendChild(h('h2',{style:{fontFamily:"'Playfair Display',serif",fontSize:'1.5rem',color:'#e9d5ff'}},user.name));
-  card.appendChild(h('p',{style:{color:'#6b5b8a',marginBottom:'6px'}},`@${user.username}`));
-  if(user.bio)card.appendChild(h('p',{style:{color:'#c4b5fd',fontStyle:'italic',marginBottom:'10px'}},user.bio));
-  if(avg)card.appendChild(h('p',{style:{color:scoreColor(+avg),marginBottom:'12px'}},`Ort. Puan: ${avg}/10 ${scoreBadge(+avg)}`));
+  const card=h('div',{class:'card fade',style:{textAlign:'center',overflow:'hidden',padding:'0 0 18px'}});
+  if(user.coverUrl){
+    card.appendChild(h('div',{style:{height:'180px',backgroundImage:`url(\"${user.coverUrl}\")`,backgroundSize:'cover',backgroundPosition:'center',position:'relative'}}));
+  }else{
+    card.appendChild(h('div',{style:{height:'110px',background:'linear-gradient(135deg,#241040,#3b0d6e)'}}));
+  }
+  const profilIc=h('div',{style:{padding:'0 18px'}});
+  const avatarWrap=h('div',{style:{display:'flex',justifyContent:'center',marginTop:'-42px',marginBottom:'10px',position:'relative',zIndex:'2'}},[av(user,84)]);
+  profilIc.appendChild(avatarWrap);
+  profilIc.appendChild(h('h2',{style:{fontFamily:"'Playfair Display',serif",fontSize:'1.5rem',color:'#e9d5ff'}},user.name));
+  profilIc.appendChild(h('p',{style:{color:'#6b5b8a',marginBottom:'6px'}},`@${user.username}`));
+  if(user.bio)profilIc.appendChild(h('p',{style:{color:'#c4b5fd',fontStyle:'italic',marginBottom:'10px',whiteSpace:'pre-line'}},user.bio));
+  if(isMe){
+    profilIc.appendChild(h('button',{class:'btn',style:{padding:'7px 14px',margin:'2px 0 12px'},onclick:()=>{const m=profilDuzenleModal(()=>m.remove());document.body.appendChild(m);}},'✏️ Profili Düzenle'));
+  }
+  if(avg)profilIc.appendChild(h('p',{style:{color:scoreColor(+avg),marginBottom:'12px'}},`Ort. Puan: ${avg}/10 ${scoreBadge(+avg)}`));
   const stats=h('div',{style:{display:'flex',justifyContent:'center',gap:'28px',marginBottom:'16px'}});
   [['Şiir',ups.length],['Takipçi',fc],['Takip',fg]].forEach(([l,v])=>stats.appendChild(h('div',{},[h('p',{style:{fontFamily:"'Playfair Display',serif",fontSize:'1.3rem',color:'#e9d5ff'}},String(v)),h('p',{style:{color:'#6b5b8a',fontSize:'.8rem'}},l)])));
-  card.appendChild(stats);
+  profilIc.appendChild(stats);
   // Bu ozanın tüm şiirlerindeki toplam tepkiler (beğeni/dislike/kalp)
   const toplamLike=ups.reduce((s,p)=>s+((p.reactions?.like||[]).length),0);
   const toplamDislike=ups.reduce((s,p)=>s+((p.reactions?.dislike||[]).length),0);
@@ -4084,8 +4190,9 @@ function Profile(){
     [['👍',toplamLike,'#34d399'],['👎',toplamDislike,'#f87171'],['❤️',toplamHeart,'#e879f9']].forEach(([ikon,v,renk])=>{
       if(v>0) rStats.appendChild(h('div',{style:{display:'flex',alignItems:'center',gap:'4px'}},[h('span',{style:{fontSize:'1.1rem'}},ikon),h('span',{style:{color:renk,fontWeight:'700',fontSize:'.95rem'}},String(v))]));
     });
-    card.appendChild(rStats);
+    profilIc.appendChild(rStats);
   }
+  card.appendChild(profilIc);
   if(!isMe && user.username !== ADMIN_USERNAME){
     const fb=h('button',{class:'pb btn',onclick:()=>{if(girisGerekli())return;A.toggleFollow(user.id);render();}},isF(user.id)?'Takibi Bırak':'Takip Et');
     card.appendChild(fb);
