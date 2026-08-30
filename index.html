@@ -2845,16 +2845,6 @@ function kapakKirpModal(file){
         scale=newScale;
         clampOffsets();draw();
       }
-      function ensureCover(){
-        if(scale<baseScale){
-          const oldScale=scale;
-          const newScale=baseScale;
-          const px=stageW/2,py=stageH/2;
-          const ix=(px-offsetX)/oldScale,iy=(py-offsetY)/oldScale;
-          offsetX=px-ix*newScale;offsetY=py-iy*newScale;scale=newScale;zoom=1;
-          clampOffsets();draw();
-        }
-      }
       zoomRange.oninput=e=>setZoom(parseFloat(e.target.value));
       stage.addEventListener('pointerdown',e=>{
         dragging={x:e.clientX,y:e.clientY,ox:offsetX,oy:offsetY};
@@ -2874,7 +2864,8 @@ function kapakKirpModal(file){
       const actions=h('div',{style:{display:'flex',justifyContent:'flex-end',gap:'8px',marginTop:'14px'}},[]);
       const vazgec=h('button',{type:'button',class:'btn',style:{padding:'9px 16px',background:'rgba(255,255,255,.06)',color:'#d8c8ef',border:'1px solid #6b5b8a',borderRadius:'12px'},onclick:()=>{URL.revokeObjectURL(url);modal.remove();resolve(null);}},'İptal');
       const kullan=h('button',{type:'button',class:'pb btn',style:{padding:'10px 18px',background:'linear-gradient(135deg,#7c3aed,#a855f7)',color:'#fff',border:'1px solid #c084fc',boxShadow:'0 4px 14px rgba(168,85,247,.25)',borderRadius:'12px'},onclick:()=>{
-        ensureCover();
+        // Kullanıcının son gördüğü kırpma konumunu ve zoom seviyesini aynen kullan.
+        // Kırp ve Kullan'a basınca resmi tekrar büyütme/kaydırma yapma.
         const m=metrics();
         const srcX=(m.fx-offsetX)/scale;
         const srcY=(m.fy-offsetY)/scale;
