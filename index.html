@@ -2925,7 +2925,7 @@ async function geminiGorselDene(title, text, signal){
   if(!contentType.startsWith('image/')) throw new Error(`Gemini görsel yerine ${contentType||'bilinmeyen veri'} döndürdü.`);
   const blob=await r.blob();
   if(!blob || !blob.size) throw new Error('Gemini boş görsel döndürdü.');
-  return { blob, provider:'gemini', model:'gemini-3.1-flash-image' };
+  return { blob, provider:'gemini', model:'gemini-2.5-flash-image' };
 }
 // Herhangi bir sağlayıcıdan gelen görsel blob'unu makul bir boyuta küçültüp
 // Firestore'a sığacak bir JPEG data URL'sine çevirir. Firebase Storage
@@ -2944,93 +2944,24 @@ async function geminiGorselDene(title, text, signal){
 // (Firestore'a hiç yazmadığı için) başarılı görünürken, gerçek buton hep
 // GIPHY'ye düşüyordu. Artık görsel diğer alanlara yer bırakacak şekilde çok
 // daha küçük (~450 KB) tutuluyor.
-function blobToCompressedDataUrl(blob){
-  return new Promise((resolve,reject)=>{
-    const reader=new FileReader();
-    reader.onload=()=>{
-      const img=new Image();
-      img.onload=()=>{
-        const maxSide=768;
-        let w=img.naturalWidth||img.width||768;
-        let h=img.naturalHeight||img.height||768;
-        if(w>maxSide||h>maxSide){
-          if(w>=h){h=Math.round(h*maxSide/w);w=maxSide;}
-          else{w=Math.round(w*maxSide/h);h=maxSide;}
-        }
-        const canvas=document.createElement('canvas');
-        canvas.width=w;canvas.height=h;
-        const ctx=canvas.getContext('2d');
-        if(!ctx){reject(new Error('Görsel dönüştürücü başlatılamadı.'));return;}
-        ctx.drawImage(img,0,0,w,h);
-        const HEDEF_MAKS=450000; // ~450 KB — diğer post alanlarına bolca yer bırakır
-        let data=canvas.toDataURL('image/jpeg',0.72);
-        if(data.length>HEDEF_MAKS)data=canvas.toDataURL('image/jpeg',0.5);
-        if(data.length>HEDEF_MAKS){
-          const small=document.createElement('canvas');
-          small.width=Math.round(w*0.7);small.height=Math.round(h*0.7);
-          const sctx=small.getContext('2d');
-          sctx.drawImage(canvas,0,0,small.width,small.height);
-          data=small.toDataURL('image/jpeg',0.5);
-        }
-        if(data.length>HEDEF_MAKS){
-          const tiny=document.createElement('canvas');
-          tiny.width=Math.round(w*0.5);tiny.height=Math.round(h*0.5);
-          const tctx=tiny.getContext('2d');
-          tctx.drawImage(canvas,0,0,tiny.width,tiny.height);
-          data=tiny.toDataURL('image/jpeg',0.45);
-        }
-        if(data.length>600000){reject(new Error(`Görsel yeterince küçültülemedi (${Math.round(data.length/1024)} KB) — Firestore doküman sınırına takılabilir.`));return;}
-        resolve(data);
-      };
-      img.onerror=()=>reject(new Error('Görsel okunamadı.'));
-      img.src=reader.result;
-    };
-    reader.onerror=()=>reject(new Error('Görsel okunamadı.'));
-    reader.readAsDataURL(blob);
-  });
-}
+// AI görselini Firestore dokümanına base64 olarak gömmek YOK.
+// Firestore dokümanları yaklaşık 1 MiB sınırına sahip; şiirde yorum/puanlar
+// büyüdüğünde 400-500 KB'lık bir AI resmi bile update işlemini patlatabiliyor.
+// AI resmi Firebase Storage'a yükleniyor, Firestore'a yalnızca indirme URL'si yazılıyor.
+async function aiGorseliStorageaYukle(blob, postId, provider){
+  if(!blob || typeof blob.arrayBuffer!=='function'){
+    throw new Error('AI görsel verisi geçersiz.');
+  }
 
-// AI tarafından üretilen görseli, tıpkı yorum medyasında (yorumDosyasiYukle)
-// olduğu gibi Firebase Storage'a yükler ve kısa bir indirme linki döner. Bu,
-// blobToCompressedDataUrl'in aksine görseli Firestore DOKÜMANINA hiç yazmaz —
-// bu yüzden şiirin yorum/puan verisi ne kadar büyük olursa olsun, 1MB doküman
-// sınırına TAKILMAZ. AI görselleri için ÖNCELİKLİ yol budur; sadece Storage
-// bir sebeple başarısız olursa (izin/kurulum sorunu) blobToCompressedDataUrl'e
-// geri düşülür (bkz. adminYapayZekaGorseliYenile).
-function blobToResizedBlob(blob, maxSide=1600, kalite=0.85){
-  return new Promise((resolve,reject)=>{
-    const reader=new FileReader();
-    reader.onload=()=>{
-      const img=new Image();
-      img.onload=()=>{
-        let w=img.naturalWidth||img.width||maxSide;
-        let h=img.naturalHeight||img.height||maxSide;
-        if(w>maxSide||h>maxSide){
-          if(w>=h){h=Math.round(h*maxSide/w);w=maxSide;}
-          else{w=Math.round(w*maxSide/h);h=maxSide;}
-        }
-        const canvas=document.createElement('canvas');
-        canvas.width=w;canvas.height=h;
-        const ctx=canvas.getContext('2d');
-        if(!ctx){reject(new Error('Görsel dönüştürücü başlatılamadı.'));return;}
-        ctx.drawImage(img,0,0,w,h);
-        canvas.toBlob(outBlob=>{
-          if(!outBlob){reject(new Error('Görsel sıkıştırılamadı.'));return;}
-          resolve(outBlob);
-        },'image/jpeg',kalite);
-      };
-      img.onerror=()=>reject(new Error('Görsel okunamadı.'));
-      img.src=reader.result;
-    };
-    reader.onerror=()=>reject(new Error('Görsel okunamadı.'));
-    reader.readAsDataURL(blob);
-  });
-}
-async function aiGorseliniStorageaYukle(postId, blob){
-  const kucultulmus=await blobToResizedBlob(blob, 1600, 0.85);
-  const yol=`ai-images/${postId}_${Date.now()}.jpg`;
-  const snap=await storage.ref().child(yol).put(kucultulmus,{contentType:'image/jpeg'});
-  return await snap.ref.getDownloadURL();
+  const safeProvider=String(provider||'ai').replace(/[^a-z0-9_-]/gi,'_');
+  const yol=`ai-images/${postId}/${Date.now()}-${safeProvider}.jpg`;
+  const ref=storage.ref().child(yol);
+
+  await ref.put(blob,{contentType:'image/jpeg',cacheControl:'public,max-age=31536000'});
+  const url=await ref.getDownloadURL();
+
+  if(!url) throw new Error('Firebase Storage görsel URL'si vermedi.');
+  return url;
 }
 
 async function adminYapayZekaGorseliYenile(post){
@@ -3082,21 +3013,11 @@ async function adminYapayZekaGorseliYenile(post){
     // DOĞRUDAN ve NET şekilde kullanıcıya gösteriliyor (yeniden denemek bir işe
     // yaramaz, aynı kaydetme sorunuyla tekrar karşılaşılır).
     try{
-      if(status) status.textContent='💾 AI görseli yükleniyor...';
-      let aiImageUrl, depolamaYontemi;
-      try{
-        // ÖNCELİKLİ YOL: Firebase Storage (yorum medyasında da kullanılan,
-        // kanıtlanmış çalışan altyapı). Kısa bir URL üretir, Firestore
-        // dokümanına neredeyse hiç yer kaplamaz.
-        aiImageUrl=await aiGorseliniStorageaYukle(post.id, blob);
-        depolamaYontemi='storage';
-      }catch(depoErr){
-        console.warn('Firebase Storage yüklemesi başarısız, Firestore\'a küçültülmüş görsel olarak deneniyor:', depoErr?.message||depoErr);
-        // YEDEK YOL: Storage bir sebeple başarısız olursa (izin/kurulum sorunu),
-        // eski davranışa (küçültülmüş base64) geri düş.
-        aiImageUrl=await blobToCompressedDataUrl(blob);
-        depolamaYontemi='firestore-embed';
-      }
+      if(status) status.textContent='💾 AI görseli Firebase Storage'a kaydediliyor...';
+
+      // ÖNEMLİ: AI görselini Firestore'a base64 olarak yazmıyoruz.
+      // Storage'a gerçek dosya olarak yükleyip Firestore'a sadece URL kaydediyoruz.
+      const aiImageUrl=await aiGorseliStorageaYukle(blob,post.id,provider);
 
       const idx=S.posts.findIndex(p=>p.id===post.id);
       if(idx<0) throw new Error('Paylaşım bulunamadı.');
@@ -3107,12 +3028,15 @@ async function adminYapayZekaGorseliYenile(post){
         aiImage:true, aiImageUpdatedAt:now,
         aiImageProvider:provider, aiImageModel:model
       };
+
       S.posts[idx]={...S.posts[idx],...updates};
       save();
+
+      // Firestore artık büyük base64 veri değil, yalnızca kısa bir Storage URL'si alıyor.
       await db.collection('posts').doc(post.id).update(updates);
       refreshCard(post.id);
 
-      return { type:'ai', provider, model, depolamaYontemi };
+      return { type:'ai', provider, model };
     }catch(kaydetmeErr){
       throw new Error(`${s.ad} ile görsel BAŞARIYLA üretildi ama kaydedilemedi: ${kaydetmeErr?.message||kaydetmeErr}`);
     }
