@@ -24,11 +24,6 @@ const TIMEOUT_MS = 65000;
 function buildPrompt(title, text) {
   const poem = String(text || '').trim().slice(0, 1800);
   const heading = String(title || '').trim().slice(0, 250);
-  // Önbellek kırıcı: Cloudflare/CDN katmanları aynı prompt için üretilen görseli
-  // önbelleğe alıp "Yeniden Resim Oluştur" butonuna her basıldığında AYNI görseli
-  // döndürebiliyordu. Her istekte benzersiz bir metin ekleyerek prompt'u (ve
-  // dolayısıyla önbellek anahtarını) her seferinde farklı hale getiriyoruz.
-  const varyasyon = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 
   return [
     'Create one original cinematic image specifically inspired by the Turkish poem below.',
@@ -41,8 +36,7 @@ function buildPrompt(title, text) {
     'IMPORTANT: absolutely NO text anywhere in the image.',
     'NO letters, NO words, NO captions, NO typography, NO subtitles, NO signs, NO logos, NO watermark.',
     heading ? `Turkish poem title: ${heading}` : '',
-    `Turkish poem:\n${poem}`,
-    `Internal variation tag (ignore, do not depict, do not render as text): ${varyasyon}`
+    `Turkish poem:\n${poem}`
   ]
     .filter(Boolean)
     .join('\n\n');
@@ -539,12 +533,8 @@ export default async function handler(
     );
 
     res.setHeader(
-      // HTTP header değerleri yalnızca Latin-1 (ISO-8859-1) karakter kümesini kabul eder.
-      // fallback.query Türkçe karakterler (ş, ğ, ı, İ vb.) içerebiliyor ve bunlar bu
-      // aralığın dışında kalıyor; Node bu yüzden "Invalid character in header content"
-      // hatasıyla çöküyordu. encodeURIComponent ile her zaman ASCII-güvenli hale getiriyoruz.
       'X-GIPHY-Query',
-      encodeURIComponent(fallback.query)
+      fallback.query
     );
 
 
