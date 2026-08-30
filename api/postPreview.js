@@ -1,40 +1,27 @@
-import { cert, getApps, initializeApp } from "firebase-admin/app";
-import { getFirestore } from "firebase-admin/firestore";
+const { cert, getApps, initializeApp } = require("firebase-admin/app");
+const { getFirestore } = require("firebase-admin/firestore");
 
 const PROJECT_ID = "yeniozanlar-68b49";
 const APP_URL = "https://yeniozanlar.vercel.app";
 
-function firebaseAdmin() {
-  if (getApps().length > 0) {
-    return getApps()[0];
+function getDb() {
+  if (!getApps().length) {
+    const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+    if (!raw) throw new Error("FIREBASE_SERVICE_ACCOUNT_JSON eksik.");
+
+    let serviceAccount;
+    try {
+      serviceAccount = JSON.parse(raw);
+    } catch {
+      throw new Error("FIREBASE_SERVICE_ACCOUNT_JSON geçersiz JSON.");
+    }
+
+    initializeApp({
+      credential: cert(serviceAccount),
+      projectId: PROJECT_ID
+    });
   }
 
-  const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
-
-  if (!raw) {
-    throw new Error(
-      "FIREBASE_SERVICE_ACCOUNT_JSON Vercel ortam değişkeninde yok."
-    );
-  }
-
-  let serviceAccount;
-
-  try {
-    serviceAccount = JSON.parse(raw);
-  } catch {
-    throw new Error(
-      "FIREBASE_SERVICE_ACCOUNT_JSON geçerli JSON değil."
-    );
-  }
-
-  return initializeApp({
-    credential: cert(serviceAccount),
-    projectId: PROJECT_ID,
-  });
-}
-
-function db() {
-  firebaseAdmin();
   return getFirestore();
 }
 
@@ -49,107 +36,113 @@ function esc(value) {
 
 function getPostId(slug) {
   let raw = String(slug || "").trim();
+  try { raw = decodeURIComponent(raw); } catch {}
 
-  try {
-    raw = decodeURIComponent(raw);
-  } catch {}
+  const i = raw.lastIndexOf("-");
+  const id = i >= 0 ? raw.slice(i + 1) : raw;
 
-  const parts = raw.split("-");
-  const candidate = parts[parts.length - 1];
-
-  if (/^[A-Za-z0-9]{7}$/.test(candidate)) {
-    return candidate;
-  }
-
-  return null;
-}
-
-function getYouTubeId(url) {
-  const match = String(url || "").match(
-    /(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|shorts\/|live\/))([A-Za-z0-9_-]{11})/
-  );
-
-  return match ? match[1] : null;
+  return /^[A-Za-z0-9]{7}$/.test(id) ? id : null;
 }
 
 function excerpt(text) {
-  const clean = String(text || "")
-    .replace(/\s+/g, " ")
-    .trim();
+  const clean = String(text || "").replace(/\s+/g, " ").trim();
 
-  if (!clean) {
-    return "Yeni Ozanlar'da bir şiir.";
-  }
+  if (!clean) return "Yeni Ozanlar'da bir şiir.";
+  if (clean.length <= 280) return clean;
 
-  if (clean.length <= 280) {
-    return clean;
-  }
-
-  return (
-    clean
-      .slice(0, 277)
-      .replace(/\s+\S*$/, "") + "…"
-  );
+  return clean.slice(0, 277).replace(/\s+\S*$/, "") + "…";
 }
 
-function getImageInfo(post, postId) {
-  if (!post?.image) {
-    return null;
-  }
+function imageInfo(post, postId) {
+  const raw = String(post?.image || "").trim();
+  if (!raw) return null;
 
-  const raw = String(post.image).trim();
-
-  /*
-   * Görsel zaten dışarıda bir URL ise onu kullan.
-   */
   if (/^https?:\/\//i.test(raw)) {
-    const path = raw.split("?")[0].toLowerCase();
-
     let type = "image/jpeg";
-
-    if (path.endsWith(".png")) {
-      type = "image/png";
-    } else if (path.endsWith(".webp")) {
-      type = "image/webp";
-    } else if (path.endsWith(".gif")) {
-      type = "image/gif";
-    }
-
-    return {
-      url: raw,
-      type,
-    };
+    try {
+      const p = new URL(raw).pathname.toLowerCase();
+      if (p.endsWith(".png")) type = "image/png";
+      else if (p.endsWith(".webp")) type = "image/webp";
+      else if (p.endsWith(".gif")) type = "image/gif";
+      else if (p.endsWith(".avif")) type = "image/avif";
+    } catch {}
+    return { url: raw.split("#")[0], type };
   }
 
-  /*
-   * Firebase'deki base64 resmi için Facebook'a
-   * SABİT ve temiz bir Vercel URL'si veriyoruz.
-   *
-   * ÖNEMLİ:
-   * Burada ?v=... KULLANMIYORUZ.
-   */
   if (/^data:image\//i.test(raw)) {
-    const match = raw.match(
-      /^data:(image\/[A-Za-z0-9.+-]+);base64,/i
-    );
-
+    const m = raw.match(/^data:(image\/[A-Za-z0-9.+-]+);base64,/i);
     return {
+      // Sorgu parametresi YOK: Facebook'un temiz ve sabit bir image URL'si olsun.
       url: `${APP_URL}/api/postImage?id=${encodeURIComponent(postId)}`,
-      type: match?.[1] || "image/jpeg",
+      type: (m?.[1] || "image/jpeg").toLowerCase()
     };
   }
 
   return null;
 }
 
-function youtubeImage(id) {
-  return `https://img.youtube.com/vi/${id}/hqdefault.jpg`;
+function previewHtml({ title, description, image, imageType, canonical }) {
+  return `<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<title>${esc(title)}</title>
+<meta name="description" content="${esc(description)}">
+<link rel="canonical" href="${esc(canonical)}">
+
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="Yeni Ozanlar">
+<meta property="og:locale" content="tr_TR">
+<meta property="og:url" content="${esc(canonical)}">
+<meta property="og:title" content="${esc(title)}">
+<meta property="og:description" content="${esc(description)}">
+
+${image ? `
+<meta property="og:image" content="${esc(image)}">
+<meta property="og:image:url" content="${esc(image)}">
+<meta property="og:image:secure_url" content="${esc(image)}">
+<meta property="og:image:type" content="${esc(imageType || "image/jpeg")}">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="${esc(title)}">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="${esc(image)}">
+<meta name="twitter:image:alt" content="${esc(title)}">
+` : `
+<meta name="twitter:card" content="summary">
+`}
+
+<meta name="twitter:title" content="${esc(title)}">
+<meta name="twitter:description" content="${esc(description)}">
+</head>
+<body>
+<h1>${esc(title)}</h1>
+<p>${esc(description)}</p>
+${image ? `<img src="${esc(image)}" alt="${esc(title)}">` : ""}
+</body>
+</html>`;
 }
 
-function isSocialBot(userAgent) {
-  const ua = String(userAgent || "").toLowerCase();
+async function getAppShell() {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 3500);
 
-  const bots = [
+  try {
+    const r = await fetch(APP_URL + "/", {
+      signal: controller.signal,
+      headers: { "User-Agent": "YeniOzanlar-AppShell/1.0" }
+    });
+
+    if (!r.ok) throw new Error("Ana uygulama HTTP " + r.status);
+    return await r.text();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function isSocialBot(ua) {
+  const value = String(ua || "").toLowerCase();
+  return [
     "facebookexternalhit",
     "facebot",
     "twitterbot",
@@ -162,53 +155,30 @@ function isSocialBot(userAgent) {
     "pinterest",
     "google-inspectiontool",
     "googlebot"
-  ];
-
-  return bots.some((bot) => ua.includes(bot));
-}
-
-async function getAppShell() {
-  const response = await fetch(`${APP_URL}/`, {
-    headers: {
-      "User-Agent": "YeniOzanlar-AppShell/1.0"
-    }
-  });
-
-  if (!response.ok) {
-    throw new Error(
-      `Ana uygulama alınamadı: HTTP ${response.status}`
-    );
-  }
-
-  return await response.text();
+  ].some(x => value.includes(x));
 }
 
 function injectMeta(html, data) {
   let clean = html
-    .replace(
-      /<title>[\s\S]*?<\/title>/i,
-      ""
-    )
-    .replace(
-      /<meta\s+name=["']description["'][^>]*>/gi,
-      ""
-    )
-    .replace(
-      /<meta\s+property=["']og:[^"']+["'][^>]*>/gi,
-      ""
-    )
-    .replace(
-      /<meta\s+name=["']twitter:[^"']+["'][^>]*>/gi,
-      ""
-    )
-    .replace(
-      /<link\s+rel=["']canonical["'][^>]*>/gi,
-      ""
-    );
+    .replace(/<title>[\s\S]*?<\/title>/i, "")
+    .replace(/<meta\s+name=["']description["'][^>]*>/gi, "")
+    .replace(/<meta\s+property=["']og:[^"']+["'][^>]*>/gi, "")
+    .replace(/<meta\s+name=["']twitter:[^"']+["'][^>]*>/gi, "")
+    .replace(/<link\s+rel=["']canonical["'][^>]*>/gi, "");
 
-  const imageTags = data.image
-    ? `
+  const tags = `
+<title>${esc(data.title)}</title>
+<meta name="description" content="${esc(data.description)}">
+<link rel="canonical" href="${esc(data.canonical)}">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="Yeni Ozanlar">
+<meta property="og:locale" content="tr_TR">
+<meta property="og:url" content="${esc(data.canonical)}">
+<meta property="og:title" content="${esc(data.title)}">
+<meta property="og:description" content="${esc(data.description)}">
+${data.image ? `
 <meta property="og:image" content="${esc(data.image)}">
+<meta property="og:image:url" content="${esc(data.image)}">
 <meta property="og:image:secure_url" content="${esc(data.image)}">
 <meta property="og:image:type" content="${esc(data.imageType || "image/jpeg")}">
 <meta property="og:image:width" content="1200">
@@ -217,350 +187,76 @@ function injectMeta(html, data) {
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:image" content="${esc(data.image)}">
 <meta name="twitter:image:alt" content="${esc(data.title)}">
-`
-    : `
-<meta name="twitter:card" content="summary">
+` : `<meta name="twitter:card" content="summary">`}
+<meta name="twitter:title" content="${esc(data.title)}">
+<meta name="twitter:description" content="${esc(data.description)}">
 `;
 
-  const tags = `
-<title>${esc(data.title)}</title>
+  return clean.replace(/<head>/i, "<head>" + tags);
+}
 
-<meta name="description" content="${esc(data.description)}">
+module.exports = async function handler(req, res) {
+  const slug = String(req.query?.slug || "").trim();
+  const postId = getPostId(slug);
+  const canonicalSlug = slug.split("?")[0];
+  const canonical = `${APP_URL}/post/${encodeURIComponent(canonicalSlug)}`;
 
-<link
-  rel="canonical"
-  href="${esc(data.canonical)}"
->
-
-<meta property="og:type" content="article">
-<meta property="og:site_name" content="Yeni Ozanlar">
-<meta property="og:locale" content="tr_TR">
-
-<meta
-  property="og:url"
-  content="${esc(data.canonical)}"
->
-
-<meta
-  property="og:title"
-  content="${esc(data.title)}"
->
-
-<meta
-  property="og:description"
-  content="${esc(data.description)}"
->
-
-${imageTags}
-
-<meta
-  name="twitter:title"
-  content="${esc(data.title)}"
->
-
-<meta
-  name="twitter:description"
-  content="${esc(data.description)}"
->
-`;
-
-  return clean.replace(
-    /<head>/i,
-    `<head>${tags}`
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.setHeader(
+    "Cache-Control",
+    "public, s-maxage=60, stale-while-revalidate=300"
   );
-}
 
-function previewHtml(data) {
-  return `<!doctype html>
-<html lang="tr">
-
-<head>
-
-<meta charset="utf-8">
-
-<title>${esc(data.title)}</title>
-
-<meta
-  name="description"
-  content="${esc(data.description)}"
->
-
-<link
-  rel="canonical"
-  href="${esc(data.canonical)}"
->
-
-<meta
-  property="og:type"
-  content="article"
->
-
-<meta
-  property="og:site_name"
-  content="Yeni Ozanlar"
->
-
-<meta
-  property="og:locale"
-  content="tr_TR"
->
-
-<meta
-  property="og:url"
-  content="${esc(data.canonical)}"
->
-
-<meta
-  property="og:title"
-  content="${esc(data.title)}"
->
-
-<meta
-  property="og:description"
-  content="${esc(data.description)}"
->
-
-${
-  data.image
-    ? `
-<meta
-  property="og:image"
-  content="${esc(data.image)}"
->
-
-<meta
-  property="og:image:secure_url"
-  content="${esc(data.image)}"
->
-
-<meta
-  property="og:image:type"
-  content="${esc(data.imageType || "image/jpeg")}"
->
-
-<meta
-  property="og:image:width"
-  content="1200"
->
-
-<meta
-  property="og:image:height"
-  content="630"
->
-
-<meta
-  property="og:image:alt"
-  content="${esc(data.title)}"
->
-
-<meta
-  name="twitter:card"
-  content="summary_large_image"
->
-
-<meta
-  name="twitter:image"
-  content="${esc(data.image)}"
->
-
-<meta
-  name="twitter:image:alt"
-  content="${esc(data.title)}"
->
-`
-    : `
-<meta
-  name="twitter:card"
-  content="summary"
->
-`
-}
-
-<meta
-  name="twitter:title"
-  content="${esc(data.title)}"
->
-
-<meta
-  name="twitter:description"
-  content="${esc(data.description)}"
->
-
-</head>
-
-<body>
-
-<h1>${esc(data.title)}</h1>
-
-<p>${esc(data.description)}</p>
-
-${
-  data.image
-    ? `
-<img
-  src="${esc(data.image)}"
-  alt="${esc(data.title)}"
->
-`
-    : ""
-}
-
-<p>
-<a href="${esc(data.canonical)}">
-Yeni Ozanlar'da şiiri görüntüle
-</a>
-</p>
-
-</body>
-
-</html>`;
-}
-
-export default async function handler(req, res) {
   try {
-    const slug = String(
-      req.query?.slug || ""
-    ).trim();
+    let post = null;
 
-    const postId = getPostId(slug);
-
-    if (!postId) {
-      const shell = await getAppShell();
-
-      res.setHeader(
-        "Content-Type",
-        "text/html; charset=utf-8"
-      );
-
-      return res.status(200).send(shell);
+    if (postId) {
+      const snap = await getDb().collection("posts").doc(postId).get();
+      if (snap.exists) post = snap.data() || {};
     }
 
-    const snapshot = await db()
-      .collection("posts")
-      .doc(postId)
-      .get();
-
-    if (!snapshot.exists) {
-      const shell = await getAppShell();
-
-      res.setHeader(
-        "Content-Type",
-        "text/html; charset=utf-8"
-      );
-
-      return res.status(200).send(shell);
+    // Şiir bulunamazsa genel kart.
+    if (!post) {
+      return res.status(200).send(previewHtml({
+        title: "Yeni Ozanlar 🪶",
+        description: "Şiirlerini paylaş, oku, puanla.",
+        image: `${APP_URL}/og-default.jpg`,
+        imageType: "image/jpeg",
+        canonical
+      }));
     }
 
-    const post = snapshot.data() || {};
-
-    const title = String(
-      post.title || "Yeni Ozanlar"
-    ).trim();
-
+    const title = String(post.title || "Yeni Ozanlar").trim();
     const description = excerpt(post.text);
-
-    /*
-     * Facebook için kanonik adres:
-     *
-     * /post/deneme-tzpyd43
-     *
-     * Burada query string OLMAYACAK.
-     */
-    const canonical =
-      `${APP_URL}/post/${encodeURIComponent(slug)}`;
-
-    let imageInfo =
-      getImageInfo(post, postId);
-
-    /*
-     * Şiirde doğrudan resim yoksa YouTube
-     * küçük resmi kullanılabilir.
-     */
-    if (!imageInfo && post.youtube) {
-      const youtubeId =
-        getYouTubeId(post.youtube);
-
-      if (youtubeId) {
-        imageInfo = {
-          url: youtubeImage(youtubeId),
-          type: "image/jpeg"
-        };
-      }
-    }
+    const info = imageInfo(post, postId);
 
     const data = {
       title,
       description,
-      image: imageInfo?.url || null,
-      imageType: imageInfo?.type || null,
+      image: info?.url || null,
+      imageType: info?.type || "image/jpeg",
       canonical
     };
 
-    const userAgent =
-      req.headers?.["user-agent"] || "";
-
-    const bot =
-      isSocialBot(userAgent);
-
-    res.setHeader(
-      "Content-Type",
-      "text/html; charset=utf-8"
-    );
-
-    /*
-     * Facebook'un eski hatalı önizlemeyi uzun süre
-     * cache'lemesini engelle.
-     */
-    res.setHeader(
-      "Cache-Control",
-      "public, s-maxage=60, stale-while-revalidate=300"
-    );
-
-    /*
-     * Facebook / Messenger / WhatsApp vb.
-     * doğrudan özel OG HTML alır.
-     */
-    if (bot) {
-      return res
-        .status(200)
-        .send(previewHtml(data));
+    // Sosyal bot için doğrudan küçük, temiz HTML.
+    if (isSocialBot(req.headers["user-agent"])) {
+      return res.status(200).send(previewHtml(data));
     }
 
-    /*
-     * Normal ziyaretçi gerçek uygulamayı görür.
-     */
-    const shell =
-      await getAppShell();
-
-    return res
-      .status(200)
-      .send(
-        injectMeta(shell, data)
-      );
+    // Normal tarayıcı: gerçek uygulama kabuğu + şiire özel OG etiketleri.
+    const shell = await getAppShell();
+    return res.status(200).send(injectMeta(shell, data));
 
   } catch (error) {
-    console.error(
-      "postPreview.js HATASI:",
-      error
-    );
+    console.error("postPreview.js HATASI:", error);
 
-    try {
-      const shell =
-        await getAppShell();
-
-      res.setHeader(
-        "Content-Type",
-        "text/html; charset=utf-8"
-      );
-
-      return res
-        .status(200)
-        .send(shell);
-
-    } catch {
-      return res
-        .status(500)
-        .send("Yeni Ozanlar");
-    }
+    // Hata halinde bile genel kart dön; 500 üretip Facebook'u tamamen bozma.
+    return res.status(200).send(previewHtml({
+      title: "Yeni Ozanlar 🪶",
+      description: "Şiirlerini paylaş, oku, puanla.",
+      image: `${APP_URL}/og-default.jpg`,
+      imageType: "image/jpeg",
+      canonical
+    }));
   }
-}
+};
