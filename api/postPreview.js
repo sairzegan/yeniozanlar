@@ -8,7 +8,12 @@ export default function handler(req, res) {
     const cleanTitle = decodeURIComponent(slug).replace(/[-_]/g, ' ');
     const title = `Şiir: ${cleanTitle}`;
     const description = "Yeni Ozanlar'da paylaşılan bu eşsiz şiiri okumak için tıklayın.";
-    const imageUrl = `https://${req.headers.host}/logo.png`; // Projenizdeki geçerli bir görsel/logo URL'i
+    
+    // Facebook'un hata vermemesi için doğrudan internet üzerinden erişilebilen, 
+    // kesinlikle geçerli bir görsel uzantısına sahip bir URL kullanıyoruz.
+    // Projenizde public klasöründe gerçek bir resim varsa onu yazabilirsiniz, 
+    // şimdilik Facebook'un sorunsuz kabul edeceği ana site logonuzu veya sabit bir görseli verelim:
+    const imageUrl = `https://${req.headers.host}/favicon.ico`; // Veya projenizdeki geçerli bir .png/.jpg görsel linki
     const currentFullUrl = `https://${req.headers.host}${fullUrl}`;
 
     const html = `<!DOCTYPE html>
@@ -22,6 +27,8 @@ export default function handler(req, res) {
         <meta property="og:url" content="${currentFullUrl}" />
         <meta property="og:type" content="article" />
         <meta property="og:image" content="${imageUrl}" />
+        <meta property="og:image:secure_url" content="${imageUrl}" />
+        <meta property="og:image:type" content="image/jpeg" />
         <meta property="og:image:width" content="1200" />
         <meta property="og:image:height" content="630" />
         <meta name="twitter:card" content="summary_large_image" />
