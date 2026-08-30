@@ -1903,6 +1903,121 @@ const A = {
 // ── BOT PUANLAMALARI (A dışında tanımlanır) ──────────────────────────────────
 // ── BOT PUANLAMALARI (Groq AI) ──────────────────────────────────────────────
 
+// Ham model çıktısından JSON'u ayıklar (jsonAyikla ile aynı mantık, ama
+// score'a 2.0-9.8 sınırlaması UYGULAMAZ — bot yorumları {puan,yorum} şeklinde
+// farklı bir şema kullanıyor, sınırlama her botun kendi puan aralığında yapılıyor).
+function jsonAyiklaBasit(raw){
+  const clean = raw.replace(/```json|```/g,'').trim();
+  const jsonStr = clean.slice(clean.indexOf('{'), clean.lastIndexOf('}')+1);
+  return JSON.parse(jsonStr);
+}
+
+// DÜZELTME: Daha önce bot yorumları (duyu-yorum/katlı-yorum/arı-yorum) admin
+// panelinden "Gemini" veya "Claude" seçilse BİLE her zaman Groq'u kullanıyordu
+// — çünkü zorunluModel yalnızca "ana AI Groq kullandıysa o Groq modelini"
+// zorluyordu, Gemini/Claude seçiminde botZorunluModel=null kalıp botlar kendi
+// Groq kademesini (auto) çalıştırıyordu. Bu da ana AI ile 3 bot'un TAMAMEN
+// FARKLI modellerden gelip birbirini tutmayan puan/yorum vermesine yol açıyordu.
+//
+// Çözüm: botAICagir artık "saglayici" parametresini (adminSecilenSaglayici ile
+// AYNI değer kümesi: 'auto' | 'groq:model-adi' | 'gemini' | 'claude' | 'yerel')
+// kabul edip isteği doğru sağlayıcıya yönlendirir. Böylece ana AI hangi
+// sağlayıcıyı kullandıysa botlar da AYNI sağlayıcıyı kullanır.
+async function botAICagir(systemPrompt, userPrompt, saglayici='auto'){
+  if(saglayici==='yerel'){
+    // Ana AI zaten tamamen başarısız olup yerel algoritmaya düşmüşse, botları da
+    // gereksiz yere ağa çıkarmadan doğrudan yerel yedeğe yönlendiriyoruz.
+    return null;
+  }
+  if(saglayici==='gemini'){
+    try{
+      groqKota.sonGuncelleme = new Date().toLocaleTimeString('tr-TR');
+      groqKota.toplamIstek++;
+      const res = await fetch('/api/gemini', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'gemini-3.5-flash',
+          max_tokens: 400,
+          temperature: 0.8,
+          reasoning_effort: 'low',
+          response_format: { type: 'json_object' },
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt }
+          ]
+        })
+      });
+      if(!res.ok){
+        let mesaj = '';
+        try{ const errBody = await res.json(); mesaj = errBody?.error?.message || ''; }catch(_){}
+        throw new Error(res.status+': '+(mesaj || 'Gemini hatası'));
+      }
+      const data = await res.json();
+      const raw = data.choices?.[0]?.message?.content?.trim();
+      if(!raw) throw new Error('BOS_YANIT: Gemini içerik döndürmedi');
+      const result = jsonAyiklaBasit(raw);
+      groqKota.sonHata = null;
+      sonBasariliBotModeli = 'gemini-3.5-flash';
+      return result;
+    }catch(e){
+      console.warn('Bot (Gemini) başarısız:', e.message);
+      groqKota.sonHata = 'Gemini: '+e.message;
+      sonBasariliBotModeli = null;
+      return null;
+    }
+  }
+  if(saglayici==='claude'){
+    try{
+      groqKota.sonGuncelleme = new Date().toLocaleTimeString('tr-TR');
+      groqKota.toplamIstek++;
+      const res = await fetch('/api/claude', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'claude-sonnet-5',
+          max_tokens: 400,
+          system: systemPrompt,
+          messages: [ { role: 'user', content: userPrompt } ]
+        })
+      });
+      if(!res.ok){
+        let mesaj = '';
+        try{ const errBody = await res.json(); mesaj = errBody?.error?.message || ''; }catch(_){}
+        throw new Error(res.status+': '+(mesaj || 'Claude hatası'));
+      }
+      const data = await res.json();
+      const raw = data.content?.[0]?.text?.trim();
+      if(!raw) throw new Error('BOS_YANIT: Claude içerik döndürmedi');
+      const result = jsonAyiklaBasit(raw);
+      groqKota.sonHata = null;
+      sonBasariliBotModeli = 'claude-sonnet-5';
+      return result;
+    }catch(e){
+      console.warn('Bot (Claude) başarısız:', e.message);
+      groqKota.sonHata = 'Claude: '+e.message;
+      sonBasariliBotModeli = null;
+      return null;
+    }
+  }
+  // 'groq:model-adi' → o tek Groq modelini zorlar; 'auto' → mevcut Groq kademesi.
+  const zorunluModel = (saglayici && saglayici.startsWith('groq:')) ? saglayici.slice(5) : null;
+  return await groqBotCall(systemPrompt, userPrompt, zorunluModel);
+}
+
+// Ana AI çağrısından (scorePoem) hemen SONRA çağrılır. adminSecilenSaglayici
+// 'auto' veya belirli bir 'groq:model' olsa bile, kota durumuna göre gerçekte
+// FARKLI bir modele/sağlayıcıya düşmüş olabilir (örn. Groq kotası dolup Gemini'ye
+// veya yerel algoritmaya düşmüş olabilir). Botları admin'in SEÇTİĞİ isme değil,
+// ana AI'ın GERÇEKTE kullandığı sağlayıcıya zorlarız — böylece ikisi arasında
+// hep tutarlılık olur.
+function sonBasariliSaglayiciyiBul(){
+  if(groqKota.sonKaynak==='groq' && groqKota.sonModel) return 'groq:'+groqKota.sonModel;
+  if(groqKota.sonKaynak==='gemini') return 'gemini';
+  if(groqKota.sonKaynak==='claude') return 'claude';
+  return 'yerel';
+}
+
 async function groqBotCallTekModel(systemPrompt, userPrompt, model) {
   const govde = {
     model: model,
@@ -1993,33 +2108,33 @@ async function groqBotCall(systemPrompt, userPrompt, zorunluModel=null) {
   return null;
 }
 
-async function botDuyuPuan(text, zorunluModel=null) {
+async function botDuyuPuan(text, saglayici='auto') {
   if (!text || text.trim().length < 5) return null;
   const system = 'Sen "duyu-yorum" adlı bir şiir eleştirmensin. YALNIZCA şiirin duygusallığını, duygu yoğunluğunu ve duygusal etkisini değerlendirirsin. Teknik unsurları değil, sadece duyguyu analiz et. Yanıtlarını SADECE JSON formatında ver.';
   const user = 'Şu şiirin duygusallığını değerlendir:\n\n"""\n' + text + '\n"""\n\nSADECE şu JSON ile yanıtla:\n{"puan": <2.0-9.5 arasi sayi>, "yorum": "<2-3 cumle duygu analizi>"}';
-  const result = await groqBotCall(system, user, zorunluModel);
+  const result = await botAICagir(system, user, saglayici);
   if (!result) return botDuyuPuanYerel(text);
   let p = Math.min(9.5, Math.max(2.0, parseFloat(result.puan)));
   p = Math.round(p * 10) / 10;
   return { puan: p, yorum: result.yorum, kullanici: 'bot_duyu_yorum', ad: 'duyu-yorum' };
 }
 
-async function botKatliPuan(text, zorunluModel=null) {
+async function botKatliPuan(text, saglayici='auto') {
   if (!text || text.trim().length < 5) return null;
   const system = 'Sen "katlı-yorum" adlı bir şiir eleştirmensin. YALNIZCA şiirin ses uyumunu, kafiye düzenini, hece ölçüsünü ve ritim yapısını değerlendirirsin. Duyguya değil, sese odaklan. Yanıtlarını SADECE JSON formatında ver.';
   const user = 'Şu şiirin ses uyumunu ve kafiyesini değerlendir:\n\n"""\n' + text + '\n"""\n\nSADECE şu JSON ile yanıtla:\n{"puan": <2.0-9.5 arasi sayi>, "yorum": "<2-3 cumle ses analizi>"}';
-  const result = await groqBotCall(system, user, zorunluModel);
+  const result = await botAICagir(system, user, saglayici);
   if (!result) return botKatliPuanYerel(text);
   let p = Math.min(9.5, Math.max(2.0, parseFloat(result.puan)));
   p = Math.round(p * 10) / 10;
   return { puan: p, yorum: result.yorum, kullanici: 'bot_katli_yorum', ad: 'katlı-yorum' };
 }
 
-async function botAriPuan(text, zorunluModel=null) {
+async function botAriPuan(text, saglayici='auto') {
   if (!text || text.trim().length < 5) return null;
   const system = 'Sen "arı-yorum" adlı bir şiir eleştirmensin. YALNIZCA şiirdeki imgeleri, metaforları, özgünlüğü ve şiire verilen emeği değerlendirirsin. Ne kadar işlenmiş, ne kadar özgün olduğuna bak. Yanıtlarını SADECE JSON formatında ver.';
   const user = 'Şu şiirin imgelerini, metaforlarını ve özgünlüğünü değerlendir:\n\n"""\n' + text + '\n"""\n\nSADECE şu JSON ile yanıtla:\n{"puan": <2.0-9.5 arasi sayi>, "yorum": "<2-3 cumle imge analizi>"}';
-  const result = await groqBotCall(system, user, zorunluModel);
+  const result = await botAICagir(system, user, saglayici);
   if (!result) return botAriPuanYerel(text);
   let p = Math.min(9.5, Math.max(2.0, parseFloat(result.puan)));
   p = Math.round(p * 10) / 10;
@@ -2725,6 +2840,31 @@ async function adminGiphyFallbackUygula(post){
 // flux-image.js, huggingface-image.js ve gemini-image.js ham görsel binary'si
 // (image/*) döner; pollinations-image.js JSON içinde base64 data URL döner —
 // hepsi burada aynı {blob} şekline normalize edilir.
+// ── Görsel AI sağlayıcıları durum takibi (admin panelindeki "Görsel AI
+// Sağlayıcıları Durumu" kartı için) — her sağlayıcının en son DOĞRUDAN
+// testinin sonucunu (kota/hata dahil) tutar. adminYapayZekaGorseliYenile'nin
+// otomatik zincirinden BAĞIMSIZDIR; admin panelindeki "Test Et" butonları
+// sağlayıcıyı zincirdeki sıraya bakmaksızın doğrudan çağırır.
+const gorselKota = {
+  cloudflare:   { basarili:null, hata:null, sonTest:null },
+  pollinations: { basarili:null, hata:null, sonTest:null },
+  huggingface:  { basarili:null, hata:null, sonTest:null },
+  gemini:       { basarili:null, hata:null, sonTest:null }
+};
+async function gorselSaglayiciTestEt(anahtar, fn){
+  const denemeBasligi='Deneme';
+  const denemeSiiri='Deneme şiiri:\nGüneş doğar dağların ardından,\nBu satırlar sadece test eder.';
+  try{
+    await fn(denemeBasligi, denemeSiiri, undefined);
+    gorselKota[anahtar].basarili = true;
+    gorselKota[anahtar].hata = null;
+  }catch(e){
+    gorselKota[anahtar].basarili = false;
+    gorselKota[anahtar].hata = e?.message || String(e);
+  }
+  gorselKota[anahtar].sonTest = new Date().toLocaleTimeString('tr-TR');
+}
+
 async function fluxGorselDene(title, text, signal){
   const r=await fetch('/api/flux-image',{
     method:'POST', headers:{'Content-Type':'application/json'}, signal,
@@ -3100,19 +3240,19 @@ function postCard(post, forceExpand=false, autoOpenComments=false, hedefYorumId=
       try{
         const r=await scorePoem(post.text, adminSecilenSaglayici);
         const kullanilanModel1 = groqKota.sonKaynak==='yerel' ? 'yerel' : (groqKota.sonModel||groqKota.sonKaynak);
-        // Botları da ana AI ile AYNI modele zorla (Groq kullanıldıysa) — böylece
-        // 3 bot ile ana değerlendirme birbirinden farklı modellere düşüp tutarsız
-        // yorum vermez. Ana AI Gemini/Claude kullandıysa botlar kendi Groq
-        // kademesini (auto) kullanır.
-        const botZorunluModel = groqKota.sonKaynak==='groq' ? groqKota.sonModel : null;
+        // DÜZELTME: Botları artık admin Groq seçtiyse (ve ana AI Groq'ta kaldıysa)
+        // değil, ana AI'ın GERÇEKTE kullandığı sağlayıcıya (Groq/Gemini/Claude/yerel
+        // fark etmeksizin) zorluyoruz — böylece admin "Gemini" veya "Claude" seçse
+        // bile 3 bot artık Groq'a düşüp ana değerlendirmeden farklı yorum vermez.
+        const botSaglayici = sonBasariliSaglayiciyiBul();
         revalStatus.textContent='duyu-yorum analiz ediyor...';
-        const b1=await botDuyuPuan(post.text, botZorunluModel);
+        const b1=await botDuyuPuan(post.text, botSaglayici);
         await new Promise(res=>setTimeout(res,600));
         revalStatus.textContent='katlı-yorum analiz ediyor...';
-        const b2=await botKatliPuan(post.text, botZorunluModel);
+        const b2=await botKatliPuan(post.text, botSaglayici);
         await new Promise(res=>setTimeout(res,600));
         revalStatus.textContent='arı-yorum analiz ediyor...';
-        const b3=await botAriPuan(post.text, botZorunluModel);
+        const b3=await botAriPuan(post.text, botSaglayici);
         const idx=S.posts.findIndex(p=>p.id===post.id);
         if(idx>-1){
           const yeniRatings={...(S.posts[idx].userRatings||{})};
@@ -4007,6 +4147,54 @@ function Profile(){
     kotaDiv.appendChild(geminiTestBtn);
     kotaDiv.appendChild(claudeTestBtn);
     adminPanel.appendChild(kotaDiv);
+
+    // Görsel AI Sağlayıcıları Durumu (Cloudflare FLUX / Pollinations / Hugging Face / Gemini)
+    const gorselDiv=h('div',{style:{background:'#0f0a1a',border:'1px solid #2d1b52',borderRadius:'10px',padding:'12px',marginBottom:'14px'}});
+    gorselDiv.appendChild(h('p',{style:{color:'#a78bfa',fontSize:'.8rem',fontWeight:'bold',marginBottom:'8px'}},'🎨 Görsel AI Sağlayıcıları Durumu'));
+    const gorselIcerik=h('div');
+    const GORSEL_SAGLAYICI_LISTESI=[
+      { anahtar:'cloudflare',   ad:'Cloudflare FLUX',              fn:fluxGorselDene },
+      { anahtar:'pollinations', ad:'Pollinations',                  fn:pollinationsGorselDene },
+      { anahtar:'huggingface',  ad:'Hugging Face (FLUX)',           fn:huggingfaceGorselDene },
+      { anahtar:'gemini',       ad:'Google Gemini (Nano Banana)',   fn:geminiGorselDene }
+    ];
+    function gorselKotaGoster(){
+      gorselIcerik.innerHTML='';
+      GORSEL_SAGLAYICI_LISTESI.forEach(s=>{
+        const durum=gorselKota[s.anahtar];
+        const blok=h('div',{style:{marginBottom:'10px',paddingBottom:'10px',borderBottom:'1px solid #2d1b52'}});
+        blok.appendChild(h('p',{style:{color:'#e9d5ff',fontSize:'.8rem',fontWeight:'bold',marginBottom:'4px'}},s.ad));
+        if(durum.sonTest===null){
+          blok.appendChild(h('p',{style:{color:'#6b5b8a',fontSize:'.72rem',fontStyle:'italic'}},'Henüz test edilmedi.'));
+        } else if(durum.basarili){
+          blok.appendChild(h('p',{style:{color:'#34d399',fontSize:'.75rem'}},'✅ Başarılı — görsel üretildi.'));
+        } else {
+          blok.appendChild(h('p',{style:{color:'#f87171',fontSize:'.75rem',lineHeight:'1.5',wordBreak:'break-word'}},'❌ '+durum.hata));
+        }
+        if(durum.sonTest) blok.appendChild(h('p',{style:{color:'#4b3d6b',fontSize:'.65rem',marginTop:'4px'}},'Son test: '+durum.sonTest));
+        gorselIcerik.appendChild(blok);
+      });
+    }
+    gorselKotaGoster();
+    gorselDiv.appendChild(gorselIcerik);
+
+    const gorselTestBtnRow=h('div',{style:{display:'flex',flexWrap:'wrap',gap:'6px',marginTop:'4px'}});
+    GORSEL_SAGLAYICI_LISTESI.forEach(s=>{
+      const btn=h('button',{style:{fontSize:'.7rem',padding:'4px 10px',background:'transparent',color:'#34d399',border:'1px solid #1d5c3d',borderRadius:'8px',cursor:'pointer'},
+        onclick:async(ev)=>{
+          const b=ev.currentTarget;
+          b.disabled=true; const eski=b.textContent; b.textContent='⏳ Test ediliyor...';
+          await gorselSaglayiciTestEt(s.anahtar, s.fn);
+          gorselKotaGoster();
+          b.disabled=false; b.textContent=eski;
+        }
+      }, `🔍 ${s.ad} Test Et`);
+      gorselTestBtnRow.appendChild(btn);
+    });
+    gorselDiv.appendChild(gorselTestBtnRow);
+    gorselDiv.appendChild(h('p',{style:{color:'#4b3d6b',fontSize:'.65rem',fontStyle:'italic',marginTop:'8px',lineHeight:'1.4'}},'Not: Bu testler otomatik zinciri (Cloudflare FLUX→Pollinations→Hugging Face→Gemini→GIPHY) atlayıp sağlayıcıyı DOĞRUDAN çağırır; hangisinin neden başarısız olduğunu (kota, eksik/yanlış anahtar, model hatası vb.) tam mesajıyla görmek içindir.'));
+    adminPanel.appendChild(gorselDiv);
+
     const durumEl=h('p',{style:{color:'#6b5b8a',fontSize:'.85rem',marginTop:'10px',fontStyle:'italic'}},'');
     const topluModelSecici=h('select',{class:'inp',style:{marginBottom:'8px',fontSize:'.82rem',padding:'8px',borderRadius:'8px'}},[
       h('option',{value:'auto'},'🔀 Groq — otomatik kademe (kota dolarsa sıradakine geçer)'),
@@ -4033,13 +4221,16 @@ function Profile(){
           durumEl.textContent=`⏳ ${sayac+1}/${tumPostlar.length} değerlendiriliyor...`;
           const r=await scorePoem(post.text, adminSecilenSaglayici);
           const kullanilanModelToplu = groqKota.sonKaynak==='yerel' ? 'yerel' : (groqKota.sonModel||groqKota.sonKaynak);
-          const botZorunluModelToplu = groqKota.sonKaynak==='groq' ? groqKota.sonModel : null;
+          // DÜZELTME: bkz. tekil değerlendirme — botlar artık ana AI'ın GERÇEKTE
+          // kullandığı sağlayıcıya zorlanıyor (Groq/Gemini/Claude/yerel), sadece
+          // Groq seçiliyken değil.
+          const botSaglayiciToplu = sonBasariliSaglayiciyiBul();
           await new Promise(res=>setTimeout(res,800));
-          const b1=await botDuyuPuan(post.text, botZorunluModelToplu);
+          const b1=await botDuyuPuan(post.text, botSaglayiciToplu);
           await new Promise(res=>setTimeout(res,800));
-          const b2=await botKatliPuan(post.text, botZorunluModelToplu);
+          const b2=await botKatliPuan(post.text, botSaglayiciToplu);
           await new Promise(res=>setTimeout(res,800));
-          const b3=await botAriPuan(post.text, botZorunluModelToplu);
+          const b3=await botAriPuan(post.text, botSaglayiciToplu);
           const yeniRatings={...(post.userRatings||{})};
           if(b1)yeniRatings[b1.kullanici]=b1.puan;
           if(b2)yeniRatings[b2.kullanici]=b2.puan;
