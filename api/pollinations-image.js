@@ -20,6 +20,13 @@
 function makePrompt(title, text) {
   const poemTitle = String(title || '').trim().slice(0, 300);
   const poem = String(text || '').trim().slice(0, 5000);
+  // Önbellek kırıcı — Pollinations aynı prompt için üretilen görseli önbelleğe
+  // alıp anında aynısını döndürüyor ("Repeated image generations for the same
+  // prompt are cached and served instantly"). Bu yüzden "Yeniden Resim
+  // Oluştur" butonuna tekrar basınca hep AYNI görsel geliyordu. Her istekte
+  // benzersiz bir etiket ekleyerek prompt'u (dolayısıyla önbellek anahtarını
+  // ve URL'i) her seferinde farklı hale getiriyoruz.
+  const varyasyon = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 
   return [
     'Create ONE original landscape image directly inspired by the Turkish poem below.',
@@ -30,7 +37,8 @@ function makePrompt(title, text) {
     'No GIF, no collage, no stock-photo look, no logo, no watermark, no readable text, no letters, no captions inside the image.',
     'Landscape 16:9 composition suitable for a poetry post.',
     poemTitle ? `Title: ${poemTitle}` : '',
-    `Turkish poem:\n${poem}`
+    `Turkish poem:\n${poem}`,
+    `Internal variation tag (ignore, do not depict, do not render as text): ${varyasyon}`
   ].filter(Boolean).join('\n\n');
 }
 
@@ -70,11 +78,15 @@ export default async function handler(req, res) {
 
   const prompt = makePrompt(title, text);
   const encoded = encodeURIComponent(prompt);
+  // seed: Pollinations'ın resmi parametresi — belirtilmezse "rastgele" olması
+  // gerekiyor ama URL/prompt aynı kaldığında önbellekten aynı görsel dönebiliyor.
+  // Her istekte kendimiz rastgele bir seed vererek bunu kesin olarak engelliyoruz.
+  const seed = Math.floor(Math.random() * 1_000_000_000);
 
   // Official Pollinations image endpoint.
   const base =
     `https://gen.pollinations.ai/image/${encoded}` +
-    `?model=flux&width=1024&height=576&nologo=true`;
+    `?model=flux&width=1024&height=576&nologo=true&seed=${seed}`;
 
   const errors = [];
 

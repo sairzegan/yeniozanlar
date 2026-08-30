@@ -22,6 +22,8 @@ const TIMEOUT_MS = 60000;
 function buildPrompt(title, text) {
   const poem = String(text || '').trim().slice(0, 1800);
   const heading = String(title || '').trim().slice(0, 250);
+  // Önbellek kırıcı — bkz. flux-image.js'teki aynı isimli değişken.
+  const varyasyon = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 
   return [
     'Create one original cinematic image directly inspired by the Turkish poem below.',
@@ -30,7 +32,8 @@ function buildPrompt(title, text) {
     'Style: cinematic photography, realistic, artistic, atmospheric, detailed, natural lighting, elegant composition, 16:9 landscape.',
     'IMPORTANT: absolutely NO text anywhere in the image. No letters, no words, no captions, no typography, no signs, no logos, no watermark.',
     heading ? `Turkish poem title: ${heading}` : '',
-    `Turkish poem:\n${poem}`
+    `Turkish poem:\n${poem}`,
+    `Internal variation tag (ignore, do not depict, do not render as text): ${varyasyon}`
   ].filter(Boolean).join('\n\n');
 }
 
