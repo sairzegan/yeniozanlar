@@ -58,6 +58,29 @@ gösteriyordu. İncelemede birden fazla sorun tespit edildi:
    (başlık + açıklama, gerekirse görselsiz) bir OG kartı döndürülüyor; 500
    yerine her zaman gösterilebilir bir önizleme veriliyor.
 
+## Güncelleme (v2): "og:image açıkça belirtilmedi" uyarısı
+
+İlk düzeltmeden sonra 500 hatası gitti (yanıt kodu artık 200), fakat Facebook
+Hata Ayıklama aracı görseli olmayan bir şiiri test ederken şu uyarıyı verdi:
+
+> The 'og:image' property should be explicitly provided, even if a value can
+> be inferred from other tags.
+
+Bunun sebebi basit: o test şiirinin (`deneme-tzpyd43`) görseli yoktu ve eski
+kodda görseli olmayan şiirler için `og:image` etiketi hiç eklenmiyordu.
+Facebook, gösterecek hiçbir görsel bulamayınca bu uyarıyı veriyor.
+
+**Düzeltme:** Artık görseli (ve YouTube kapak resmi de) olmayan şiirlerde,
+hatta Firestore'a hiç ulaşılamadığında bile, varsayılan bir site görseli
+(`${APP_URL}/og-default.jpg`) kullanılıyor. Böylece paylaşılan her linkte
+mutlaka bir görsel gösteriliyor.
+
+**Sizin yapmanız gereken tek şey:** Projenizin `public/` klasörüne
+`og-default.jpg` adında, 1200x630 piksel boyutlarında bir görsel (logo,
+site banner'ı vb.) eklemek. Dosya orada olduğu sürece kod otomatik olarak
+onu kullanır; eklemezseniz sadece o görsel linki kırık olur, site geri kalanı
+etkilenmez.
+
 ## Değiştirilen/eklenen dosyalar
 
 ```

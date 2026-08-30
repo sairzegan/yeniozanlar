@@ -4,12 +4,20 @@ import { getFirestore } from "firebase-admin/firestore";
 const PROJECT_ID = "yeniozanlar-68b49";
 const APP_URL = "https://yeniozanlar.vercel.app";
 
-// Firebase bağlantısı olmasa da veya hata verse de Facebook'a boş link
-// göstermek yerine en azından genel bir önizleme dönebilmek için varsayılan içerik.
+// Facebook, og:image hiç verilmediğinde "explicitly provided" uyarısı veriyor
+// ve önizlemede görsel göstermiyor. Bu yüzden görseli olmayan şiirlerde ve
+// Firebase/Firestore'a hiç ulaşılamayan durumlarda da HER ZAMAN bir görsel
+// göstermek için varsayılan bir site görseli tanımlanıyor.
+// Bu dosyayı /public/og-default.jpg olarak deponuza eklemeniz yeterli
+// (1200x630 px, jpg/png, ideal boyut Facebook'un önerdiği ölçüdür).
+const DEFAULT_OG_IMAGE = `${APP_URL}/og-default.jpg`;
+const DEFAULT_OG_IMAGE_TYPE = "image/jpeg";
+
 const DEFAULT_OG = {
   title: "Yeni Ozanlar",
   description: "Şiirlerini paylaş, oku, puanla.",
-  image: null,
+  image: DEFAULT_OG_IMAGE,
+  imageType: DEFAULT_OG_IMAGE_TYPE,
 };
 
 let firebaseInitError = null;
@@ -185,6 +193,12 @@ export default async function handler(req, res) {
           d.image = `https://img.youtube.com/vi/${y}/hqdefault.jpg`;
           d.imageType = "image/jpeg";
         }
+      }
+      // Şiirin kendi görseli (ve YouTube kapak resmi) yoksa bile og:image'in
+      // boş kalmaması için varsayılan görsele düş.
+      if (!d.image) {
+        d.image = DEFAULT_OG_IMAGE;
+        d.imageType = DEFAULT_OG_IMAGE_TYPE;
       }
     } else {
       d = { ...DEFAULT_OG, canonical };
