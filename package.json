@@ -1,6 +1,9 @@
 {
   "name": "yeniozanlar",
   "private": true,
+  "scripts": {
+    "build": "echo no-build-needed"
+  },
   "dependencies": {
     "firebase-admin": "^12.7.0"
   }
