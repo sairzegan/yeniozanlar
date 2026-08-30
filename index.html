@@ -2764,11 +2764,11 @@ function kapakKirpModal(file){
     const img=new Image();
     img.onload=()=>{
       const modal=h('div',{class:'modal-bg'});
-      const panel=h('div',{class:'modal',style:{maxWidth:'760px',width:'min(96vw,760px)',padding:'18px',background:'linear-gradient(145deg,#120a20,#1b0d2d)',border:'1px solid #7c3aed'}});
+      const panel=h('div',{class:'modal',style:{maxWidth:'820px',width:'min(96vw,820px)',padding:'18px',background:'linear-gradient(145deg,#120a20,#1b0d2d)',border:'1px solid #7c3aed'}});
       const title=h('h3',{style:{fontFamily:"'Playfair Display',serif",color:'#eadcff',margin:'0 0 7px'}},'✂️ Kapak Fotoğrafını Ayarla');
-      const info=h('p',{style:{color:'#bda7e8',fontSize:'.82rem',margin:'0 0 10px',lineHeight:'1.5'}},'Fotoğrafı yakınlaştırıp uzaklaştırabilir, resmi sürükleyerek kapakta görünecek alanı ayarlayabilirsin. Mor çerçevenin içi kullanılacak.');
+      const info=h('p',{style:{color:'#bda7e8',fontSize:'.82rem',margin:'0 0 10px',lineHeight:'1.5'}},'Fotoğrafı yakınlaştırıp uzaklaştır. Fotoğrafın üzerine basılı tutup sağa-sola veya yukarı-aşağı sürükle. Mor çerçevenin içi kapak olarak kullanılacak.');
 
-      const stage=h('div',{style:{position:'relative',width:'100%',height:'420px',overflow:'hidden',background:'#07040d',borderRadius:'14px',userSelect:'none',touchAction:'none',border:'1px solid #4c1d95'}});
+      const stage=h('div',{style:{position:'relative',width:'100%',height:'min(56vh,460px)',minHeight:'280px',overflow:'hidden',background:'#07040d',borderRadius:'14px',userSelect:'none',touchAction:'none',border:'1px solid #4c1d95',cursor:'grab'}});
       const canvas=document.createElement('canvas');
       canvas.style.display='block';canvas.style.width='100%';canvas.style.height='100%';canvas.style.touchAction='none';
       stage.appendChild(canvas);
@@ -2777,86 +2777,118 @@ function kapakKirpModal(file){
       stage.appendChild(frame);
 
       const controls=h('div',{style:{display:'flex',alignItems:'center',gap:'9px',marginTop:'12px',padding:'10px 12px',borderRadius:'12px',background:'rgba(124,58,237,.12)',border:'1px solid rgba(192,132,252,.25)'}});
-      const zoomOut=h('button',{type:'button',class:'btn',style:{minWidth:'42px',padding:'7px 11px',background:'linear-gradient(135deg,#14532d,#166534)',color:'#ecfdf5',border:'1px solid #22c55e'},onclick:()=>setZoom(zoom-0.1)},'−');
-      const zoomRange=h('input',{type:'range',min:'1',max:'3',step:'0.01',value:'1',style:{flex:'1',accentColor:'#a855f7'}});
-      const zoomIn=h('button',{type:'button',class:'btn',style:{minWidth:'42px',padding:'7px 11px',background:'linear-gradient(135deg,#6d28d9,#9333ea)',color:'#fff',border:'1px solid #c084fc'},onclick:()=>setZoom(zoom+0.1)},'+');
+      const zoomOut=h('button',{type:'button',class:'btn',style:{minWidth:'42px',padding:'7px 11px',background:'linear-gradient(135deg,#14532d,#166534)',color:'#ecfdf5',border:'1px solid #22c55e',borderRadius:'10px'},onclick:()=>setZoom(zoom-0.1)},'−');
+      const zoomRange=h('input',{type:'range',min:'0.5',max:'3',step:'0.01',value:'1',style:{flex:'1',accentColor:'#a855f7'}});
+      const zoomIn=h('button',{type:'button',class:'btn',style:{minWidth:'42px',padding:'7px 11px',background:'linear-gradient(135deg,#6d28d9,#9333ea)',color:'#fff',border:'1px solid #c084fc',borderRadius:'10px'},onclick:()=>setZoom(zoom+0.1)},'+');
       const zoomText=h('span',{style:{minWidth:'58px',textAlign:'right',color:'#d8b4fe',fontSize:'.78rem',fontWeight:'600'}},'100%');
       controls.appendChild(h('span',{style:{color:'#c4b5fd',fontSize:'.8rem'}},'🔍'));controls.appendChild(zoomOut);controls.appendChild(zoomRange);controls.appendChild(zoomIn);controls.appendChild(zoomText);
 
-      let zoom=1, scale=1, baseScale=1, offsetX=0, offsetY=0, dragging=null;
+      let zoom=1, scale=0, baseScale=1, offsetX=0, offsetY=0, dragging=null, stageW=0, stageH=0;
       const targetW=1500,targetH=500;
 
-      function frameMetrics(){
-        const cw=canvas.width,ch=canvas.height;
-        const fw=cw,fh=cw/3;
-        return {cw,ch,fw,fh,fx:0,fy:(ch-fh)/2};
+      function metrics(){
+        const fw=stageW, fh=stageW/3;
+        return {fw,fh,fx:0,fy:(stageH-fh)/2};
+      }
+      function coverScale(){
+        const {fw,fh}=metrics();
+        return Math.max(fw/img.naturalWidth,fh/img.naturalHeight);
       }
       function clampOffsets(){
-        const {cw,ch,fw,fh}=frameMetrics();
+        const {fw,fh,fx,fy}=metrics();
         const iw=img.naturalWidth*scale, ih=img.naturalHeight*scale;
-        const minX=fw-iw, maxX=0;
-        const minY=(ch/2+fh/2)-ih, maxY=(ch/2-fh/2);
-        if(iw>=fw) offsetX=Math.max(minX,Math.min(maxX,offsetX));
-        else offsetX=(cw-iw)/2;
-        if(ih>=fh) offsetY=Math.max(minY,Math.min(maxY,offsetY));
-        else offsetY=(ch-ih)/2;
+        if(iw>=fw){
+          offsetX=Math.min(fx,Math.max(fx+fw-iw,offsetX));
+        }else{
+          offsetX=fx+(fw-iw)/2;
+        }
+        if(ih>=fh){
+          offsetY=Math.min(fy,Math.max(fy+fh-ih,offsetY));
+        }else{
+          offsetY=fy+(fh-ih)/2;
+        }
       }
       function draw(){
         const rect=stage.getBoundingClientRect();
-        canvas.width=Math.max(1,Math.round(rect.width*devicePixelRatio));
-        canvas.height=Math.max(1,Math.round(rect.height*devicePixelRatio));
-        ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);
-        const cw=rect.width,ch=rect.height;
-        const fw=cw,fh=cw/3;
-        baseScale=Math.max(fw/img.naturalWidth,fh/img.naturalHeight);
-        if(!scale)scale=baseScale;
-        if(scale<baseScale)scale=baseScale;
+        stageW=Math.max(1,rect.width);stageH=Math.max(1,rect.height);
+        const dpr=window.devicePixelRatio||1;
+        canvas.width=Math.round(stageW*dpr);canvas.height=Math.round(stageH*dpr);
+        canvas.style.width=stageW+'px';canvas.style.height=stageH+'px';
+        ctx.setTransform(dpr,0,0,dpr,0,0);
+        baseScale=coverScale();
+        if(!scale){
+          // İlk açılışta fotoğrafın tamamını görmeye çalış; minimum kapak ölçeğine ihtiyaç olduğunda
+          // kullanıcı yakınlaştırarak çerçevenin tamamını doldurabilir.
+          const containScale=Math.min(stageW/img.naturalWidth,stageH/img.naturalHeight);
+          scale=containScale;
+          zoom=Math.max(.5,Math.min(3,scale/baseScale));
+          if(!Number.isFinite(zoom)||zoom<.5){zoom=.5;scale=baseScale*.5;}
+          offsetX=(stageW-img.naturalWidth*scale)/2;
+          offsetY=(stageH-img.naturalHeight*scale)/2;
+        }
         clampOffsets();
-        ctx.clearRect(0,0,cw,ch);
-        ctx.fillStyle='#07040d';ctx.fillRect(0,0,cw,ch);
-        const iw=img.naturalWidth*scale,ih=img.naturalHeight*scale;
-        ctx.drawImage(img,offsetX,offsetY,iw,ih);
-        frame.style.height=fh+'px';
-        zoomRange.value=String(Math.max(1,Math.min(3,zoom)));
+        ctx.clearRect(0,0,stageW,stageH);
+        ctx.fillStyle='#07040d';ctx.fillRect(0,0,stageW,stageH);
+        ctx.drawImage(img,offsetX,offsetY,img.naturalWidth*scale,img.naturalHeight*scale);
+        const m=metrics();
+        frame.style.height=m.fh+'px';
+        zoomRange.value=String(Math.max(.5,Math.min(3,zoom)));
         zoomText.textContent=Math.round(zoom*100)+'%';
       }
       function setZoom(z,cx=null,cy=null){
-        const oldScale=scale||baseScale;zoom=Math.max(1,Math.min(3,z));
+        const oldScale=scale||baseScale;
+        zoom=Math.max(.5,Math.min(3,z));
         const newScale=baseScale*zoom;
-        if(cx!=null&&cy!=null){
-          const ix=(cx-offsetX)/oldScale, iy=(cy-offsetY)/oldScale;
-          offsetX=cx-ix*newScale;offsetY=cy-iy*newScale;
-        }else{
-          const {cw,ch}=frameMetrics();
-          const centerX=cw/2,centerY=ch/2;
-          const ix=(centerX-offsetX)/oldScale,iy=(centerY-offsetY)/oldScale;
-          offsetX=centerX-ix*newScale;offsetY=centerY-iy*newScale;
+        const px=cx==null?stageW/2:cx, py=cy==null?stageH/2:cy;
+        const ix=(px-offsetX)/oldScale, iy=(py-offsetY)/oldScale;
+        offsetX=px-ix*newScale;offsetY=py-iy*newScale;
+        scale=newScale;
+        clampOffsets();draw();
+      }
+      function ensureCover(){
+        if(scale<baseScale){
+          const oldScale=scale;
+          const newScale=baseScale;
+          const px=stageW/2,py=stageH/2;
+          const ix=(px-offsetX)/oldScale,iy=(py-offsetY)/oldScale;
+          offsetX=px-ix*newScale;offsetY=py-iy*newScale;scale=newScale;zoom=1;
+          clampOffsets();draw();
         }
-        scale=newScale;clampOffsets();draw();
       }
       zoomRange.oninput=e=>setZoom(parseFloat(e.target.value));
-      stage.addEventListener('pointerdown',e=>{dragging={x:e.clientX,y:e.clientY,ox:offsetX,oy:offsetY};stage.setPointerCapture?.(e.pointerId);});
-      stage.addEventListener('pointermove',e=>{if(!dragging)return;offsetX=dragging.ox+(e.clientX-dragging.x);offsetY=dragging.oy+(e.clientY-dragging.y);clampOffsets();draw();});
-      stage.addEventListener('pointerup',()=>dragging=null);stage.addEventListener('pointercancel',()=>dragging=null);
+      stage.addEventListener('pointerdown',e=>{
+        dragging={x:e.clientX,y:e.clientY,ox:offsetX,oy:offsetY};
+        stage.style.cursor='grabbing';
+        stage.setPointerCapture?.(e.pointerId);
+      });
+      stage.addEventListener('pointermove',e=>{
+        if(!dragging)return;
+        offsetX=dragging.ox+(e.clientX-dragging.x);
+        offsetY=dragging.oy+(e.clientY-dragging.y);
+        clampOffsets();draw();
+      });
+      const stopDrag=()=>{dragging=null;stage.style.cursor='grab';};
+      stage.addEventListener('pointerup',stopDrag);stage.addEventListener('pointercancel',stopDrag);stage.addEventListener('pointerleave',()=>{if(dragging)stage.style.cursor='grabbing';});
       stage.addEventListener('wheel',e=>{e.preventDefault();const r=stage.getBoundingClientRect();setZoom(zoom+(e.deltaY<0?.08:-.08),e.clientX-r.left,e.clientY-r.top);},{passive:false});
 
       const actions=h('div',{style:{display:'flex',justifyContent:'flex-end',gap:'8px',marginTop:'14px'}},[]);
-      const vazgec=h('button',{class:'btn',style:{padding:'9px 15px',background:'rgba(255,255,255,.06)',color:'#d8c8ef',border:'1px solid #6b5b8a'},onclick:()=>{URL.revokeObjectURL(url);modal.remove();resolve(null);}},'İptal');
-      const kullan=h('button',{class:'pb btn',style:{padding:'9px 16px',background:'linear-gradient(135deg,#7c3aed,#a855f7)',color:'#fff',border:'1px solid #c084fc',boxShadow:'0 4px 14px rgba(168,85,247,.25)'},onclick:()=>{
-        const r=stage.getBoundingClientRect();
-        const fw=r.width,fh=r.width/3,fy=(r.height-fh)/2;
-        const srcX=Math.max(0,(-offsetX)/scale);
-        const srcY=Math.max(0,(fy-offsetY)/scale);
-        const srcW=Math.min(img.naturalWidth-srcX,fw/scale);
-        const srcH=Math.min(img.naturalHeight-srcY,fh/scale);
+      const vazgec=h('button',{type:'button',class:'btn',style:{padding:'9px 16px',background:'rgba(255,255,255,.06)',color:'#d8c8ef',border:'1px solid #6b5b8a',borderRadius:'12px'},onclick:()=>{URL.revokeObjectURL(url);modal.remove();resolve(null);}},'İptal');
+      const kullan=h('button',{type:'button',class:'pb btn',style:{padding:'10px 18px',background:'linear-gradient(135deg,#7c3aed,#a855f7)',color:'#fff',border:'1px solid #c084fc',boxShadow:'0 4px 14px rgba(168,85,247,.25)',borderRadius:'12px'},onclick:()=>{
+        ensureCover();
+        const m=metrics();
+        const srcX=(m.fx-offsetX)/scale;
+        const srcY=(m.fy-offsetY)/scale;
+        const srcW=m.fw/scale;
+        const srcH=m.fh/scale;
         const out=document.createElement('canvas');out.width=targetW;out.height=targetH;
         const octx=out.getContext('2d');
+        octx.fillStyle='#0f0a1a';octx.fillRect(0,0,targetW,targetH);
         octx.drawImage(img,srcX,srcY,srcW,srcH,0,0,targetW,targetH);
         out.toBlob(blob=>{URL.revokeObjectURL(url);modal.remove();if(blob)resolve(new File([blob],(file.name||'kapak').replace(/\.[^.]+$/,'')+'_kapak.jpg',{type:'image/jpeg'}));else resolve(null);},'image/jpeg',.92);
       }},'✂️ Kırp ve Kullan');
       actions.appendChild(vazgec);actions.appendChild(kullan);
       panel.appendChild(title);panel.appendChild(info);panel.appendChild(stage);panel.appendChild(controls);panel.appendChild(actions);modal.appendChild(panel);document.body.appendChild(modal);
-      scale=0;draw();
+      requestAnimationFrame(draw);
       modal.onclick=e=>{if(e.target===modal)vazgec.click();};
     };
     img.onerror=()=>{URL.revokeObjectURL(url);toastGoster('Kapak resmi açılamadı.');resolve(null);};
@@ -4361,7 +4393,7 @@ function Profile(){
   const fg=(S.follows[tid]||[]).length;
   const card=h('div',{class:'card fade',style:{textAlign:'center',overflow:'hidden',padding:'0 0 18px'}});
   if(user.coverUrl){
-    card.appendChild(h('div',{style:{width:'100%',aspectRatio:'3 / 1',backgroundImage:`url(\"${user.coverUrl}\")`,backgroundSize:'100% 100%',backgroundPosition:'center',backgroundRepeat:'no-repeat',position:'relative'}}));
+    card.appendChild(h('div',{style:{width:'100%',aspectRatio:'3 / 1',backgroundImage:`url(\"${user.coverUrl}\")`,backgroundSize:'cover',backgroundPosition:'center',backgroundRepeat:'no-repeat',position:'relative'}}));
   }else{
     card.appendChild(h('div',{style:{width:'100%',aspectRatio:'3 / 1',background:'linear-gradient(135deg,#241040,#3b0d6e)'}}));
   }
@@ -4372,7 +4404,7 @@ function Profile(){
   profilIc.appendChild(h('p',{style:{color:'#6b5b8a',marginBottom:'6px'}},`@${user.username}`));
   if(user.bio)profilIc.appendChild(h('p',{style:{color:'#c4b5fd',fontStyle:'italic',marginBottom:'10px',whiteSpace:'pre-line'}},user.bio));
   if(isMe){
-    profilIc.appendChild(h('button',{class:'btn',style:{padding:'7px 14px',margin:'2px 0 12px'},onclick:()=>{const m=profilDuzenleModal(()=>m.remove());document.body.appendChild(m);}},'✏️ Profili Düzenle'));
+    profilIc.appendChild(h('button',{type:'button',class:'profile-edit-btn',style:{padding:'10px 20px',margin:'4px 0 16px',background:'linear-gradient(135deg,#14532d 0%,#166534 48%,#7c3aed 100%)',color:'#fff',border:'1px solid rgba(216,180,254,.65)',borderRadius:'999px',boxShadow:'0 5px 18px rgba(124,58,237,.22)',fontFamily:"'Crimson Text',serif",fontSize:'1rem',fontWeight:'600',letterSpacing:'.01em'},onclick:()=>{const m=profilDuzenleModal(()=>m.remove());document.body.appendChild(m);}},'✏️ Profili Düzenle'));
   }
   if(avg)profilIc.appendChild(h('p',{style:{color:scoreColor(+avg),marginBottom:'12px'}},`Ort. Puan: ${avg}/10 ${scoreBadge(+avg)}`));
   const stats=h('div',{style:{display:'flex',justifyContent:'center',gap:'28px',marginBottom:'16px'}});
