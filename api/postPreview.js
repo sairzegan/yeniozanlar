@@ -4,45 +4,33 @@ import { getFirestore } from "firebase-admin/firestore";
 const PROJECT_ID = "yeniozanlar-68b49";
 const APP_URL = "https://yeniozanlar.vercel.app";
 
-// Facebook, og:image hiç verilmediğinde "explicitly provided" uyarısı veriyor
-// ve önizlemede görsel göstermiyor. Bu yüzden görseli olmayan şiirlerde ve
-// Firebase/Firestore'a hiç ulaşılamayan durumlarda da HER ZAMAN bir görsel
-// göstermek için varsayılan bir site görseli tanımlanıyor.
-//
-// Bu görsel bir statik dosya OLARAK DEĞİL, /api/og-default.js üzerinden,
-// koda gömülü olarak sunuluyor. Böylece projenizin statik dosya klasör
-// yapısına (public/, dist/ vb.) hiçbir bağımlılığı yok ve Content-Type
-// başlığı her zaman elle doğru şekilde ayarlanıyor — "invalid content type"
-// gibi bir hatanın tekrar yaşanma ihtimali ortadan kalkıyor.
-const DEFAULT_OG_IMAGE = `${APP_URL}/api/og-default`;
-const DEFAULT_OG_IMAGE_TYPE = "image/jpeg";
-
-const DEFAULT_OG = {
-  title: "Yeni Ozanlar",
-  description: "Şiirlerini paylaş, oku, puanla.",
-  image: DEFAULT_OG_IMAGE,
-  imageType: DEFAULT_OG_IMAGE_TYPE,
-};
-
-let firebaseInitError = null;
-
 function firebaseAdmin() {
-  if (getApps().length) return getApps()[0];
+  if (getApps().length > 0) {
+    return getApps()[0];
+  }
+
   const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
-  if (!raw) throw new Error("FIREBASE_SERVICE_ACCOUNT_JSON eksik");
+
+  if (!raw) {
+    throw new Error(
+      "FIREBASE_SERVICE_ACCOUNT_JSON Vercel ortam değişkeninde yok."
+    );
+  }
+
   let serviceAccount;
+
   try {
     serviceAccount = JSON.parse(raw);
-  } catch (e) {
-    // Vercel ortam değişkeni bazen private_key içindeki gerçek satır sonlarını
-    // JSON'u bozacak şekilde saklayabiliyor. \n kaçışlı biçime çevirip tekrar dene.
-    const repaired = raw.replace(/\r?\n/g, "\\n");
-    serviceAccount = JSON.parse(repaired);
+  } catch {
+    throw new Error(
+      "FIREBASE_SERVICE_ACCOUNT_JSON geçerli JSON değil."
+    );
   }
-  if (serviceAccount.private_key) {
-    serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, "\n");
-  }
-  return initializeApp({ credential: cert(serviceAccount), projectId: PROJECT_ID });
+
+  return initializeApp({
+    credential: cert(serviceAccount),
+    projectId: PROJECT_ID,
+  });
 }
 
 function db() {
@@ -50,8 +38,8 @@ function db() {
   return getFirestore();
 }
 
-function esc(v) {
-  return String(v ?? "")
+function esc(value) {
+  return String(value ?? "")
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
@@ -59,59 +47,111 @@ function esc(v) {
     .replace(/'/g, "&#39;");
 }
 
-// ÖNEMLİ DÜZELTME: eski regex slug içindeki İLK 7 karakterlik alfasayısal
-// bloğu ID sanıyordu. Başlık kelimelerinden biri tesadüfen 7 harf olursa
-// (örn. "kelime1-tzpyd43") yanlış ID yakalanıp Firestore'da kayıt bulunamıyor
-// ve önizleme kırılıyordu. ID her zaman slug'ın SONUNDA olduğundan artık
-// SON eşleşme alınıyor.
 function getPostId(slug) {
-  let s = String(slug || "").trim();
+  let raw = String(slug || "").trim();
+
   try {
-    s = decodeURIComponent(s);
+    raw = decodeURIComponent(raw);
   } catch {}
-  const matches = s.match(/[A-Za-z0-9]{7}(?=[/?#]|$)/g);
-  return matches && matches.length ? matches[matches.length - 1] : null;
-}
 
-function excerpt(t) {
-  const s = String(t || "").replace(/\s+/g, " ").trim();
-  if (!s) return "Yeni Ozanlar'da bir şiir.";
-  return s.length <= 280 ? s : s.slice(0, 277).replace(/\s+\S*$/g, "") + "…";
-}
+  const parts = raw.split("-");
+  const candidate = parts[parts.length - 1];
 
-function imageType(post) {
-  const r = String(post?.image || "").trim();
-  const m = r.match(/^data:(image\/[A-Za-z0-9.+-]+);base64,/i);
-  if (m) return m[1].toLowerCase();
-  const p = r.split("?")[0].toLowerCase();
-  if (p.endsWith(".png")) return "image/png";
-  if (p.endsWith(".webp")) return "image/webp";
-  if (p.endsWith(".gif")) return "image/gif";
-  if (p.endsWith(".avif")) return "image/avif";
-  if (p.endsWith(".jpg") || p.endsWith(".jpeg")) return "image/jpeg";
+  if (/^[A-Za-z0-9]{7}$/.test(candidate)) {
+    return candidate;
+  }
+
   return null;
 }
 
-function imageUrl(post, id) {
-  return post?.image
-    ? `${APP_URL}/api/postImage?id=${encodeURIComponent(id)}&v=${encodeURIComponent(String(post.ts || "1"))}`
-    : null;
-}
-
-function yt(url) {
-  const m = String(url || "").match(
+function getYouTubeId(url) {
+  const match = String(url || "").match(
     /(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|shorts\/|live\/))([A-Za-z0-9_-]{11})/
   );
-  return m ? m[1] : null;
+
+  return match ? match[1] : null;
 }
 
-function bot(ua) {
-  ua = String(ua || "").toLowerCase();
-  return [
+function excerpt(text) {
+  const clean = String(text || "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!clean) {
+    return "Yeni Ozanlar'da bir şiir.";
+  }
+
+  if (clean.length <= 280) {
+    return clean;
+  }
+
+  return (
+    clean
+      .slice(0, 277)
+      .replace(/\s+\S*$/, "") + "…"
+  );
+}
+
+function getImageInfo(post, postId) {
+  if (!post?.image) {
+    return null;
+  }
+
+  const raw = String(post.image).trim();
+
+  /*
+   * Görsel zaten dışarıda bir URL ise onu kullan.
+   */
+  if (/^https?:\/\//i.test(raw)) {
+    const path = raw.split("?")[0].toLowerCase();
+
+    let type = "image/jpeg";
+
+    if (path.endsWith(".png")) {
+      type = "image/png";
+    } else if (path.endsWith(".webp")) {
+      type = "image/webp";
+    } else if (path.endsWith(".gif")) {
+      type = "image/gif";
+    }
+
+    return {
+      url: raw,
+      type,
+    };
+  }
+
+  /*
+   * Firebase'deki base64 resmi için Facebook'a
+   * SABİT ve temiz bir Vercel URL'si veriyoruz.
+   *
+   * ÖNEMLİ:
+   * Burada ?v=... KULLANMIYORUZ.
+   */
+  if (/^data:image\//i.test(raw)) {
+    const match = raw.match(
+      /^data:(image\/[A-Za-z0-9.+-]+);base64,/i
+    );
+
+    return {
+      url: `${APP_URL}/api/postImage?id=${encodeURIComponent(postId)}`,
+      type: match?.[1] || "image/jpeg",
+    };
+  }
+
+  return null;
+}
+
+function youtubeImage(id) {
+  return `https://img.youtube.com/vi/${id}/hqdefault.jpg`;
+}
+
+function isSocialBot(userAgent) {
+  const ua = String(userAgent || "").toLowerCase();
+
+  const bots = [
     "facebookexternalhit",
     "facebot",
-    "meta-externalagent",
-    "meta-externalfetcher",
     "twitterbot",
     "linkedinbot",
     "whatsapp",
@@ -120,109 +160,407 @@ function bot(ua) {
     "slackbot",
     "skypeuripreview",
     "pinterest",
-    "google-inspectiontool", // Google zengin sonuç / önizleme testi
-    "bingbot",
-  ].some((x) => ua.includes(x));
+    "google-inspectiontool",
+    "googlebot"
+  ];
+
+  return bots.some((bot) => ua.includes(bot));
 }
 
-function html(d) {
-  return `<!doctype html><html lang="tr"><head><meta charset="utf-8"><title>${esc(d.title)}</title><meta name="description" content="${esc(d.description)}"><link rel="canonical" href="${esc(d.canonical)}"><meta property="og:type" content="article"><meta property="og:site_name" content="Yeni Ozanlar"><meta property="og:locale" content="tr_TR"><meta property="og:url" content="${esc(d.canonical)}"><meta property="og:title" content="${esc(d.title)}"><meta property="og:description" content="${esc(d.description)}">${
-    d.image
-      ? `<meta property="og:image" content="${esc(d.image)}"><meta property="og:image:secure_url" content="${esc(d.image)}"><meta property="og:image:type" content="${esc(d.imageType || "image/jpeg")}"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630"><meta property="og:image:alt" content="${esc(d.title)}"><meta name="twitter:card" content="summary_large_image"><meta name="twitter:image" content="${esc(d.image)}">`
-      : ``
-  }<meta name="twitter:title" content="${esc(d.title)}"><meta name="twitter:description" content="${esc(d.description)}"></head><body><h1>${esc(d.title)}</h1><p>${esc(d.description)}</p>${
-    d.image ? `<img src="${esc(d.image)}" alt="${esc(d.title)}">` : ""
-  }<p><a href="${esc(d.canonical)}">Yeni Ozanlar'da şiiri görüntüle</a></p></body></html>`;
-}
-
-async function shell() {
-  const r = await fetch(`${APP_URL}/`, {
-    headers: { "User-Agent": "YeniOzanlar-AppShell/1.0" },
-    signal: AbortSignal.timeout(8000),
+async function getAppShell() {
+  const response = await fetch(`${APP_URL}/`, {
+    headers: {
+      "User-Agent": "YeniOzanlar-AppShell/1.0"
+    }
   });
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  return r.text();
+
+  if (!response.ok) {
+    throw new Error(
+      `Ana uygulama alınamadı: HTTP ${response.status}`
+    );
+  }
+
+  return await response.text();
+}
+
+function injectMeta(html, data) {
+  let clean = html
+    .replace(
+      /<title>[\s\S]*?<\/title>/i,
+      ""
+    )
+    .replace(
+      /<meta\s+name=["']description["'][^>]*>/gi,
+      ""
+    )
+    .replace(
+      /<meta\s+property=["']og:[^"']+["'][^>]*>/gi,
+      ""
+    )
+    .replace(
+      /<meta\s+name=["']twitter:[^"']+["'][^>]*>/gi,
+      ""
+    )
+    .replace(
+      /<link\s+rel=["']canonical["'][^>]*>/gi,
+      ""
+    );
+
+  const imageTags = data.image
+    ? `
+<meta property="og:image" content="${esc(data.image)}">
+<meta property="og:image:secure_url" content="${esc(data.image)}">
+<meta property="og:image:type" content="${esc(data.imageType || "image/jpeg")}">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="${esc(data.title)}">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="${esc(data.image)}">
+<meta name="twitter:image:alt" content="${esc(data.title)}">
+`
+    : `
+<meta name="twitter:card" content="summary">
+`;
+
+  const tags = `
+<title>${esc(data.title)}</title>
+
+<meta name="description" content="${esc(data.description)}">
+
+<link
+  rel="canonical"
+  href="${esc(data.canonical)}"
+>
+
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="Yeni Ozanlar">
+<meta property="og:locale" content="tr_TR">
+
+<meta
+  property="og:url"
+  content="${esc(data.canonical)}"
+>
+
+<meta
+  property="og:title"
+  content="${esc(data.title)}"
+>
+
+<meta
+  property="og:description"
+  content="${esc(data.description)}"
+>
+
+${imageTags}
+
+<meta
+  name="twitter:title"
+  content="${esc(data.title)}"
+>
+
+<meta
+  name="twitter:description"
+  content="${esc(data.description)}"
+>
+`;
+
+  return clean.replace(
+    /<head>/i,
+    `<head>${tags}`
+  );
+}
+
+function previewHtml(data) {
+  return `<!doctype html>
+<html lang="tr">
+
+<head>
+
+<meta charset="utf-8">
+
+<title>${esc(data.title)}</title>
+
+<meta
+  name="description"
+  content="${esc(data.description)}"
+>
+
+<link
+  rel="canonical"
+  href="${esc(data.canonical)}"
+>
+
+<meta
+  property="og:type"
+  content="article"
+>
+
+<meta
+  property="og:site_name"
+  content="Yeni Ozanlar"
+>
+
+<meta
+  property="og:locale"
+  content="tr_TR"
+>
+
+<meta
+  property="og:url"
+  content="${esc(data.canonical)}"
+>
+
+<meta
+  property="og:title"
+  content="${esc(data.title)}"
+>
+
+<meta
+  property="og:description"
+  content="${esc(data.description)}"
+>
+
+${
+  data.image
+    ? `
+<meta
+  property="og:image"
+  content="${esc(data.image)}"
+>
+
+<meta
+  property="og:image:secure_url"
+  content="${esc(data.image)}"
+>
+
+<meta
+  property="og:image:type"
+  content="${esc(data.imageType || "image/jpeg")}"
+>
+
+<meta
+  property="og:image:width"
+  content="1200"
+>
+
+<meta
+  property="og:image:height"
+  content="630"
+>
+
+<meta
+  property="og:image:alt"
+  content="${esc(data.title)}"
+>
+
+<meta
+  name="twitter:card"
+  content="summary_large_image"
+>
+
+<meta
+  name="twitter:image"
+  content="${esc(data.image)}"
+>
+
+<meta
+  name="twitter:image:alt"
+  content="${esc(data.title)}"
+>
+`
+    : `
+<meta
+  name="twitter:card"
+  content="summary"
+>
+`
+}
+
+<meta
+  name="twitter:title"
+  content="${esc(data.title)}"
+>
+
+<meta
+  name="twitter:description"
+  content="${esc(data.description)}"
+>
+
+</head>
+
+<body>
+
+<h1>${esc(data.title)}</h1>
+
+<p>${esc(data.description)}</p>
+
+${
+  data.image
+    ? `
+<img
+  src="${esc(data.image)}"
+  alt="${esc(data.title)}"
+>
+`
+    : ""
+}
+
+<p>
+<a href="${esc(data.canonical)}">
+Yeni Ozanlar'da şiiri görüntüle
+</a>
+</p>
+
+</body>
+
+</html>`;
 }
 
 export default async function handler(req, res) {
-  const ua = req.headers?.["user-agent"] || "";
-  const isBot = bot(ua);
-
   try {
-    const slug = String(req.query?.slug || "").trim();
-    const id = getPostId(slug);
+    const slug = String(
+      req.query?.slug || ""
+    ).trim();
 
-    // GERÇEK ZİYARETÇİLER (bot olmayan tarayıcılar): her zaman asıl uygulamayı
-    // (index.html) alsınlar. Önceki sürümde herkese bu sabit önizleme sayfası
-    // gösteriliyordu; böylece siteye tıklayan gerçek kullanıcılar uygulamanın
-    // içine değil, kendine referans veren statik bir sayfaya düşüyordu.
-    if (!isBot) {
-      const s = await shell();
-      res.setHeader("Content-Type", "text/html; charset=utf-8");
-      return res.status(200).send(s);
+    const postId = getPostId(slug);
+
+    if (!postId) {
+      const shell = await getAppShell();
+
+      res.setHeader(
+        "Content-Type",
+        "text/html; charset=utf-8"
+      );
+
+      return res.status(200).send(shell);
     }
 
-    if (!id) {
-      const s = await shell();
-      res.setHeader("Content-Type", "text/html; charset=utf-8");
-      return res.status(200).send(s);
+    const snapshot = await db()
+      .collection("posts")
+      .doc(postId)
+      .get();
+
+    if (!snapshot.exists) {
+      const shell = await getAppShell();
+
+      res.setHeader(
+        "Content-Type",
+        "text/html; charset=utf-8"
+      );
+
+      return res.status(200).send(shell);
     }
 
-    const canonical = `${APP_URL}/post/${encodeURIComponent(slug.split("?")[0])}`;
+    const post = snapshot.data() || {};
 
-    let post = null;
-    try {
-      const snap = await db().collection("posts").doc(id).get();
-      if (snap.exists) post = snap.data() || {};
-    } catch (dbErr) {
-      // Firestore/Firebase erişilemezse tüm isteği 500 ile çökertmek yerine
-      // genel site bilgileriyle bir OG kartı döndür; Facebook en azından
-      // görsel+metin içeren bir önizleme gösterebilsin.
-      console.error("postPreview.js Firestore HATASI", dbErr);
-      firebaseInitError = dbErr;
-    }
+    const title = String(
+      post.title || "Yeni Ozanlar"
+    ).trim();
 
-    let d;
-    if (post) {
-      d = {
-        title: String(post.title || "Yeni Ozanlar").trim(),
-        description: excerpt(post.text),
-        image: imageUrl(post, id),
-        imageType: imageType(post),
-        canonical,
-      };
-      if (!d.image && post.youtube) {
-        const y = yt(post.youtube);
-        if (y) {
-          d.image = `https://img.youtube.com/vi/${y}/hqdefault.jpg`;
-          d.imageType = "image/jpeg";
-        }
+    const description = excerpt(post.text);
+
+    /*
+     * Facebook için kanonik adres:
+     *
+     * /post/deneme-tzpyd43
+     *
+     * Burada query string OLMAYACAK.
+     */
+    const canonical =
+      `${APP_URL}/post/${encodeURIComponent(slug)}`;
+
+    let imageInfo =
+      getImageInfo(post, postId);
+
+    /*
+     * Şiirde doğrudan resim yoksa YouTube
+     * küçük resmi kullanılabilir.
+     */
+    if (!imageInfo && post.youtube) {
+      const youtubeId =
+        getYouTubeId(post.youtube);
+
+      if (youtubeId) {
+        imageInfo = {
+          url: youtubeImage(youtubeId),
+          type: "image/jpeg"
+        };
       }
-      // Şiirin kendi görseli (ve YouTube kapak resmi) yoksa bile og:image'in
-      // boş kalmaması için varsayılan görsele düş.
-      if (!d.image) {
-        d.image = DEFAULT_OG_IMAGE;
-        d.imageType = DEFAULT_OG_IMAGE_TYPE;
-      }
-    } else {
-      d = { ...DEFAULT_OG, canonical };
     }
 
-    res.setHeader("Content-Type", "text/html; charset=utf-8");
-    res.setHeader("Cache-Control", "public, s-maxage=300, stale-while-revalidate=3600");
-    return res.status(200).send(html(d));
-  } catch (e) {
-    console.error("postPreview.js HATASI", firebaseInitError || e);
-    // Son çare: yine de link yerine boş bir kart gitmesin diye genel bir
-    // önizleme dönüyoruz. 500 döndürmek Facebook'un hiçbir şey göstermeden
-    // sadece çıplak linki bırakmasına yol açıyordu.
+    const data = {
+      title,
+      description,
+      image: imageInfo?.url || null,
+      imageType: imageInfo?.type || null,
+      canonical
+    };
+
+    const userAgent =
+      req.headers?.["user-agent"] || "";
+
+    const bot =
+      isSocialBot(userAgent);
+
+    res.setHeader(
+      "Content-Type",
+      "text/html; charset=utf-8"
+    );
+
+    /*
+     * Facebook'un eski hatalı önizlemeyi uzun süre
+     * cache'lemesini engelle.
+     */
+    res.setHeader(
+      "Cache-Control",
+      "public, s-maxage=60, stale-while-revalidate=300"
+    );
+
+    /*
+     * Facebook / Messenger / WhatsApp vb.
+     * doğrudan özel OG HTML alır.
+     */
+    if (bot) {
+      return res
+        .status(200)
+        .send(previewHtml(data));
+    }
+
+    /*
+     * Normal ziyaretçi gerçek uygulamayı görür.
+     */
+    const shell =
+      await getAppShell();
+
+    return res
+      .status(200)
+      .send(
+        injectMeta(shell, data)
+      );
+
+  } catch (error) {
+    console.error(
+      "postPreview.js HATASI:",
+      error
+    );
+
     try {
-      const slug = String(req.query?.slug || "").trim();
-      const canonical = `${APP_URL}/post/${encodeURIComponent(slug.split("?")[0] || "")}`;
-      res.setHeader("Content-Type", "text/html; charset=utf-8");
-      return res.status(200).send(html({ ...DEFAULT_OG, canonical: canonical || APP_URL }));
+      const shell =
+        await getAppShell();
+
+      res.setHeader(
+        "Content-Type",
+        "text/html; charset=utf-8"
+      );
+
+      return res
+        .status(200)
+        .send(shell);
+
     } catch {
-      return res.status(500).send("Şiir önizlemesi oluşturulamadı.");
+      return res
+        .status(500)
+        .send("Yeni Ozanlar");
     }
   }
 }
