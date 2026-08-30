@@ -31,6 +31,98 @@ const TIMEOUT_MS = 65000;
 
 
 // ============================================================
+// CLOUDINARY
+// ============================================================
+// Cloudinary tarafında oluşturduğumuz unsigned preset:
+//   cloud name: f2iuce5z
+//   upload preset: site_unsigned
+//
+// FLUX görseli Cloudinary'ye de yüklenir.
+// Cloudinary yüklemesi başarısız olsa bile FLUX görseli
+// mevcut frontend zincirini bozmamak için yine binary döndürülür.
+
+const CLOUDINARY_CLOUD_NAME = 'f2iuce5z';
+const CLOUDINARY_UPLOAD_PRESET = 'site_unsigned';
+
+const CLOUDINARY_UPLOAD_URL =
+  `https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/image/upload`;
+
+
+async function uploadToCloudinary(buffer, title = '') {
+
+  const form = new FormData();
+
+  // Aynı şiir tekrar üretildiğinde aynı dosya üzerine yazılmasın.
+  const safeTitle =
+    String(title || 'siir')
+      .trim()
+      .replace(/[^a-zA-Z0-9ğüşöçıİĞÜŞÖÇ_-]+/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '')
+      .slice(0, 80) || 'siir';
+
+  const publicId =
+    `yeniozanlar/${safeTitle}-${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2, 8)}`;
+
+  form.append(
+    'file',
+    new Blob([buffer], { type: 'image/jpeg' }),
+    `${safeTitle}.jpg`
+  );
+
+  form.append(
+    'upload_preset',
+    CLOUDINARY_UPLOAD_PRESET
+  );
+
+  form.append(
+    'public_id',
+    publicId
+  );
+
+  const response =
+    await fetchWithTimeout(
+      CLOUDINARY_UPLOAD_URL,
+      {
+        method: 'POST',
+        body: form
+      },
+      30000
+    );
+
+  const raw = await response.text();
+
+  let data = null;
+
+  try {
+    data = JSON.parse(raw);
+  } catch (_) {
+    data = null;
+  }
+
+  if (!response.ok) {
+    throw new Error(
+      `Cloudinary yükleme hatası HTTP ${response.status}${
+        data?.error?.message
+          ? ` — ${data.error.message}`
+          : raw.slice(0, 500)
+      }`
+    );
+  }
+
+  if (!data?.secure_url) {
+    throw new Error(
+      'Cloudinary yükleme başarılı görünüyor ancak secure_url dönmedi.'
+    );
+  }
+
+  return data;
+}
+
+
+// ============================================================
 // PROMPT
 // ============================================================
 
@@ -434,6 +526,46 @@ export default async function handler(
       await readCloudflareImage(
         response
       );
+
+
+    // --------------------------------------------------------
+    // CLOUDINARY'YE YEDEKLE
+    // --------------------------------------------------------
+    // Cloudinary yüklemesi FLUX cevabını bozmaz.
+    // Başarısız olursa yalnızca loglanır; frontend'e FLUX
+    // binary cevabı yine gönderilir.
+
+    try {
+
+      const cloudinaryResult =
+        await uploadToCloudinary(
+          buffer,
+          title
+        );
+
+      res.setHeader(
+        'X-Cloudinary-URL',
+        cloudinaryResult.secure_url
+      );
+
+      res.setHeader(
+        'X-Cloudinary-Public-ID',
+        cloudinaryResult.public_id || ''
+      );
+
+      console.log(
+        'Cloudinary upload başarılı:',
+        cloudinaryResult.secure_url
+      );
+
+    } catch (cloudinaryError) {
+
+      console.error(
+        'Cloudinary upload başarısız:',
+        cloudinaryError?.message || cloudinaryError
+      );
+
+    }
 
 
     // --------------------------------------------------------
