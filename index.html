@@ -2668,10 +2668,21 @@ async function cloudinaryProfilYukle(file,tip){
   }
 
   try{
-    // Tarayıcıda resmi küçültüp JPEG'e çeviriyoruz.
-    const yuklenecek=await resimSikistir(file,1200,0.82);
+    // resimSikistir() data:image/...;base64,... döndürüyor.
+    // FormData'nın 3. parametresi yalnızca Blob/File kabul ettiği için önce Blob'a çeviriyoruz.
+    const dataUrl=await resimSikistir(file,1200,0.82);
+    if(!dataUrl || typeof dataUrl !== 'string') throw new Error('Resim dönüştürülemedi');
+    const parcalar=dataUrl.split(',');
+    if(parcalar.length<2) throw new Error('Geçersiz görsel verisi');
+    const mimeMatch=parcalar[0].match(/data:([^;]+);base64/i);
+    const mime=mimeMatch ? mimeMatch[1] : 'image/jpeg';
+    const binary=atob(parcalar[1]);
+    const bytes=new Uint8Array(binary.length);
+    for(let i=0;i<binary.length;i++) bytes[i]=binary.charCodeAt(i);
+    const yuklenecek=new Blob([bytes],{type:mime});
     const form=new FormData();
-    form.append('file',yuklenecek,file.name.replace(/[^a-zA-Z0-9._-]/g,'_').slice(-80));
+    const dosyaAdi=(file.name||'profil.jpg').replace(/[^a-zA-Z0-9._-]/g,'_').slice(-80);
+    form.append('file',yuklenecek,dosyaAdi);
     form.append('upload_preset',CLOUDINARY_PROFILE_PRESET);
     form.append('folder',`profiles/${tip}`);
 
