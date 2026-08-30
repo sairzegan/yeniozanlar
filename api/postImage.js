@@ -1,30 +1,39 @@
-const { cert, getApps, initializeApp } = require("firebase-admin/app");
-const { getFirestore } = require("firebase-admin/firestore");
+import { cert, getApps, initializeApp } from "firebase-admin/app";
+import { getFirestore } from "firebase-admin/firestore";
 
 const PROJECT_ID = "yeniozanlar-68b49";
 
 function getDb() {
   if (!getApps().length) {
     const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
-    if (!raw) throw new Error("FIREBASE_SERVICE_ACCOUNT_JSON eksik.");
 
-    let serviceAccount;
-    try {
-      serviceAccount = JSON.parse(raw);
-    } catch {
-      throw new Error("FIREBASE_SERVICE_ACCOUNT_JSON geçersiz JSON.");
+    if (raw) {
+      initializeApp({
+        credential: cert(JSON.parse(raw)),
+        projectId: PROJECT_ID
+      });
+    } else {
+      const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
+      const privateKey = process.env.FIREBASE_PRIVATE_KEY;
+
+      if (!clientEmail || !privateKey) {
+        throw new Error("Firebase Admin ortam değişkenleri eksik.");
+      }
+
+      initializeApp({
+        credential: cert({
+          projectId: process.env.FIREBASE_PROJECT_ID || PROJECT_ID,
+          clientEmail,
+          privateKey: privateKey.replace(/\\n/g, "\n")
+        })
+      });
     }
-
-    initializeApp({
-      credential: cert(serviceAccount),
-      projectId: PROJECT_ID
-    });
   }
 
   return getFirestore();
 }
 
-module.exports = async function handler(req, res) {
+export default async function handler(req, res) {
   try {
     const id = String(req.query?.id || "").trim();
 
@@ -44,51 +53,33 @@ module.exports = async function handler(req, res) {
       return res.status(404).send("Şiirin görseli bulunamadı.");
     }
 
-    // Görsel zaten gerçek bir HTTP URL ise aynen kullan.
     if (/^https?:\/\//i.test(raw)) {
-      res.setHeader("Location", raw);
-      res.setHeader("Cache-Control", "public, max-age=3600");
-      return res.status(302).end();
+      return res.redirect(302, raw);
     }
 
-    // Firestore'daki data:image/...;base64,... kaydını gerçek binary görsele çevir.
-    const match = raw.match(
-      /^data:(image\/[A-Za-z0-9.+-]+);base64,([\s\S]+)$/i
-    );
+    const m = raw.match(/^data:(image\/[A-Za-z0-9.+-]+);base64,([\s\S]+)$/i);
 
-    if (!match) {
+    if (!m) {
       return res.status(404).send("Desteklenmeyen görsel biçimi.");
     }
 
-    const mimeType = match[1].toLowerCase();
-    const base64 = match[2]
-      .replace(/\s/g, "")
-      .replace(/-/g, "+")
-      .replace(/_/g, "/");
-
-    const buffer = Buffer.from(base64, "base64");
+    const mime = m[1].toLowerCase();
+    const buffer = Buffer.from(m[2].replace(/\s/g, ""), "base64");
 
     if (!buffer.length) {
       return res.status(404).send("Görsel verisi boş.");
     }
 
-    res.setHeader("Content-Type", mimeType);
+    res.setHeader("Content-Type", mime);
     res.setHeader("Content-Length", String(buffer.length));
     res.setHeader("Content-Disposition", "inline");
-    res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("X-Content-Type-Options", "nosniff");
-    res.setHeader(
-      "Cache-Control",
-      "public, max-age=31536000, immutable"
-    );
-    res.setHeader(
-      "Vercel-CDN-Cache-Control",
-      "public, max-age=31536000, immutable"
-    );
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
 
     return res.status(200).send(buffer);
-  } catch (error) {
-    console.error("postImage.js HATASI:", error);
+  } catch (e) {
+    console.error("postImage HATASI:", e);
     return res.status(500).send("Görsel sunulamadı.");
   }
-};
+}
