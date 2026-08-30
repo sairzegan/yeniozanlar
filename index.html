@@ -2990,10 +2990,50 @@ function blobToCompressedDataUrl(blob){
   });
 }
 
+async function aiGorselPromptuGroqlaOlustur(post){
+  const baslik=String(post?.title||'').trim().slice(0,250);
+  const siir=String(post?.text||'').trim().slice(0,2200);
+  if(!siir) return '';
+  try{
+    const sonuc=await groqBotCall(
+      'Sen yapay zeka görsel üretimi için şiirlerden görsel promptları hazırlayan bir asistansın. YALNIZCA JSON döndür. Görselde kesinlikle hiçbir yazı, harf, kelime, başlık, altyazı, tabela, logo veya filigran bulunmamalı.',
+      `Bu şiiri analiz et ve görsel üretim modeli için şiirin KONUSUNU, sahnesini, karakterlerini, nesnelerini, mekânını, zamanını, renk/ışık atmosferini ve duygusunu anlatan özgün bir İngilizce görsel prompt hazırla.
+
+Şiirin başlığı: ${baslik}
+
+Şiir:
+${siir}
+
+Kurallar:
+- Şiirin gerçek konusuna sadık kal.
+- Genel bir poetry image üretme.
+- Şiirde olmayan belirgin olay veya nesneleri uydurma.
+- Sinematik, gerçekçi, estetik ve ayrıntılı bir sahne tarif et.
+- 16:9 yatay kompozisyon belirt.
+- Görselde kesinlikle yazı OLMASIN.
+- No text, no letters, no words, no captions, no typography, no subtitles, no signs, no logos, no watermark.
+
+JSON: {"prompt":"..."}`
+    );
+    const prompt=String(sonuc?.prompt||'').trim();
+    return prompt.slice(0,5000);
+  }catch(err){
+    console.warn('Groq görsel promptu oluşturamadı, normal prompt kullanılacak:',err);
+    return '';
+  }
+}
+
 async function adminYapayZekaGorseliYenile(post){
   if(!S.me || S.me.username!==ADMIN_USERNAME){
     throw new Error('Bu işlem yalnızca admin içindir.');
   }
+
+  // Önce Groq şiirin konusuna göre özel bir görsel promptu hazırlar.
+  // Groq çalışmazsa sağlayıcılar mevcut şiir metnini kullanmaya devam eder.
+  const groqGorselPromptu=await aiGorselPromptuGroqlaOlustur(post);
+  const gorselIcinMetin=groqGorselPromptu
+    ? `${post.text||''}\n\nVISUAL DIRECTION FROM GROQ (follow this direction):\n${groqGorselPromptu}`
+    : (post.text||'');
 
   // Sırasıyla denenecek AI sağlayıcıları: Cloudflare FLUX → Pollinations →
   // Hugging Face → Gemini. Biri kota/hata verirse otomatik olarak bir
@@ -3015,7 +3055,7 @@ async function adminYapayZekaGorseliYenile(post){
     const zamanlayici=setTimeout(()=>controller.abort(), s.sure);
     let blob, provider, model;
     try{
-      ({blob, provider, model}=await s.fn(post.title||'', post.text||'', controller.signal));
+      ({blob, provider, model}=await s.fn(post.title||'', gorselIcinMetin, controller.signal));
       clearTimeout(zamanlayici);
     }catch(err){
       clearTimeout(zamanlayici);
