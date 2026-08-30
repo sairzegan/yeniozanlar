@@ -2495,38 +2495,61 @@ const YORUM_ONERILERI = [
   'Bu dizeler sustuktan sonra bile konuşmaya devam ediyor.'
 ];
 
-async function medyaStorageaYukle(file, klasor, maxImageSide=1280){
+async function cloudinaryMedyaYukle(file, klasor='comments', maxImageSide=1280){
   if(!file || !S.me) return null;
-  const isImage=file.type.startsWith('image/');
-  const isVideo=file.type.startsWith('video/');
+  const isImage=file.type?.startsWith('image/');
+  const isVideo=file.type?.startsWith('video/');
   if(!isImage && !isVideo){ toastGoster('Sadece resim veya video ekleyebilirsin.'); return null; }
   if(isImage && file.size>10*1024*1024){ toastGoster('Resim en fazla 10 MB olabilir.'); return null; }
   if(isVideo && file.size>30*1024*1024){ toastGoster('Video en fazla 30 MB olabilir.'); return null; }
+
   try{
     let yuklenecek=file;
-    let contentType=file.type;
+    let mime=file.type || (isImage?'image/jpeg':'video/mp4');
 
-    // Resimleri küçültüyoruz; böylece Storage alanı ve trafik gereksiz büyümez.
+    // Resimleri küçültüp Blob'a çeviriyoruz. Böylece Cloudinary FormData'ya
+    // gerçek bir Blob gönderilir; base64 metni doğrudan dosya gibi gönderilmez.
     if(isImage){
-      yuklenecek=await resimSikistir(file,maxImageSide,0.78);
-      contentType='image/jpeg';
+      const dataUrl=await resimSikistir(file,maxImageSide,0.82);
+      if(!dataUrl || typeof dataUrl!=='string') throw new Error('Resim dönüştürülemedi');
+      const parcalar=dataUrl.split(',');
+      if(parcalar.length<2) throw new Error('Geçersiz görsel verisi');
+      const mm=parcalar[0].match(/data:([^;]+);base64/i);
+      mime=mm ? mm[1] : 'image/jpeg';
+      const binary=atob(parcalar[1]);
+      const bytes=new Uint8Array(binary.length);
+      for(let i=0;i<binary.length;i++) bytes[i]=binary.charCodeAt(i);
+      yuklenecek=new Blob([bytes],{type:mime});
     }
 
-    const temizAd=file.name.replace(/[^a-zA-Z0-9._-]/g,'_').slice(-80);
-    const uzanti=isImage?'jpg':(temizAd.includes('.')?temizAd.split('.').pop():'mp4');
-    const yol=`${klasor}/${S.me.id}/${Date.now()}_${Math.random().toString(36).slice(2,7)}.${uzanti}`;
-    const snap=await storage.ref().child(yol).put(yuklenecek,{contentType});
-    const url=await snap.ref.getDownloadURL();
-    return {type:isImage?'image':'video',url,name:file.name};
+    const temizAd=(file.name||'medya').replace(/[^a-zA-Z0-9._-]/g,'_').slice(-80);
+    const form=new FormData();
+    form.append('file',yuklenecek,temizAd);
+    form.append('upload_preset',CLOUDINARY_PROFILE_PRESET);
+    form.append('folder',`${klasor}/${S.me.id}`);
+
+    const resourceType=isVideo?'video':'image';
+    const endpoint=`https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/${resourceType}/upload`;
+    const response=await fetch(endpoint,{method:'POST',body:form});
+    const data=await response.json().catch(()=>({}));
+
+    if(!response.ok || !data.secure_url){
+      console.error('Cloudinary medya yükleme hatası:',data);
+      const msg=data?.error?.message||`HTTP ${response.status}`;
+      toastGoster(`Medya yüklenemedi: ${msg}`);
+      return null;
+    }
+    return {type:isImage?'image':'video',url:data.secure_url,name:file.name};
   }catch(err){
-    console.error('Storage medya yükleme hatası:',err);
-    toastGoster('Medya yüklenemedi. Storage izin/CORS ayarını kontrol edin.');
+    console.error('Cloudinary medya yükleme hatası:',err);
+    toastGoster('Medya yüklenemedi. Cloudinary bağlantısını kontrol edin.');
     return null;
   }
 }
 
+// Yorum resmi/video artık Firebase Storage yerine Cloudinary'ye gider.
 async function yorumDosyasiYukle(file){
-  return medyaStorageaYukle(file,'comments',1280);
+  return cloudinaryMedyaYukle(file,'comments',1280);
 }
 
 async function yorumIcinGifGetir(post){
@@ -2649,10 +2672,8 @@ function yorumBestesi(post,parentId=null){
   return wrap;
 }
 
-// PROFİL RESMİ / KAPAK FOTOĞRAFI CLOUDINARY'YE YÜKLENİR.
-// Firebase Storage profil yüklemesinde oluşan CORS/preflight sorununu tamamen
-// devre dışı bırakmak için yalnızca profil medyasını Cloudinary kullanır.
-// Yorumlardaki mevcut Firebase Storage yükleme sistemi değiştirilmemiştir.
+// PROFİL, KAPAK VE YORUM MEDYALARI CLOUDINARY'YE YÜKLENİR.
+// Firebase Storage'daki CORS/preflight sorunlarını bu medya akışında kullanmıyoruz.
 const CLOUDINARY_CLOUD_NAME = 'f2iuce5z';
 const CLOUDINARY_PROFILE_PRESET = 'site_unsigned';
 
@@ -2737,6 +2758,76 @@ A.updateProfile = async function(fields, avatarFile=null, coverFile=null){
   return true;
 };
 
+function kapakKirpModal(file){
+  return new Promise(resolve=>{
+    const url=URL.createObjectURL(file);
+    const img=new Image();
+    img.onload=()=>{
+      const modal=h('div',{class:'modal-bg'});
+      const panel=h('div',{class:'modal',style:{maxWidth:'700px',width:'min(94vw,700px)',padding:'18px'}});
+      const title=h('h3',{style:{fontFamily:"'Playfair Display',serif",color:'#e9d5ff',margin:'0 0 10px'}},'✂️ Kapak Fotoğrafını Kırp');
+      const info=h('p',{style:{color:'#a78bfa',fontSize:'.82rem',margin:'0 0 12px'}},'Çerçeveyi sürükleyerek kapakta görünmesini istediğin bölümü seç.');
+      const area=h('div',{style:{position:'relative',width:'100%',maxHeight:'430px',overflow:'hidden',background:'#08050f',borderRadius:'12px',userSelect:'none',touchAction:'none'}});
+      const canvas=document.createElement('canvas');
+      canvas.style.display='block'; canvas.style.width='100%'; canvas.style.height='auto';
+      area.appendChild(canvas);
+      const ctx=canvas.getContext('2d');
+      const frame=h('div',{style:{position:'absolute',border:'2px solid #c084fc',boxShadow:'0 0 0 9999px rgba(0,0,0,.58)',cursor:'move',boxSizing:'border-box',touchAction:'none'}});
+      area.appendChild(frame);
+
+      const actions=h('div',{style:{display:'flex',justifyContent:'flex-end',gap:'8px',marginTop:'14px'}},[]);
+      const vazgec=h('button',{class:'btn',style:{padding:'8px 14px'},onclick:()=>{URL.revokeObjectURL(url);modal.remove();resolve(null);}},'İptal');
+      const kullan=h('button',{class:'pb btn',style:{padding:'8px 14px'},onclick:()=>{
+        const rect=canvas.getBoundingClientRect();
+        const sx=(frame.offsetLeft/rect.width)*canvas.width;
+        const sy=(frame.offsetTop/rect.height)*canvas.height;
+        const sw=(frame.offsetWidth/rect.width)*canvas.width;
+        const sh=(frame.offsetHeight/rect.height)*canvas.height;
+        const out=document.createElement('canvas');
+        const targetW=1500, targetH=500;
+        out.width=targetW; out.height=targetH;
+        out.getContext('2d').drawImage(img,sx,sy,sw,sh,0,0,targetW,targetH);
+        out.toBlob(blob=>{
+          URL.revokeObjectURL(url); modal.remove();
+          if(blob) resolve(new File([blob],(file.name||'kapak').replace(/\.[^.]+$/,'')+'_kapak.jpg',{type:'image/jpeg'}));
+          else resolve(null);
+        },'image/jpeg',.9);
+      }},'Kırp ve Kullan');
+      actions.appendChild(vazgec);actions.appendChild(kullan);
+      panel.appendChild(title);panel.appendChild(info);panel.appendChild(area);panel.appendChild(actions);modal.appendChild(panel);document.body.appendChild(modal);
+
+      const draw=()=>{
+        const maxW=Math.min(window.innerWidth*.88,640), maxH=400;
+        const scale=Math.min(maxW/img.naturalWidth,maxH/img.naturalHeight,1);
+        const cw=Math.max(1,Math.round(img.naturalWidth*scale)), ch=Math.max(1,Math.round(img.naturalHeight*scale));
+        canvas.width=cw;canvas.height=ch;canvas.style.width=cw+'px';canvas.style.height=ch+'px';
+        area.style.width=cw+'px';area.style.height=ch+'px';area.style.margin='0 auto';
+        ctx.clearRect(0,0,cw,ch);ctx.drawImage(img,0,0,cw,ch);
+        const ratio=3;
+        let fw=cw*.82, fh=fw/ratio;
+        if(fh>ch*.78){fh=ch*.78;fw=fh*ratio;}
+        fw=Math.min(fw,cw);fh=Math.min(fh,ch);
+        frame.style.width=fw+'px';frame.style.height=fh+'px';
+        frame.style.left=((cw-fw)/2)+'px';frame.style.top=((ch-fh)/2)+'px';
+      };
+      draw();
+      let drag=null;
+      frame.addEventListener('pointerdown',e=>{e.preventDefault();frame.setPointerCapture?.(e.pointerId);drag={x:e.clientX,y:e.clientY,left:parseFloat(frame.style.left),top:parseFloat(frame.style.top)};});
+      frame.addEventListener('pointermove',e=>{
+        if(!drag)return;
+        const maxL=canvas.clientWidth-frame.offsetWidth,maxT=canvas.clientHeight-frame.offsetHeight;
+        frame.style.left=Math.max(0,Math.min(maxL,drag.left+e.clientX-drag.x))+'px';
+        frame.style.top=Math.max(0,Math.min(maxT,drag.top+e.clientY-drag.y))+'px';
+      });
+      frame.addEventListener('pointerup',()=>drag=null);frame.addEventListener('pointercancel',()=>drag=null);
+      modal.onclick=e=>{if(e.target===modal)vazgec.click();};
+      window.addEventListener('resize',draw,{once:true});
+    };
+    img.onerror=()=>{URL.revokeObjectURL(url);toastGoster('Kapak resmi açılamadı.');resolve(null);};
+    img.src=url;
+  });
+}
+
 function profilDuzenleModal(onClose){
   if(!S.me) return null;
   const modal=h('div',{class:'modal-bg'});
@@ -2750,7 +2841,18 @@ function profilDuzenleModal(onClose){
   const coverDurum=h('p',{style:{color:'#6b5b8a',fontSize:'.75rem',marginTop:'5px'}},S.me.coverUrl?'Mevcut kapak fotoğrafı var.':'Henüz kapak fotoğrafı yok.');
 
   avatarInput.onchange=()=>{if(avatarInput.files?.[0])avatarDurum.textContent=`Seçildi: ${avatarInput.files[0].name}`;};
-  coverInput.onchange=()=>{if(coverInput.files?.[0])coverDurum.textContent=`Seçildi: ${coverInput.files[0].name}`;};
+  coverInput.onchange=async()=>{
+    const f=coverInput.files?.[0];
+    if(!f)return;
+    const kirpilmis=await kapakKirpModal(f);
+    if(kirpilmis){
+      try{ const dt=new DataTransfer(); dt.items.add(kirpilmis); coverInput.files=dt.files; }catch(e){}
+      coverDurum.textContent=`✂️ Kırpıldı: ${f.name}`;
+    }else{
+      coverInput.value='';
+      coverDurum.textContent=S.me.coverUrl?'Mevcut kapak fotoğrafı var.':'Henüz kapak fotoğrafı yok.';
+    }
+  };
 
   const kaydet=h('button',{class:'pb btn',onclick:async()=>{
     kaydet.disabled=true;kaydet.textContent='⏳ Kaydediliyor...';
