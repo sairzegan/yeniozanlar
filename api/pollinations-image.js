@@ -1,11 +1,21 @@
 // /api/pollinations-image.js
 // Dedicated Pollinations image endpoint for the admin "AI image" button.
-// Vercel Environment Variable required:
+//
+// DÜZELTME (önemli): Pollinations'ın Flux modeli, İMZASIZ/ANAHTARSIZ (anonim)
+// istekte TAMAMEN ÜCRETSİZ ve sınırsızdır (yaklaşık 15 saniyede 1 istek
+// hız limitiyle). Bu dosya daha önce HER ZAMAN Bearer/anahtarla istek
+// atıyordu — bu da isteği otomatik olarak "pollen bakiyesi" gerektiren
+// ücretli yola sokuyordu (HTTP 402 "Insufficient balance" hatasının
+// sebebi buydu). Artık önce anonim/ücretsiz isteği deniyoruz; yalnızca o
+// başarısız olursa (örn. hız limiti) ve bir anahtar tanımlıysa, öncelikli
+// erişim için anahtarla deniyoruz.
+//
+// Vercel Environment Variable (artık OPSİYONEL — tanımlı değilse sorun değil,
+// sistem tamamen ücretsiz anonim moda düşer):
 // POLLINATIONS_API_KEY = sk_...
 //
-// This endpoint intentionally uses Pollinations' documented GET /image/{prompt}
-// endpoint and returns JSON { imageData, provider, model } to the browser.
-// The API key never leaves the server.
+// Bu endpoint Pollinations'ın resmi GET /image/{prompt} endpoint'ini kullanır
+// ve tarayıcıya JSON { imageData, provider, model } döndürür.
 
 function makePrompt(title, text) {
   const poemTitle = String(title || '').trim().slice(0, 300);
@@ -38,13 +48,9 @@ async function getErrorText(r) {
 }
 
 async function fetchPollinations(url, key) {
-  return fetch(url, {
-    method: 'GET',
-    headers: {
-      'Authorization': `Bearer ${key}`,
-      'Accept': 'image/*'
-    }
-  });
+  const headers = { Accept: 'image/*' };
+  if (key) headers['Authorization'] = `Bearer ${key}`;
+  return fetch(url, { method: 'GET', headers });
 }
 
 export default async function handler(req, res) {
@@ -53,12 +59,8 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Sadece POST destekleniyor.' });
   }
 
+  // Artık zorunlu DEĞİL: anahtar yoksa tamamen ücretsiz anonim moda geçilir.
   const key = String(process.env.POLLINATIONS_API_KEY || '').trim();
-  if (!key) {
-    return res.status(500).json({
-      error: 'POLLINATIONS_API_KEY Vercel Production Environment Variables içinde bulunamadı.'
-    });
-  }
 
   const title = String(req.body?.title || '');
   const text = String(req.body?.text || '');
@@ -76,7 +78,43 @@ export default async function handler(req, res) {
 
   const errors = [];
 
-  // Attempt 1: documented Bearer authentication.
+  // Attempt 1: ANONİM istek — anahtar GÖNDERMEDEN. Bu, Pollinations'ın
+  // "her zaman ücretsiz" Flux tier'ı; bakiye/pollen gerektirmez.
+  try {
+    const r = await fetchPollinations(base, null);
+    if (r.ok) {
+      const ct = (r.headers.get('content-type') || 'image/jpeg').split(';')[0];
+      if (!ct.startsWith('image/')) {
+        errors.push(`Anonim: görsel yerine ${ct} döndü`);
+      } else {
+        const bytes = Buffer.from(await r.arrayBuffer());
+        if (bytes.length) {
+          return res.status(200).json({
+            imageData: `data:${ct};base64,${bytes.toString('base64')}`,
+            provider: 'pollinations',
+            model: 'flux'
+          });
+        }
+        errors.push('Anonim: boş görsel döndü');
+      }
+    } else {
+      errors.push(`Anonim HTTP ${r.status}: ${await getErrorText(r)}`);
+    }
+  } catch (e) {
+    errors.push(`Anonim bağlantı hatası: ${e?.message || e}`);
+  }
+
+  // Anahtar tanımlı değilse burada dur — ücretli denemeye gerek yok.
+  if (!key) {
+    return res.status(502).json({
+      error: `Pollinations (ücretsiz/anonim) görsel üretilemedi. ${errors.join(' | ')}`,
+      provider: 'pollinations',
+      model: 'flux'
+    });
+  }
+
+  // Attempt 2: anahtarla (Bearer) öncelikli erişim — anonim mod hız limitine
+  // takıldıysa veya geçici olarak başarısız olduysa devreye girer.
   try {
     const r = await fetchPollinations(base, key);
     if (r.ok) {
@@ -101,13 +139,12 @@ export default async function handler(req, res) {
     errors.push(`Bearer bağlantı hatası: ${e?.message || e}`);
   }
 
-  // Attempt 2: Pollinations also documents ?key= authentication.
-  // The key is used only in this server-to-server request and is never returned.
+  // Attempt 3: Pollinations also documents ?key= authentication.
   try {
     const sep = base.includes('?') ? '&' : '?';
     const r = await fetchPollinations(
       `${base}${sep}key=${encodeURIComponent(key)}`,
-      key
+      null
     );
     if (r.ok) {
       const ct = (r.headers.get('content-type') || 'image/jpeg').split(';')[0];
