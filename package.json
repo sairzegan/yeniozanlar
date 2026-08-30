@@ -2,6 +2,6 @@
   "name": "yeniozanlar",
   "private": true,
   "dependencies": {
-    "firebase-admin": "^12.0.0"
+    "firebase-admin": "^12.7.0"
   }
 }

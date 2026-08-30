@@ -9,15 +9,12 @@ const APP_URL = "https://yeniozanlar.vercel.app";
 // Firebase/Firestore'a hiç ulaşılamayan durumlarda da HER ZAMAN bir görsel
 // göstermek için varsayılan bir site görseli tanımlanıyor.
 //
-// ÖNEMLİ: Bu projede statik dosyalar (sitemap.xml, robots.txt gibi) gerçekte
-// "/public/..." yolunda duruyor ve kök yoldaki (örn. "/sitemap.xml") istekler
-// vercel.json'daki özel rewrite kurallarıyla oraya yönlendiriliyor. Kök yolda
-// böyle bir rewrite'ı olmayan "/og-default.jpg" isteği ise vercel.json'daki
-// son genel kurala ("/(.*)" -> "/index.html") takılıp HTML (index.html)
-// döndürüyordu — Facebook bu yüzden "invalid content type" hatası veriyordu.
-// Bu yüzden görsele doğrudan gerçek konumundan, "/public/og-default.jpg"
-// yolundan erişiyoruz.
-const DEFAULT_OG_IMAGE = `${APP_URL}/public/og-default.jpg`;
+// Bu görsel bir statik dosya OLARAK DEĞİL, /api/og-default.js üzerinden,
+// koda gömülü olarak sunuluyor. Böylece projenizin statik dosya klasör
+// yapısına (public/, dist/ vb.) hiçbir bağımlılığı yok ve Content-Type
+// başlığı her zaman elle doğru şekilde ayarlanıyor — "invalid content type"
+// gibi bir hatanın tekrar yaşanma ihtimali ortadan kalkıyor.
+const DEFAULT_OG_IMAGE = `${APP_URL}/api/og-default`;
 const DEFAULT_OG_IMAGE_TYPE = "image/jpeg";
 
 const DEFAULT_OG = {

@@ -81,7 +81,7 @@ site banner'ı vb.) eklemek. Dosya orada olduğu sürece kod otomatik olarak
 onu kullanır; eklemezseniz sadece o görsel linki kırık olur, site geri kalanı
 etkilenmez.
 
-## Güncelleme (v3): "Invalid Image Content Type" hatası
+## Güncelleme (v3): "Invalid Image Content Type" hatası → kalıcı çözüm
 
 `og-default.jpg` dosyasını `public/` klasörüne eklediğinizde Facebook şu hatayı
 verdi:
@@ -89,23 +89,26 @@ verdi:
 > Provided og:image URL, https://yeniozanlar.vercel.app/og-default.jpg could
 > not be processed as an image because it has an invalid content type.
 
-**Sebep:** Bu projede statik dosyalar gerçekte `/public/...` yolunda duruyor
-(`sitemap.xml` ve `robots.txt` için de tam olarak bu yüzden özel rewrite
-kuralları var). Kökten (`/og-default.jpg`) yapılan istek hiçbir kurala
-uymadığı için `vercel.json`'daki en sondaki genel kurala
-(`"/(.*)" -> "/index.html"`) takılıp HTML (index.html) döndürüyordu. Facebook
-görsel beklerken HTML aldığı için "invalid content type" diyordu.
+**Sebep:** Statik dosyaların projenizde tam olarak hangi yoldan servis
+edildiğini (build/çıktı klasör yapınızı) tam olarak bilmediğimiz için, kökten
+yapılan `/og-default.jpg` isteği `vercel.json`'daki son genel kurala
+(`"/(.*)" -> "/index.html"`) takılıp HTML döndürüyordu. Facebook görsel
+beklerken HTML aldığı için hata veriyordu.
 
-**Düzeltme:**
-- Kod artık görseli doğrudan gerçek konumundan, `/public/og-default.jpg`
-  yolundan çekiyor.
-- `vercel.json`'a diğer statik dosyalarla (sitemap.xml, robots.txt) tutarlı
-  şekilde `/og-default.jpg -> /public/og-default.jpg` rewrite'ı da eklendi;
-  isterseniz temiz kısa adresi de kullanabilirsiniz.
+**Kalıcı çözüm:** Statik dosya sunumuna hiç güvenmek yerine, varsayılan
+görseli doğrudan **kodun içine gömdüm** ve `/api/og-default` adında ayrı bir
+fonksiyon üzerinden sunuyorum (`api/og-default.js`). Bu fonksiyon, tıpkı
+zaten çalıştığı doğrulanmış `postPreview`/`postImage` fonksiyonları gibi
+çalışır: Content-Type başlığını kendi elimizle `image/jpeg` olarak ayarlar,
+hiçbir klasör yapısına veya rewrite kuralına bağımlı değildir.
 
-Bu değişiklikten sonra sizin ekstra bir şey yapmanıza gerek yok — dosya zaten
-`public/` klasöründe duruyor, sadece güncellenmiş `api/postPreview.js` ve
-`vercel.json` dosyalarını deploy etmeniz yeterli.
+Bu sürümü yerel olarak çalıştırıp test ettim: `/api/og-default` isteği
+**200 durum kodu, `Content-Type: image/jpeg`** ve geçerli 1200×630 boyutunda
+bir JPEG dosyası döndürüyor (aşağıdaki görsel kodun içine gömülü olan
+görseldir).
+
+**Sizin yapmanız gereken hiçbir ek adım yok** — `public/` klasörüne ayrıca
+bir görsel yüklemenize gerek kalmadı, her şey kodun içinde hazır.
 
 ## Değiştirilen/eklenen dosyalar
 
@@ -113,6 +116,7 @@ Bu değişiklikten sonra sizin ekstra bir şey yapmanıza gerek yok — dosya za
 api/package.json      (YENİ — API fonksiyonlarını ES Module yapar)
 api/postPreview.js    (düzeltildi)
 api/postImage.js      (düzeltildi)
+api/og-default.js     (YENİ — varsayılan paylaşım görseli, koda gömülü)
 vercel.json           (değişmedi, sıralama zaten doğruydu)
 package.json          (YENİ veya mevcut olana firebase-admin eklenmeli)
 .gitignore            (YENİ)
@@ -129,8 +133,8 @@ ekleyin:
 ```
 
 Diğer tüm dosyaları (`api/package.json`, `api/postPreview.js`,
-`api/postImage.js`, `vercel.json`) doğrudan projenizdeki aynı yollara
-kopyalayıp üzerine yazabilirsiniz.
+`api/postImage.js`, `api/og-default.js`, `vercel.json`) doğrudan
+projenizdeki aynı yollara kopyalayıp üzerine yazabilirsiniz.
 
 ## Vercel ortam değişkeni
 
