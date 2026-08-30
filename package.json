@@ -1,10 +1,9 @@
 {
-  "name": "yeniozanlar",
+  "name": "yeni-ozanlar-api",
   "private": true,
-  "scripts": {
-    "build": "echo no-build-needed"
-  },
+  "type": "module",
   "dependencies": {
+    "@huggingface/inference": "^4.13.28",
     "firebase-admin": "^12.7.0"
   }
 }
