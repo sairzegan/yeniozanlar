@@ -1,17 +1,19 @@
-const { cert, getApps, initializeApp } = require("firebase-admin/app");
-const { getFirestore } = require("firebase-admin/firestore");
+import { cert, getApps, initializeApp } from "firebase-admin/app";
+import { getFirestore } from "firebase-admin/firestore";
 
 const PROJECT_ID = "yeniozanlar-68b49";
 const APP_URL = "https://yeniozanlar.vercel.app";
 
 function firebaseAdmin() {
-  if (getApps().length) return getApps()[0];
+  if (getApps().length) {
+    return getApps()[0];
+  }
 
   const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
 
   if (!raw) {
     throw new Error(
-      "FIREBASE_SERVICE_ACCOUNT_JSON Vercel Environment Variables içinde yok."
+      "FIREBASE_SERVICE_ACCOUNT_JSON Vercel ortam değişkeninde bulunamadı."
     );
   }
 
@@ -19,7 +21,7 @@ function firebaseAdmin() {
 
   try {
     serviceAccount = JSON.parse(raw);
-  } catch (e) {
+  } catch (error) {
     throw new Error(
       "FIREBASE_SERVICE_ACCOUNT_JSON geçerli JSON değil."
     );
@@ -27,7 +29,7 @@ function firebaseAdmin() {
 
   return initializeApp({
     credential: cert(serviceAccount),
-    projectId: PROJECT_ID
+    projectId: PROJECT_ID,
   });
 }
 
@@ -36,6 +38,9 @@ function db() {
   return getFirestore();
 }
 
+/*
+ * HTML içine güvenli şekilde veri koymak için.
+ */
 function esc(value) {
   return String(value ?? "")
     .replace(/&/g, "&amp;")
@@ -45,6 +50,16 @@ function esc(value) {
     .replace(/'/g, "&#39;");
 }
 
+/*
+ * /post/guncelleme-hnxk3bm
+ *
+ * son "-" işaretinden sonraki 7 karakteri şiir ID'si kabul eder.
+ *
+ * Ayrıca eski:
+ * /post/hnxk3bm
+ *
+ * formatını da destekler.
+ */
 function getPostId(slug) {
   let raw = String(slug || "");
 
@@ -52,28 +67,36 @@ function getPostId(slug) {
     raw = decodeURIComponent(raw);
   } catch {}
 
-  const sonTire = raw.lastIndexOf("-");
+  const lastDash = raw.lastIndexOf("-");
 
-  const aday =
-    sonTire !== -1
-      ? raw.slice(sonTire + 1)
+  const candidate =
+    lastDash !== -1
+      ? raw.slice(lastDash + 1)
       : raw;
 
-  if (!/^[A-Za-z0-9]{7}$/.test(aday)) {
+  if (!/^[A-Za-z0-9]{7}$/.test(candidate)) {
     return null;
   }
 
-  return aday;
+  return candidate;
 }
 
+/*
+ * YouTube video ID'sini bul.
+ */
 function getYouTubeId(url) {
-  const match = String(url || "").match(
+  const value = String(url || "");
+
+  const match = value.match(
     /(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|shorts\/|live\/))([A-Za-z0-9_-]{11})/
   );
 
   return match ? match[1] : null;
 }
 
+/*
+ * Facebook / X açıklaması için şiirden kısa bölüm.
+ */
 function excerpt(text) {
   const clean = String(text || "")
     .replace(/\s+/g, " ")
@@ -90,361 +113,377 @@ function excerpt(text) {
   return (
     clean
       .slice(0, 277)
-      .replace(/\s+\S*$/, "") + "…"
+      .replace(/\s+\S*$/, "") +
+    "…"
   );
 }
 
-async function timeoutlu(url, options = {}, ms = 7000) {
-  const controller = new AbortController();
-
-  const timer = setTimeout(() => {
-    controller.abort();
-  }, ms);
-
-  try {
-    return await fetch(url, {
-      ...options,
-      signal: controller.signal
-    });
-  } finally {
-    clearTimeout(timer);
+/*
+ * Şiirin görselini belirle.
+ *
+ * 1. Normal HTTPS görsel → doğrudan kullan.
+ * 2. data:image → /api/postImage üzerinden sun.
+ */
+function getImageUrl(post, postId) {
+  if (!post || !post.image) {
+    return null;
   }
+
+  const raw = String(post.image).trim();
+
+  /*
+   * Cloudinary / Firebase Storage / başka CDN
+   * gibi normal HTTP görseller.
+   */
+  if (/^https?:\/\//i.test(raw)) {
+    return raw;
+  }
+
+  /*
+   * Eski kayıtlar data:image;base64 şeklindeyse
+   * sosyal medya bunu doğrudan okuyamaz.
+   *
+   * Bu nedenle kendi API endpoint'imize çeviriyoruz.
+   */
+  if (/^data:image\//i.test(raw)) {
+    const version = encodeURIComponent(
+      post.ts || post.date || Date.now()
+    );
+
+    return (
+      `${APP_URL}/api/postImage` +
+      `?id=${encodeURIComponent(postId)}` +
+      `&v=${version}`
+    );
+  }
+
+  return null;
 }
 
-async function ytKapakResmi(videoId) {
-  const maxres =
-    `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`;
-
-  try {
-    const r = await timeoutlu(
-      maxres,
-      { method: "HEAD" },
-      3000
-    );
-
-    const size = Number(
-      r.headers.get("content-length") || 0
-    );
-
-    if (r.ok && size > 8000) {
-      return maxres;
-    }
-  } catch {}
+/*
+ * YouTube görselini kullanmak için.
+ */
+function getYouTubeImage(videoId) {
+  if (!videoId) {
+    return null;
+  }
 
   return `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`;
 }
 
-async function uygulamaKabugunuGetir() {
-  const r = await timeoutlu(
-    `${APP_URL}/`,
-    {
-      method: "GET",
-      headers: {
-        "User-Agent": "YeniOzanlar-Preview/1.0"
-      }
-    },
-    7000
-  );
+/*
+ * Sosyal medya botlarına verilecek HTML.
+ *
+ * Burada özellikle sadece gerekli <head> kısmını oluşturuyoruz.
+ * Artık index.html'i Vercel fonksiyonunun içinden tekrar fetch etmiyoruz.
+ *
+ * Böylece:
+ *
+ * Facebook botu
+ * X botu
+ * WhatsApp
+ * Telegram
+ * LinkedIn
+ * vb.
+ *
+ * doğrudan şiire ait OG bilgilerini alabilir.
+ */
+function buildHtml({
+  title,
+  description,
+  image,
+  canonical,
+}) {
+  const safeTitle = esc(title);
+  const safeDescription = esc(description);
+  const safeCanonical = esc(canonical);
+  const safeImage = image ? esc(image) : "";
 
-  if (!r.ok) {
-    throw new Error(
-      `Uygulama kabuğu alınamadı: HTTP ${r.status}`
-    );
-  }
+  const imageTags = image
+    ? `
+<meta property="og:image" content="${safeImage}">
+<meta property="og:image:secure_url" content="${safeImage}">
+<meta property="og:image:type" content="image/jpeg">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="${safeTitle}">
 
-  return await r.text();
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="${safeImage}">
+<meta name="twitter:image:alt" content="${safeTitle}">
+`
+    : `
+<meta name="twitter:card" content="summary">
+`;
+
+  /*
+   * İnsan ziyaretçi geldiğinde tarayıcı bu sayfadan
+   * gerçek uygulamaya geçsin.
+   *
+   * Sosyal medya botları ise meta etiketlerini okuyabilir.
+   */
+  return `<!DOCTYPE html>
+<html lang="tr">
+<head>
+
+<meta charset="UTF-8">
+
+<title>${safeTitle}</title>
+
+<meta
+  name="description"
+  content="${safeDescription}"
+>
+
+<link
+  rel="canonical"
+  href="${safeCanonical}"
+>
+
+<meta
+  property="og:type"
+  content="article"
+>
+
+<meta
+  property="og:site_name"
+  content="Yeni Ozanlar"
+>
+
+<meta
+  property="og:locale"
+  content="tr_TR"
+>
+
+<meta
+  property="og:url"
+  content="${safeCanonical}"
+>
+
+<meta
+  property="og:title"
+  content="${safeTitle}"
+>
+
+<meta
+  property="og:description"
+  content="${safeDescription}"
+>
+
+${imageTags}
+
+<meta
+  name="twitter:title"
+  content="${safeTitle}"
+>
+
+<meta
+  name="twitter:description"
+  content="${safeDescription}"
+>
+
+<meta
+  name="robots"
+  content="index,follow"
+>
+
+<style>
+html,body{
+  margin:0;
+  padding:0;
+  background:#0d0718;
+  color:#e9d5ff;
+  font-family:Georgia,serif;
 }
 
-function metaEnjekteEt(
-  html,
-  {
-    title,
-    description,
-    image,
-    canonical
-  }
-) {
-  let temiz = html
-    .replace(
-      /<title>[\s\S]*?<\/title>/i,
-      ""
-    )
-    .replace(
-      /<meta\s+name=["']description["'][^>]*>/gi,
-      ""
-    )
-    .replace(
-      /<meta\s+property=["']og:[^"']+["'][^>]*>/gi,
-      ""
-    )
-    .replace(
-      /<meta\s+name=["']twitter:[^"']+["'][^>]*>/gi,
-      ""
-    )
-    .replace(
-      /<link\s+rel=["']canonical["'][^>]*>/gi,
-      ""
-    );
-
-  const etiketler = `
-    <title>${esc(title)}</title>
-
-    <meta
-      name="description"
-      content="${esc(description)}"
-    >
-
-    <link
-      rel="canonical"
-      href="${esc(canonical)}"
-    >
-
-    <meta
-      property="og:type"
-      content="article"
-    >
-
-    <meta
-      property="og:site_name"
-      content="Yeni Ozanlar"
-    >
-
-    <meta
-      property="og:locale"
-      content="tr_TR"
-    >
-
-    <meta
-      property="og:url"
-      content="${esc(canonical)}"
-    >
-
-    <meta
-      property="og:title"
-      content="${esc(title)}"
-    >
-
-    <meta
-      property="og:description"
-      content="${esc(description)}"
-    >
-
-    ${
-      image
-        ? `
-    <meta
-      property="og:image"
-      content="${esc(image)}"
-    >
-
-    <meta
-      property="og:image:secure_url"
-      content="${esc(image)}"
-    >
-
-    <meta
-      property="og:image:type"
-      content="image/jpeg"
-    >
-
-    <meta
-      property="og:image:width"
-      content="1200"
-    >
-
-    <meta
-      property="og:image:height"
-      content="630"
-    >
-
-    <meta
-      property="og:image:alt"
-      content="${esc(title)}"
-    >
-
-    <meta
-      name="twitter:card"
-      content="summary_large_image"
-    >
-
-    <meta
-      name="twitter:image"
-      content="${esc(image)}"
-    >
-
-    <meta
-      name="twitter:image:alt"
-      content="${esc(title)}"
-    >
-        `
-        : `
-    <meta
-      name="twitter:card"
-      content="summary"
-    >
-        `
-    }
-
-    <meta
-      name="twitter:title"
-      content="${esc(title)}"
-    >
-
-    <meta
-      name="twitter:description"
-      content="${esc(description)}"
-    >
-  `;
-
-  return temiz.replace(
-    /<head>/i,
-    `<head>${etiketler}`
-  );
+body{
+  min-height:100vh;
+  display:flex;
+  align-items:center;
+  justify-content:center;
 }
 
-module.exports = async function handler(req, res) {
+main{
+  width:min(900px,92%);
+  padding:40px 20px;
+  box-sizing:border-box;
+}
+
+h1{
+  font-size:2rem;
+  margin:0 0 20px;
+}
+
+p{
+  font-size:1.15rem;
+  line-height:1.8;
+  white-space:pre-wrap;
+}
+
+img{
+  max-width:100%;
+  height:auto;
+  border-radius:14px;
+  margin-top:20px;
+}
+
+a{
+  color:#c084fc;
+}
+</style>
+
+</head>
+
+<body>
+
+<main>
+
+<h1>${safeTitle}</h1>
+
+<p>${safeDescription}</p>
+
+${
+  image
+    ? `<img src="${safeImage}" alt="${safeTitle}">`
+    : ""
+}
+
+<p>
+<a href="${safeCanonical}">
+Yeni Ozanlar'da şiiri görüntüle
+</a>
+</p>
+
+</main>
+
+</body>
+</html>`;
+}
+
+/*
+ * Vercel Function
+ */
+export default async function handler(req, res) {
   try {
-    const slug = String(
-      req.query?.slug || ""
-    );
+    const slug =
+      String(req.query?.slug || "").trim();
+
+    if (!slug) {
+      return res.status(400).send(
+        "Şiir bağlantısı bulunamadı."
+      );
+    }
 
     const postId = getPostId(slug);
 
-    const canonical =
-      `${APP_URL}/post/${encodeURIComponent(slug)}`;
-
-    const kabuk =
-      await uygulamaKabugunuGetir();
-
     if (!postId) {
-      res.setHeader(
-        "Content-Type",
-        "text/html; charset=utf-8"
+      return res.status(404).send(
+        "Geçersiz şiir bağlantısı."
       );
-
-      return res.status(200).send(kabuk);
     }
 
-    const snap =
-      await db()
-        .collection("posts")
-        .doc(postId)
-        .get();
+    /*
+     * Firestore'dan şiiri al.
+     */
+    const snapshot = await db()
+      .collection("posts")
+      .doc(postId)
+      .get();
 
-    if (!snap.exists) {
-      res.setHeader(
-        "Content-Type",
-        "text/html; charset=utf-8"
+    if (!snapshot.exists) {
+      return res.status(404).send(
+        "Şiir bulunamadı."
       );
-
-      return res.status(200).send(kabuk);
     }
 
-    const post = snap.data() || {};
+    const post = snapshot.data() || {};
 
+    /*
+     * Başlık
+     */
     const title =
-      String(post.title || "Yeni Ozanlar");
+      String(
+        post.title ||
+        "Yeni Ozanlar"
+      ).trim();
 
+    /*
+     * Şiir metninden Facebook/X açıklaması.
+     */
     const description =
       excerpt(post.text);
 
-    let image = null;
-
     /*
-      1. Öncelik şiirin kendi görseli.
-      Cloudinary URL'si ise doğrudan kullanılır.
-    */
-    if (post.image) {
-      const raw =
-        String(post.image).trim();
-
-      if (/^https?:\/\//i.test(raw)) {
-        image = raw;
-      }
-
-      /*
-        Eski şiirlerde data:image;base64
-        tutulmuş olabilir.
-
-        Sosyal medya data URL kabul etmediği için
-        postImage endpoint'ine çeviriyoruz.
-      */
-      else if (
-        /^data:image\//i.test(raw)
-      ) {
-        image =
-          `${APP_URL}/api/postImage` +
-          `?id=${encodeURIComponent(postId)}` +
-          `&v=${encodeURIComponent(
-            post.ts || Date.now()
-          )}`;
-      }
-    }
-
-    /*
-      Görsel yoksa YouTube küçük resmi.
-    */
-    if (!image && post.youtube) {
-      const youtube =
-        getYouTubeId(post.youtube);
-
-      if (youtube) {
-        image =
-          await ytKapakResmi(youtube);
-      }
-    }
-
-    const finalHtml =
-      metaEnjekteEt(
-        kabuk,
-        {
-          title,
-          description,
-          image,
-          canonical
-        }
+     * Önce şiirin kendi görseli.
+     */
+    let image =
+      getImageUrl(
+        post,
+        postId
       );
+
+    /*
+     * Şiirin resmi yoksa YouTube küçük resmi.
+     */
+    if (!image && post.youtube) {
+      const youtubeId =
+        getYouTubeId(
+          post.youtube
+        );
+
+      if (youtubeId) {
+        image =
+          getYouTubeImage(
+            youtubeId
+          );
+      }
+    }
+
+    /*
+     * Canonical paylaşım adresi.
+     */
+    const canonical =
+      `${APP_URL}/post/${encodeURIComponent(slug)}`;
+
+    /*
+     * Sosyal medya için HTML.
+     */
+    const html =
+      buildHtml({
+        title,
+        description,
+        image,
+        canonical,
+      });
 
     res.setHeader(
       "Content-Type",
       "text/html; charset=utf-8"
     );
 
+    /*
+     * Facebook/X bazen eski önizlemeyi cache'ler.
+     * Kısa süreli cache kullanıyoruz.
+     */
     res.setHeader(
       "Cache-Control",
-      "public, s-maxage=300, stale-while-revalidate=3600"
+      "public, s-maxage=60, stale-while-revalidate=300"
     );
 
     return res
       .status(200)
-      .send(finalHtml);
+      .send(html);
 
   } catch (error) {
     console.error(
-      "Yeni Ozanlar postPreview hatası:",
+      "postPreview.js HATASI:",
       error
     );
 
-    /*
-      Hata durumunda bile siteyi bozma.
-    */
-    try {
-      const kabuk =
-        await uygulamaKabugunuGetir();
-
-      res.setHeader(
-        "Content-Type",
-        "text/html; charset=utf-8"
+    return res
+      .status(500)
+      .send(
+        "Yeni Ozanlar önizleme sunucusu hatası."
       );
-
-      return res
-        .status(200)
-        .send(kabuk);
-
-    } catch {
-      return res
-        .status(500)
-        .send("Yeni Ozanlar");
-    }
   }
-};
+}
