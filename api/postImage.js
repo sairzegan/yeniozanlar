@@ -20,7 +20,7 @@ function firebaseAdmin() {
 
   try {
     serviceAccount = JSON.parse(raw);
-  } catch (error) {
+  } catch {
     throw new Error(
       "FIREBASE_SERVICE_ACCOUNT_JSON geçerli JSON değil."
     );
@@ -41,8 +41,8 @@ export default async function handler(req, res) {
   try {
     const id = String(req.query?.id || "").trim();
 
-    if (!id) {
-      return res.status(400).send("Görsel ID eksik.");
+    if (!/^[A-Za-z0-9]{7}$/.test(id)) {
+      return res.status(400).send("Geçersiz şiir ID.");
     }
 
     const snapshot = await db()
@@ -62,29 +62,39 @@ export default async function handler(req, res) {
     }
 
     /*
-     * Eğer görsel zaten harici bir URL ise
-     * doğrudan o adrese yönlendir.
+     * Görsel zaten URL ise doğrudan yönlendir.
      */
     if (/^https?:\/\//i.test(raw)) {
-      res.setHeader("Cache-Control", "public, max-age=31536000");
       res.setHeader("Location", raw);
+      res.setHeader(
+        "Cache-Control",
+        "public, max-age=31536000"
+      );
+
       return res.status(302).end();
     }
 
     /*
-     * Firebase'de data:image/...;base64,... şeklinde
-     * saklanan görselleri çöz.
+     * Firebase'de data:image/...;base64,... olarak
+     * saklanan resmi gerçek binary görsele çevir.
      */
     const match = raw.match(
       /^data:(image\/[A-Za-z0-9.+-]+);base64,([\s\S]+)$/i
     );
 
     if (!match) {
-      console.error("Geçersiz image data:", raw.substring(0, 100));
-      return res.status(404).send("Şiirin görseli bulunamadı.");
+      console.error(
+        "postImage: Geçersiz image formatı:",
+        raw.substring(0, 100)
+      );
+
+      return res.status(404).send(
+        "Şiirin görseli bulunamadı."
+      );
     }
 
     const mimeType = match[1];
+
     const base64Data = match[2]
       .replace(/\s/g, "")
       .replace(/-/g, "+")
@@ -92,27 +102,44 @@ export default async function handler(req, res) {
 
     const buffer = Buffer.from(base64Data, "base64");
 
-    if (!buffer || buffer.length === 0) {
-      return res.status(404).send("Görsel verisi boş.");
+    if (!buffer.length) {
+      return res.status(404).send(
+        "Görsel verisi boş."
+      );
     }
 
     /*
-     * Facebook, WhatsApp, Messenger vb. crawler'larının
-     * resmi doğrudan okuyabilmesi için gerekli header'lar.
+     * Facebook / Messenger / WhatsApp / LinkedIn
+     * crawler'larının resmi okuyabilmesi için.
      */
     res.setHeader("Content-Type", mimeType);
-    res.setHeader("Content-Length", String(buffer.length));
-    res.setHeader("Content-Disposition", "inline");
-    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader(
+      "Content-Length",
+      String(buffer.length)
+    );
+    res.setHeader(
+      "Content-Disposition",
+      "inline"
+    );
+    res.setHeader(
+      "Access-Control-Allow-Origin",
+      "*"
+    );
     res.setHeader(
       "Cache-Control",
       "public, max-age=31536000, immutable"
     );
 
     return res.status(200).send(buffer);
-  } catch (error) {
-    console.error("postImage.js HATASI:", error);
 
-    return res.status(500).send("Görsel sunulamadı.");
+  } catch (error) {
+    console.error(
+      "postImage.js HATASI:",
+      error
+    );
+
+    return res.status(500).send(
+      "Görsel sunulamadı."
+    );
   }
 }
