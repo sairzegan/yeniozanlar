@@ -1,8 +1,5 @@
 export default function handler(req, res) {
   try {
-    const userAgent = req.headers['user-agent'] || '';
-    const isBot = /facebookexternalhit|Twitterbot|LinkedInBot|WhatsApp|TelegramBot|Applebot|Discordbot|SkypeUriPreview/i.test(userAgent);
-
     const fullUrl = req.url || '';
     const pathWithoutQuery = fullUrl.split('?')[0];
     const pathParts = pathWithoutQuery.split('/');
@@ -11,7 +8,7 @@ export default function handler(req, res) {
     const cleanTitle = decodeURIComponent(slug).replace(/[-_]/g, ' ');
     const title = `Şiir: ${cleanTitle}`;
     const description = "Yeni Ozanlar'da paylaşılan bu eşsiz şiiri okumak için tıklayın.";
-    const imageUrl = `https://${req.headers.host}/logo.png`;
+    const imageUrl = `https://${req.headers.host}/logo.png`; // Projenizdeki geçerli bir görsel/logo URL'i
     const currentFullUrl = `https://${req.headers.host}${fullUrl}`;
 
     const html = `<!DOCTYPE html>
