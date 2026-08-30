@@ -1,47 +1,74 @@
+// /api/flux-image.js
 // Vercel Serverless Function
-// Cloudflare Workers AI -> FLUX.1-schnell
-// Cloudflare kota/rate-limit durumunda otomatik GIPHY yedeği.
 //
-// Vercel Environment Variables:
-// CLOUDFLARE_ACCOUNT_ID
-// CLOUDFLARE_API_TOKEN
-// GIPHY_API_KEY
+// GÖREV:
+// Sadece Cloudflare Workers AI -> FLUX.1-schnell üzerinden
+// AI görseli üretir.
+//
+// ÖNEMLİ:
+// Bu dosya GIPHY'ye FALLBACK YAPMAZ.
+//
+// Frontend'deki gerçek zincir:
+// Cloudflare FLUX
+//      ↓ başarısızsa
+// Pollinations
+//      ↓ başarısızsa
+// Hugging Face
+//      ↓ başarısızsa
+// Gemini
+//      ↓ hepsi başarısızsa
+// GIPHY
+//
+// Cloudflare burada başarısız olursa HTTP 502 döndürür.
+// Böylece index.html bir sonraki AI sağlayıcısına geçebilir.
 
 const MODEL = '@cf/black-forest-labs/flux-1-schnell';
 
 const CLOUDFLARE_URL = (accountId) =>
   `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/@cf/black-forest-labs/flux-1-schnell`;
 
-const GIPHY_SEARCH_URL = 'https://api.giphy.com/v1/gifs/search';
-
 const TIMEOUT_MS = 65000;
 
 
-// ------------------------------------------------------------
-// FLUX PROMPT
-// ------------------------------------------------------------
+// ============================================================
+// PROMPT
+// ============================================================
 
 function buildPrompt(title, text) {
   const poem = String(text || '').trim().slice(0, 1800);
   const heading = String(title || '').trim().slice(0, 250);
-  // Önbellek kırıcı: Cloudflare/CDN katmanları aynı prompt için üretilen görseli
-  // önbelleğe alıp "Yeniden Resim Oluştur" butonuna her basıldığında AYNI görseli
-  // döndürebiliyordu. Her istekte benzersiz bir metin ekleyerek prompt'u (ve
-  // dolayısıyla önbellek anahtarını) her seferinde farklı hale getiriyoruz.
-  const varyasyon = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+
+  // Her istekte farklı prompt oluştur.
+  // Aynı şiirde yeniden görsel oluşturulduğunda
+  // CDN/cache nedeniyle aynı görsel dönmesini azaltır.
+  const varyasyon =
+    `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 
   return [
     'Create one original cinematic image specifically inspired by the Turkish poem below.',
+
     'Use the actual meaning of the poem as the primary visual source.',
+
     'Show the setting, people, objects, actions, symbols, metaphors and emotions that are actually present in the poem.',
+
     'Do not create a generic poetry image.',
+
     'Do not invent an unrelated scene.',
+
     'The poem must determine the subject, atmosphere and visual story.',
+
     'Style: cinematic photography, realistic, artistic, atmospheric, detailed, natural lighting, elegant composition, 16:9 landscape.',
+
     'IMPORTANT: absolutely NO text anywhere in the image.',
+
     'NO letters, NO words, NO captions, NO typography, NO subtitles, NO signs, NO logos, NO watermark.',
-    heading ? `Turkish poem title: ${heading}` : '',
+
+    heading
+      ? `Turkish poem title: ${heading}`
+      : '',
+
     `Turkish poem:\n${poem}`,
+
     `Internal variation tag (ignore, do not depict, do not render as text): ${varyasyon}`
   ]
     .filter(Boolean)
@@ -49,29 +76,9 @@ function buildPrompt(title, text) {
 }
 
 
-// ------------------------------------------------------------
-// GIPHY ARAMA METNİ
-// ------------------------------------------------------------
-
-function cleanGiphyQuery(title, text) {
-  const source =
-    String(title || '').trim() ||
-    String(text || '').trim();
-
-  const cleaned = source
-    .replace(/https?:\/\/\S+/gi, ' ')
-    .replace(/[^\p{L}\p{N}\s'-]/gu, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-
-  // GIPHY q maksimum 50 karakter.
-  return cleaned.slice(0, 50) || 'poetic landscape';
-}
-
-
-// ------------------------------------------------------------
+// ============================================================
 // TIMEOUT'LU FETCH
-// ------------------------------------------------------------
+// ============================================================
 
 async function fetchWithTimeout(
   url,
@@ -95,35 +102,56 @@ async function fetchWithTimeout(
 }
 
 
-// ------------------------------------------------------------
-// CLOUDFLARE CEVABINI GÖRSELE ÇEVİR
-// ------------------------------------------------------------
+// ============================================================
+// CLOUDFLARE CEVABINI BINARY GÖRSELE ÇEVİR
+// ============================================================
 
 async function readCloudflareImage(response) {
+
   const contentType =
-    (response.headers.get('content-type') || '').toLowerCase();
-
-  const raw = await response.text();
-
-  let data;
-
-  try {
-    data = JSON.parse(raw);
-  } catch {
-    data = null;
-  }
+    (
+      response.headers.get('content-type') ||
+      ''
+    )
+      .toLowerCase()
+      .split(';')[0]
+      .trim();
 
 
+  // ----------------------------------------------------------
   // HTTP hata kodu
+  // ----------------------------------------------------------
+
   if (!response.ok) {
+
+    let raw = '';
+
+    try {
+      raw = await response.text();
+    } catch (_) {
+      raw = '';
+    }
+
+    let data = null;
+
+    try {
+      data = JSON.parse(raw);
+    } catch (_) {
+      data = null;
+    }
+
     const detail =
       data?.errors?.[0]?.message ||
       data?.error ||
-      raw.slice(0, 500);
+      data?.message ||
+      raw.slice(0, 800);
+
 
     const error = new Error(
       `Cloudflare FLUX HTTP ${response.status}${
-        detail ? ` — ${detail}` : ''
+        detail
+          ? ` — ${detail}`
+          : ''
       }`
     );
 
@@ -134,224 +162,152 @@ async function readCloudflareImage(response) {
   }
 
 
-  // Workers AI FLUX cevabı:
-  // { result: { image: "BASE64..." } }
+  // ----------------------------------------------------------
+  // Cloudflare doğrudan image/* döndürdüyse
+  // ----------------------------------------------------------
+
+  if (contentType.startsWith('image/')) {
+
+    const arrayBuffer =
+      await response.arrayBuffer();
+
+    const buffer =
+      Buffer.from(arrayBuffer);
+
+    if (!buffer.length) {
+      throw new Error(
+        'Cloudflare FLUX boş görsel döndürdü.'
+      );
+    }
+
+    return buffer;
+  }
+
+
+  // ----------------------------------------------------------
+  // Cloudflare Workers AI genellikle JSON döndürür:
+  //
+  // {
+  //   "result": {
+  //      "image": "BASE64..."
+  //   },
+  //   "success": true
+  // }
+  // ----------------------------------------------------------
+
+  const raw =
+    await response.text();
+
+  let data = null;
+
+  try {
+    data = JSON.parse(raw);
+  } catch (_) {
+    data = null;
+  }
+
+
+  if (!data) {
+    throw new Error(
+      `Cloudflare FLUX JSON olmayan bir cevap döndürdü: ${raw.slice(0, 500)}`
+    );
+  }
+
 
   const base64 =
     data?.result?.image ||
     data?.image;
 
+
   if (
     base64 &&
     typeof base64 === 'string'
   ) {
-    return Buffer.from(base64, 'base64');
-  }
+
+    let temizBase64 =
+      base64.trim();
 
 
-  // İhtimale karşı doğrudan binary image cevabı
-  if (contentType.startsWith('image/')) {
-    return Buffer.from(raw, 'binary');
-  }
+    // İhtimale karşı data:image/...;base64,... formatını da destekle.
+    if (
+      temizBase64.startsWith('data:image/')
+    ) {
+      const virgül =
+        temizBase64.indexOf(',');
 
-
-  throw new Error(
-    'Cloudflare FLUX geçerli bir görsel döndürmedi.'
-  );
-}
-
-
-// ------------------------------------------------------------
-// GIPHY FALLBACK
-// ------------------------------------------------------------
-
-async function getGiphyImage(title, text) {
-
-  const key =
-    String(process.env.GIPHY_API_KEY || '').trim();
-
-  if (!key) {
-    throw new Error(
-      'GIPHY_API_KEY Vercel Environment Variable bulunamadı.'
-    );
-  }
-
-
-  const q = cleanGiphyQuery(title, text);
-
-  const url = new URL(GIPHY_SEARCH_URL);
-
-  url.searchParams.set(
-    'api_key',
-    key
-  );
-
-  url.searchParams.set(
-    'q',
-    q
-  );
-
-  url.searchParams.set(
-    'limit',
-    '10'
-  );
-
-  url.searchParams.set(
-    'rating',
-    'g'
-  );
-
-  url.searchParams.set(
-    'lang',
-    'tr'
-  );
-
-  url.searchParams.set(
-    'fields',
-    'id,title,images'
-  );
-
-
-  const response =
-    await fetchWithTimeout(
-      url.toString(),
-      {
-        headers: {
-          Accept: 'application/json'
-        }
-      },
-      15000
-    );
-
-
-  if (!response.ok) {
-    throw new Error(
-      `GIPHY API HTTP ${response.status}`
-    );
-  }
-
-
-  const payload =
-    await response.json();
-
-
-  const items =
-    Array.isArray(payload?.data)
-      ? payload.data
-      : [];
-
-
-  if (!items.length) {
-    throw new Error(
-      `GIPHY aramasında sonuç bulunamadı: ${q}`
-    );
-  }
-
-
-  // Büyük görselden küçüğe doğru dene.
-  const candidates = [];
-
-
-  for (const item of items) {
-
-    const images =
-      item?.images || {};
-
-    const urls = [
-
-      images?.downsized_large?.url,
-
-      images?.downsized?.url,
-
-      images?.original?.url,
-
-      images?.fixed_width?.url,
-
-      images?.fixed_height?.url
-
-    ].filter(Boolean);
-
-
-    candidates.push(...urls);
-  }
-
-
-  // Bir URL çalışmazsa diğerini dene.
-  for (const imageUrl of candidates) {
-
-    try {
-
-      const imageResponse =
-        await fetchWithTimeout(
-          imageUrl,
-          {
-            headers: {
-              Accept:
-                'image/avif,image/webp,image/gif,image/*,*/*;q=0.8'
-            }
-          },
-          15000
-        );
-
-
-      if (!imageResponse.ok) {
-        continue;
+      if (virgül >= 0) {
+        temizBase64 =
+          temizBase64.slice(virgül + 1);
       }
-
-
-      const buffer =
-        Buffer.from(
-          await imageResponse.arrayBuffer()
-        );
-
-
-      if (!buffer.length) {
-        continue;
-      }
-
-
-      const contentType =
-        imageResponse.headers.get(
-          'content-type'
-        ) || 'image/gif';
-
-
-      return {
-        buffer,
-        contentType,
-        query: q
-      };
-
-    } catch {
-      // Sonraki GIPHY görselini dene.
     }
+
+
+    const buffer =
+      Buffer.from(
+        temizBase64,
+        'base64'
+      );
+
+
+    if (!buffer.length) {
+      throw new Error(
+        'Cloudflare FLUX base64 görsel verisi boş.'
+      );
+    }
+
+
+    return buffer;
   }
 
 
+  // Cloudflare hata mesajını mümkün olduğunca açık göster.
+  const detail =
+    data?.errors?.[0]?.message ||
+    data?.error ||
+    data?.message ||
+    (
+      data?.result
+        ? JSON.stringify(data.result).slice(0, 500)
+        : ''
+    );
+
+
   throw new Error(
-    'GIPHY görsel dosyası alınamadı.'
+    `Cloudflare FLUX geçerli bir görsel döndürmedi.${
+      detail
+        ? ` — ${detail}`
+        : ''
+    }`
   );
 }
 
 
-// ------------------------------------------------------------
+// ============================================================
 // VERCEL
-// ------------------------------------------------------------
+// ============================================================
 
 export const maxDuration = 75;
 
 
-// ------------------------------------------------------------
+// ============================================================
 // MAIN HANDLER
-// ------------------------------------------------------------
+// ============================================================
 
 export default async function handler(
   req,
   res
 ) {
 
+  // ----------------------------------------------------------
   // Sadece POST
+  // ----------------------------------------------------------
+
   if (req.method !== 'POST') {
+
+    res.setHeader(
+      'Allow',
+      'POST'
+    );
 
     return res
       .status(405)
@@ -362,6 +318,10 @@ export default async function handler(
   }
 
 
+  // ----------------------------------------------------------
+  // Gelen veriler
+  // ----------------------------------------------------------
+
   const title =
     req.body?.title || '';
 
@@ -369,8 +329,13 @@ export default async function handler(
     req.body?.text || '';
 
 
-  // Şiir yoksa FLUX'a boş prompt gönderme.
-  if (!String(text).trim()) {
+  // ----------------------------------------------------------
+  // Şiir kontrolü
+  // ----------------------------------------------------------
+
+  if (
+    !String(text).trim()
+  ) {
 
     return res
       .status(400)
@@ -380,6 +345,10 @@ export default async function handler(
       });
   }
 
+
+  // ----------------------------------------------------------
+  // Cloudflare Environment Variables
+  // ----------------------------------------------------------
 
   const accountId =
     String(
@@ -393,7 +362,10 @@ export default async function handler(
     ).trim();
 
 
-  if (!accountId || !token) {
+  if (
+    !accountId ||
+    !token
+  ) {
 
     return res
       .status(500)
@@ -404,21 +376,22 @@ export default async function handler(
   }
 
 
-  let cloudflareError = null;
+  // ----------------------------------------------------------
+  // PROMPT
+  // ----------------------------------------------------------
+
+  const prompt =
+    buildPrompt(
+      title,
+      text
+    );
 
 
-  // ==========================================================
-  // 1. ÖNCE CLOUDFLARE FLUX
-  // ==========================================================
+  // ----------------------------------------------------------
+  // CLOUDFLARE FLUX
+  // ----------------------------------------------------------
 
   try {
-
-    const prompt =
-      buildPrompt(
-        title,
-        text
-      );
-
 
     const response =
       await fetchWithTimeout(
@@ -445,12 +418,15 @@ export default async function handler(
             JSON.stringify({
               prompt,
 
-              // Seed YOK.
-              // Önceki "/seed not allowed"
-              // problemini engeller.
+              // Seed göndermiyoruz.
+              // Cloudflare FLUX endpointinde
+              // geçersiz / desteklenmeyen seed parametresi
+              // nedeniyle hata oluşmasını engeller.
               steps: 4
             })
-        }
+        },
+
+        TIMEOUT_MS
       );
 
 
@@ -460,7 +436,10 @@ export default async function handler(
       );
 
 
-    // FLUX başarılı
+    // --------------------------------------------------------
+    // BAŞARILI
+    // --------------------------------------------------------
+
     res.setHeader(
       'Content-Type',
       'image/jpeg'
@@ -471,9 +450,10 @@ export default async function handler(
       String(buffer.length)
     );
 
+    // AI görseli her istekte yeniden oluşturulabilsin.
     res.setHeader(
       'Cache-Control',
-      'no-store'
+      'no-store, no-cache, must-revalidate'
     );
 
     res.setHeader(
@@ -494,99 +474,49 @@ export default async function handler(
 
   } catch (err) {
 
-    cloudflareError = err;
+    // --------------------------------------------------------
+    // ÇOK ÖNEMLİ:
+    //
+    // BURADA GIPHY ÇAĞRILMIYOR.
+    //
+    // HTTP 502 dönüyoruz.
+    //
+    // index.html bunu yakalayıp:
+    //
+    // Cloudflare ❌
+    //       ↓
+    // Pollinations
+    //       ↓
+    // Hugging Face
+    //       ↓
+    // Gemini
+    //       ↓
+    // GIPHY
+    //
+    // şeklinde devam edecek.
+    // --------------------------------------------------------
 
-    console.error(
-      'Cloudflare FLUX error:',
-      err?.message || err
-    );
-  }
-
-
-  // ==========================================================
-  // 2. FLUX BAŞARISIZSA GIPHY
-  // ==========================================================
-
-  try {
-
-    const fallback =
-      await getGiphyImage(
-        title,
-        text
-      );
-
-
-    res.setHeader(
-      'Content-Type',
-      fallback.contentType
-    );
-
-    res.setHeader(
-      'Content-Length',
-      String(
-        fallback.buffer.length
-      )
-    );
-
-    res.setHeader(
-      'Cache-Control',
-      'no-store'
-    );
-
-    res.setHeader(
-      'X-AI-Provider',
-      'giphy-fallback'
-    );
-
-    res.setHeader(
-      // HTTP header değerleri yalnızca Latin-1 (ISO-8859-1) karakter kümesini kabul eder.
-      // fallback.query Türkçe karakterler (ş, ğ, ı, İ vb.) içerebiliyor ve bunlar bu
-      // aralığın dışında kalıyor; Node bu yüzden "Invalid character in header content"
-      // hatasıyla çöküyordu. encodeURIComponent ile her zaman ASCII-güvenli hale getiriyoruz.
-      'X-GIPHY-Query',
-      encodeURIComponent(fallback.query)
-    );
-
-
-    // ÖNEMLİ:
-    // JSON değil, gerçek görsel binary'si dönüyor.
-    return res
-      .status(200)
-      .send(fallback.buffer);
-
-
-  } catch (giphyError) {
-
-    console.error(
-      'GIPHY fallback error:',
-      giphyError?.message ||
-      giphyError
-    );
-
-
-    const cfMessage =
-      cloudflareError?.name === 'AbortError'
+    const mesaj =
+      err?.name === 'AbortError'
         ? 'Cloudflare FLUX isteği zaman aşımına uğradı.'
         : (
-            cloudflareError?.message ||
+            err?.message ||
             'Cloudflare FLUX başarısız oldu.'
           );
 
 
-    const gifMessage =
-      giphyError?.message ||
-      'GIPHY yedeği başarısız oldu.';
+    console.error(
+      'Cloudflare FLUX error:',
+      mesaj
+    );
 
 
     return res
       .status(502)
       .json({
-
-        error:
-          `Görsel üretilemedi. FLUX: ${cfMessage} | GIPHY yedeği: ${gifMessage}`,
-
-        provider:
-          'cloudflare+giphy-fallback'
+        error: mesaj,
+        provider: 'cloudflare',
+        fallback: false
       });
   }
 }
