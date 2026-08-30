@@ -13,7 +13,10 @@ function firebaseAdmin() {
   return initializeApp({ credential: cert(serviceAccount), projectId: PROJECT_ID });
 }
 
-function db() { firebaseAdmin(); return getFirestore(); }
+function db() {
+  firebaseAdmin();
+  return getFirestore();
+}
 
 export default async function handler(req, res) {
   try {
@@ -23,16 +26,17 @@ export default async function handler(req, res) {
     const snapshot = await db().collection("posts").doc(id).get();
     if (!snapshot.exists) return res.status(404).send("Şiir bulunamadı.");
 
-    const post = snapshot.data() || {};
-    const raw = String(post.image || "").trim();
+    const raw = String(snapshot.data()?.image || "").trim();
+    if (!raw) return res.status(404).send("Şiirin görseli bulunamadı.");
 
+    // External CDN image: keep it as a real HTTP image. The preview code uses
+    // this URL directly, so this branch is only a compatibility fallback.
     if (/^https?:\/\//i.test(raw)) {
-      res.setHeader("Location", raw);
-      return res.status(302).end();
+      return res.redirect(302, raw);
     }
 
     const match = raw.match(/^data:(image\/[A-Za-z0-9.+-]+);base64,([A-Za-z0-9+/=\s]+)$/i);
-    if (!match) return res.status(404).send("Şiirin görseli bulunamadı.");
+    if (!match) return res.status(404).send("Desteklenmeyen görsel biçimi.");
 
     const mimeType = match[1].toLowerCase();
     const buffer = Buffer.from(match[2].replace(/\s/g, ""), "base64");
@@ -41,8 +45,10 @@ export default async function handler(req, res) {
     res.setHeader("Content-Type", mimeType);
     res.setHeader("Content-Length", String(buffer.length));
     res.setHeader("Content-Disposition", "inline");
-    res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+    res.setHeader("Vercel-CDN-Cache-Control", "public, max-age=31536000, immutable");
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("X-Content-Type-Options", "nosniff");
     return res.status(200).send(buffer);
   } catch (error) {
     console.error("postImage.js HATASI:", error);

@@ -1,7 +1,17 @@
 {
+  "$schema": "https://openapi.vercel.sh/vercel.json",
   "rewrites": [
     {
       "source": "/post/:slug",
+      "has": [
+        {
+          "type": "header",
+          "key": "user-agent",
+          "value": {
+            "re": "[Ff]acebookexternalhit|[Ff]acebot|[Ww]hatsapp|[Tt]witterbot|[Ll]inkedInBot|[Tt]elegramBot|[Dd]iscordbot|[Ss]lackbot|[Ss]kypeUriPreview|[Pp]interest|[Gg]ooglebot"
+          }
+        }
+      ],
       "destination": "/api/postPreview?slug=:slug"
     },
     {
