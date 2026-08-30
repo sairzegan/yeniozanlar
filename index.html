@@ -2764,64 +2764,100 @@ function kapakKirpModal(file){
     const img=new Image();
     img.onload=()=>{
       const modal=h('div',{class:'modal-bg'});
-      const panel=h('div',{class:'modal',style:{maxWidth:'700px',width:'min(94vw,700px)',padding:'18px'}});
-      const title=h('h3',{style:{fontFamily:"'Playfair Display',serif",color:'#e9d5ff',margin:'0 0 10px'}},'✂️ Kapak Fotoğrafını Kırp');
-      const info=h('p',{style:{color:'#a78bfa',fontSize:'.82rem',margin:'0 0 12px'}},'Çerçeveyi sürükleyerek kapakta görünmesini istediğin bölümü seç.');
-      const area=h('div',{style:{position:'relative',width:'100%',maxHeight:'430px',overflow:'hidden',background:'#08050f',borderRadius:'12px',userSelect:'none',touchAction:'none'}});
+      const panel=h('div',{class:'modal',style:{maxWidth:'760px',width:'min(96vw,760px)',padding:'18px',background:'linear-gradient(145deg,#120a20,#1b0d2d)',border:'1px solid #7c3aed'}});
+      const title=h('h3',{style:{fontFamily:"'Playfair Display',serif",color:'#eadcff',margin:'0 0 7px'}},'✂️ Kapak Fotoğrafını Ayarla');
+      const info=h('p',{style:{color:'#bda7e8',fontSize:'.82rem',margin:'0 0 10px',lineHeight:'1.5'}},'Fotoğrafı yakınlaştırıp uzaklaştırabilir, resmi sürükleyerek kapakta görünecek alanı ayarlayabilirsin. Mor çerçevenin içi kullanılacak.');
+
+      const stage=h('div',{style:{position:'relative',width:'100%',height:'420px',overflow:'hidden',background:'#07040d',borderRadius:'14px',userSelect:'none',touchAction:'none',border:'1px solid #4c1d95'}});
       const canvas=document.createElement('canvas');
-      canvas.style.display='block'; canvas.style.width='100%'; canvas.style.height='auto';
-      area.appendChild(canvas);
+      canvas.style.display='block';canvas.style.width='100%';canvas.style.height='100%';canvas.style.touchAction='none';
+      stage.appendChild(canvas);
       const ctx=canvas.getContext('2d');
-      const frame=h('div',{style:{position:'absolute',border:'2px solid #c084fc',boxShadow:'0 0 0 9999px rgba(0,0,0,.58)',cursor:'move',boxSizing:'border-box',touchAction:'none'}});
-      area.appendChild(frame);
+      const frame=h('div',{style:{position:'absolute',left:'0',top:'50%',transform:'translateY(-50%)',width:'100%',aspectRatio:'3 / 1',border:'2px solid #c084fc',boxShadow:'0 0 0 9999px rgba(0,0,0,.58)',boxSizing:'border-box',pointerEvents:'none'}});
+      stage.appendChild(frame);
+
+      const controls=h('div',{style:{display:'flex',alignItems:'center',gap:'9px',marginTop:'12px',padding:'10px 12px',borderRadius:'12px',background:'rgba(124,58,237,.12)',border:'1px solid rgba(192,132,252,.25)'}});
+      const zoomOut=h('button',{type:'button',class:'btn',style:{minWidth:'42px',padding:'7px 11px',background:'linear-gradient(135deg,#14532d,#166534)',color:'#ecfdf5',border:'1px solid #22c55e'},onclick:()=>setZoom(zoom-0.1)},'−');
+      const zoomRange=h('input',{type:'range',min:'1',max:'3',step:'0.01',value:'1',style:{flex:'1',accentColor:'#a855f7'}});
+      const zoomIn=h('button',{type:'button',class:'btn',style:{minWidth:'42px',padding:'7px 11px',background:'linear-gradient(135deg,#6d28d9,#9333ea)',color:'#fff',border:'1px solid #c084fc'},onclick:()=>setZoom(zoom+0.1)},'+');
+      const zoomText=h('span',{style:{minWidth:'58px',textAlign:'right',color:'#d8b4fe',fontSize:'.78rem',fontWeight:'600'}},'100%');
+      controls.appendChild(h('span',{style:{color:'#c4b5fd',fontSize:'.8rem'}},'🔍'));controls.appendChild(zoomOut);controls.appendChild(zoomRange);controls.appendChild(zoomIn);controls.appendChild(zoomText);
+
+      let zoom=1, scale=1, baseScale=1, offsetX=0, offsetY=0, dragging=null;
+      const targetW=1500,targetH=500;
+
+      function frameMetrics(){
+        const cw=canvas.width,ch=canvas.height;
+        const fw=cw,fh=cw/3;
+        return {cw,ch,fw,fh,fx:0,fy:(ch-fh)/2};
+      }
+      function clampOffsets(){
+        const {cw,ch,fw,fh}=frameMetrics();
+        const iw=img.naturalWidth*scale, ih=img.naturalHeight*scale;
+        const minX=fw-iw, maxX=0;
+        const minY=(ch/2+fh/2)-ih, maxY=(ch/2-fh/2);
+        if(iw>=fw) offsetX=Math.max(minX,Math.min(maxX,offsetX));
+        else offsetX=(cw-iw)/2;
+        if(ih>=fh) offsetY=Math.max(minY,Math.min(maxY,offsetY));
+        else offsetY=(ch-ih)/2;
+      }
+      function draw(){
+        const rect=stage.getBoundingClientRect();
+        canvas.width=Math.max(1,Math.round(rect.width*devicePixelRatio));
+        canvas.height=Math.max(1,Math.round(rect.height*devicePixelRatio));
+        ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);
+        const cw=rect.width,ch=rect.height;
+        const fw=cw,fh=cw/3;
+        baseScale=Math.max(fw/img.naturalWidth,fh/img.naturalHeight);
+        if(!scale)scale=baseScale;
+        if(scale<baseScale)scale=baseScale;
+        clampOffsets();
+        ctx.clearRect(0,0,cw,ch);
+        ctx.fillStyle='#07040d';ctx.fillRect(0,0,cw,ch);
+        const iw=img.naturalWidth*scale,ih=img.naturalHeight*scale;
+        ctx.drawImage(img,offsetX,offsetY,iw,ih);
+        frame.style.height=fh+'px';
+        zoomRange.value=String(Math.max(1,Math.min(3,zoom)));
+        zoomText.textContent=Math.round(zoom*100)+'%';
+      }
+      function setZoom(z,cx=null,cy=null){
+        const oldScale=scale||baseScale;zoom=Math.max(1,Math.min(3,z));
+        const newScale=baseScale*zoom;
+        if(cx!=null&&cy!=null){
+          const ix=(cx-offsetX)/oldScale, iy=(cy-offsetY)/oldScale;
+          offsetX=cx-ix*newScale;offsetY=cy-iy*newScale;
+        }else{
+          const {cw,ch}=frameMetrics();
+          const centerX=cw/2,centerY=ch/2;
+          const ix=(centerX-offsetX)/oldScale,iy=(centerY-offsetY)/oldScale;
+          offsetX=centerX-ix*newScale;offsetY=centerY-iy*newScale;
+        }
+        scale=newScale;clampOffsets();draw();
+      }
+      zoomRange.oninput=e=>setZoom(parseFloat(e.target.value));
+      stage.addEventListener('pointerdown',e=>{dragging={x:e.clientX,y:e.clientY,ox:offsetX,oy:offsetY};stage.setPointerCapture?.(e.pointerId);});
+      stage.addEventListener('pointermove',e=>{if(!dragging)return;offsetX=dragging.ox+(e.clientX-dragging.x);offsetY=dragging.oy+(e.clientY-dragging.y);clampOffsets();draw();});
+      stage.addEventListener('pointerup',()=>dragging=null);stage.addEventListener('pointercancel',()=>dragging=null);
+      stage.addEventListener('wheel',e=>{e.preventDefault();const r=stage.getBoundingClientRect();setZoom(zoom+(e.deltaY<0?.08:-.08),e.clientX-r.left,e.clientY-r.top);},{passive:false});
 
       const actions=h('div',{style:{display:'flex',justifyContent:'flex-end',gap:'8px',marginTop:'14px'}},[]);
-      const vazgec=h('button',{class:'btn',style:{padding:'8px 14px'},onclick:()=>{URL.revokeObjectURL(url);modal.remove();resolve(null);}},'İptal');
-      const kullan=h('button',{class:'pb btn',style:{padding:'8px 14px'},onclick:()=>{
-        const rect=canvas.getBoundingClientRect();
-        const sx=(frame.offsetLeft/rect.width)*canvas.width;
-        const sy=(frame.offsetTop/rect.height)*canvas.height;
-        const sw=(frame.offsetWidth/rect.width)*canvas.width;
-        const sh=(frame.offsetHeight/rect.height)*canvas.height;
-        const out=document.createElement('canvas');
-        const targetW=1500, targetH=500;
-        out.width=targetW; out.height=targetH;
-        out.getContext('2d').drawImage(img,sx,sy,sw,sh,0,0,targetW,targetH);
-        out.toBlob(blob=>{
-          URL.revokeObjectURL(url); modal.remove();
-          if(blob) resolve(new File([blob],(file.name||'kapak').replace(/\.[^.]+$/,'')+'_kapak.jpg',{type:'image/jpeg'}));
-          else resolve(null);
-        },'image/jpeg',.9);
-      }},'Kırp ve Kullan');
+      const vazgec=h('button',{class:'btn',style:{padding:'9px 15px',background:'rgba(255,255,255,.06)',color:'#d8c8ef',border:'1px solid #6b5b8a'},onclick:()=>{URL.revokeObjectURL(url);modal.remove();resolve(null);}},'İptal');
+      const kullan=h('button',{class:'pb btn',style:{padding:'9px 16px',background:'linear-gradient(135deg,#7c3aed,#a855f7)',color:'#fff',border:'1px solid #c084fc',boxShadow:'0 4px 14px rgba(168,85,247,.25)'},onclick:()=>{
+        const r=stage.getBoundingClientRect();
+        const fw=r.width,fh=r.width/3,fy=(r.height-fh)/2;
+        const srcX=Math.max(0,(-offsetX)/scale);
+        const srcY=Math.max(0,(fy-offsetY)/scale);
+        const srcW=Math.min(img.naturalWidth-srcX,fw/scale);
+        const srcH=Math.min(img.naturalHeight-srcY,fh/scale);
+        const out=document.createElement('canvas');out.width=targetW;out.height=targetH;
+        const octx=out.getContext('2d');
+        octx.drawImage(img,srcX,srcY,srcW,srcH,0,0,targetW,targetH);
+        out.toBlob(blob=>{URL.revokeObjectURL(url);modal.remove();if(blob)resolve(new File([blob],(file.name||'kapak').replace(/\.[^.]+$/,'')+'_kapak.jpg',{type:'image/jpeg'}));else resolve(null);},'image/jpeg',.92);
+      }},'✂️ Kırp ve Kullan');
       actions.appendChild(vazgec);actions.appendChild(kullan);
-      panel.appendChild(title);panel.appendChild(info);panel.appendChild(area);panel.appendChild(actions);modal.appendChild(panel);document.body.appendChild(modal);
-
-      const draw=()=>{
-        const maxW=Math.min(window.innerWidth*.88,640), maxH=400;
-        const scale=Math.min(maxW/img.naturalWidth,maxH/img.naturalHeight,1);
-        const cw=Math.max(1,Math.round(img.naturalWidth*scale)), ch=Math.max(1,Math.round(img.naturalHeight*scale));
-        canvas.width=cw;canvas.height=ch;canvas.style.width=cw+'px';canvas.style.height=ch+'px';
-        area.style.width=cw+'px';area.style.height=ch+'px';area.style.margin='0 auto';
-        ctx.clearRect(0,0,cw,ch);ctx.drawImage(img,0,0,cw,ch);
-        const ratio=3;
-        let fw=cw*.82, fh=fw/ratio;
-        if(fh>ch*.78){fh=ch*.78;fw=fh*ratio;}
-        fw=Math.min(fw,cw);fh=Math.min(fh,ch);
-        frame.style.width=fw+'px';frame.style.height=fh+'px';
-        frame.style.left=((cw-fw)/2)+'px';frame.style.top=((ch-fh)/2)+'px';
-      };
-      draw();
-      let drag=null;
-      frame.addEventListener('pointerdown',e=>{e.preventDefault();frame.setPointerCapture?.(e.pointerId);drag={x:e.clientX,y:e.clientY,left:parseFloat(frame.style.left),top:parseFloat(frame.style.top)};});
-      frame.addEventListener('pointermove',e=>{
-        if(!drag)return;
-        const maxL=canvas.clientWidth-frame.offsetWidth,maxT=canvas.clientHeight-frame.offsetHeight;
-        frame.style.left=Math.max(0,Math.min(maxL,drag.left+e.clientX-drag.x))+'px';
-        frame.style.top=Math.max(0,Math.min(maxT,drag.top+e.clientY-drag.y))+'px';
-      });
-      frame.addEventListener('pointerup',()=>drag=null);frame.addEventListener('pointercancel',()=>drag=null);
+      panel.appendChild(title);panel.appendChild(info);panel.appendChild(stage);panel.appendChild(controls);panel.appendChild(actions);modal.appendChild(panel);document.body.appendChild(modal);
+      scale=0;draw();
       modal.onclick=e=>{if(e.target===modal)vazgec.click();};
-      window.addEventListener('resize',draw,{once:true});
     };
     img.onerror=()=>{URL.revokeObjectURL(url);toastGoster('Kapak resmi açılamadı.');resolve(null);};
     img.src=url;
@@ -2870,9 +2906,13 @@ function profilDuzenleModal(onClose){
     ]),
     h('label',{style:{color:'#a78bfa',fontSize:'.85rem'}},'Görünen ad'),ad,
     h('label',{style:{color:'#a78bfa',fontSize:'.85rem'}},'Kendini tanıt / Özgeçmiş'),bio,
-    h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'10px',marginTop:'8px'}},[
-      h('div',{},[h('button',{class:'btn',style:{width:'100%',padding:'9px'},onclick:()=>avatarInput.click()},'📷 Profil Resmi Seç'),avatarInput,avatarDurum]),
-      h('div',{},[h('button',{class:'btn',style:{width:'100%',padding:'9px'},onclick:()=>coverInput.click()},'🖼️ Kapak Fotoğrafı Seç'),coverInput,coverDurum])
+    h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'12px',marginTop:'10px'}},[
+      h('div',{style:{padding:'10px',borderRadius:'14px',background:'linear-gradient(145deg,rgba(34,197,94,.08),rgba(20,83,45,.16))',border:'1px solid rgba(74,222,128,.28)'}},[
+        h('button',{type:'button',class:'btn',style:{width:'100%',padding:'11px 10px',background:'linear-gradient(135deg,#14532d,#166534)',color:'#ecfdf5',border:'1px solid #4ade80',boxShadow:'0 4px 14px rgba(34,197,94,.14)',fontWeight:'700'},onclick:()=>avatarInput.click()},'📷 Profil Resmi Seç'),avatarInput,avatarDurum
+      ]),
+      h('div',{style:{padding:'10px',borderRadius:'14px',background:'linear-gradient(145deg,rgba(168,85,247,.08),rgba(76,29,149,.16))',border:'1px solid rgba(192,132,252,.28)'}},[
+        h('button',{type:'button',class:'btn',style:{width:'100%',padding:'11px 10px',background:'linear-gradient(135deg,#6d28d9,#9333ea)',color:'#fff',border:'1px solid #c084fc',boxShadow:'0 4px 14px rgba(168,85,247,.16)',fontWeight:'700'},onclick:()=>coverInput.click()},'🖼️ Kapak Fotoğrafı Seç'),coverInput,coverDurum
+      ])
     ]),
     h('p',{style:{color:'#6b5b8a',fontSize:'.7rem',marginTop:'12px',lineHeight:'1.5'}} ,"Profil ve kapak fotoğrafları Cloudinary'ye yüklenir; Firestore'a yalnızca profil bilgileri ve fotoğraf bağlantıları yazılır."),
     h('div',{style:{display:'flex',justifyContent:'flex-end',marginTop:'14px'}},[kaydet])
@@ -4321,9 +4361,9 @@ function Profile(){
   const fg=(S.follows[tid]||[]).length;
   const card=h('div',{class:'card fade',style:{textAlign:'center',overflow:'hidden',padding:'0 0 18px'}});
   if(user.coverUrl){
-    card.appendChild(h('div',{style:{height:'180px',backgroundImage:`url(\"${user.coverUrl}\")`,backgroundSize:'cover',backgroundPosition:'center',position:'relative'}}));
+    card.appendChild(h('div',{style:{width:'100%',aspectRatio:'3 / 1',backgroundImage:`url(\"${user.coverUrl}\")`,backgroundSize:'100% 100%',backgroundPosition:'center',backgroundRepeat:'no-repeat',position:'relative'}}));
   }else{
-    card.appendChild(h('div',{style:{height:'110px',background:'linear-gradient(135deg,#241040,#3b0d6e)'}}));
+    card.appendChild(h('div',{style:{width:'100%',aspectRatio:'3 / 1',background:'linear-gradient(135deg,#241040,#3b0d6e)'}}));
   }
   const profilIc=h('div',{style:{padding:'0 18px'}});
   const avatarWrap=h('div',{style:{display:'flex',justifyContent:'center',marginTop:'-42px',marginBottom:'10px',position:'relative',zIndex:'2'}},[av(user,84)]);
