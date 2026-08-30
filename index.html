@@ -2931,6 +2931,19 @@ async function geminiGorselDene(title, text, signal){
 // Firestore'a sığacak bir JPEG data URL'sine çevirir. Firebase Storage
 // KULLANILMAZ — üretilen görsel doğrudan Firestore alanına (post.image) yazılır,
 // bu yüzden hiçbir sağlayıcı Storage kotasını doldurmaz.
+//
+// DÜZELTME: Firestore'un TEK DOKÜMAN sınırı ~1.048.576 byte'tır ve bu sınıra
+// şiirin metni, yorumlar, botYorumlar, aiYorum gibi DİĞER alanlar da dahildir.
+// Önceki sürüm görseli ~1.000.000 karaktere kadar (neredeyse doküman sınırının
+// TAMAMI) sıkıştırıyordu — bu da gerçek (uzun/dolu) paylaşımlarda
+// db.collection('posts')...update() çağrısının "document exceeds maximum size"
+// benzeri bir hatayla BAŞARISIZ olmasına yol açıyordu. Bu hata, adminYapayZeka-
+// GorseliYenile'deki try/catch tarafından "sağlayıcı başarısız oldu" sanılıp
+// bir sonraki sağlayıcıya geçiliyordu — halbuki görsel ÜRETİMİ başarılıydı,
+// sorun sadece KAYDETME adımındaydı. Bu yüzden panelin "Test Et" butonları
+// (Firestore'a hiç yazmadığı için) başarılı görünürken, gerçek buton hep
+// GIPHY'ye düşüyordu. Artık görsel diğer alanlara yer bırakacak şekilde çok
+// daha küçük (~450 KB) tutuluyor.
 function blobToCompressedDataUrl(blob){
   return new Promise((resolve,reject)=>{
     const reader=new FileReader();
@@ -2949,16 +2962,24 @@ function blobToCompressedDataUrl(blob){
         const ctx=canvas.getContext('2d');
         if(!ctx){reject(new Error('Görsel dönüştürücü başlatılamadı.'));return;}
         ctx.drawImage(img,0,0,w,h);
-        let data=canvas.toDataURL('image/jpeg',0.78);
-        if(data.length>850000)data=canvas.toDataURL('image/jpeg',0.62);
-        if(data.length>950000){
+        const HEDEF_MAKS=450000; // ~450 KB — diğer post alanlarına bolca yer bırakır
+        let data=canvas.toDataURL('image/jpeg',0.72);
+        if(data.length>HEDEF_MAKS)data=canvas.toDataURL('image/jpeg',0.5);
+        if(data.length>HEDEF_MAKS){
           const small=document.createElement('canvas');
-          small.width=Math.round(w*0.75);small.height=Math.round(h*0.75);
+          small.width=Math.round(w*0.7);small.height=Math.round(h*0.7);
           const sctx=small.getContext('2d');
           sctx.drawImage(canvas,0,0,small.width,small.height);
-          data=small.toDataURL('image/jpeg',0.58);
+          data=small.toDataURL('image/jpeg',0.5);
         }
-        if(data.length>1000000){reject(new Error('Görsel Firestore sınırına sığmayacak kadar büyük.'));return;}
+        if(data.length>HEDEF_MAKS){
+          const tiny=document.createElement('canvas');
+          tiny.width=Math.round(w*0.5);tiny.height=Math.round(h*0.5);
+          const tctx=tiny.getContext('2d');
+          tctx.drawImage(canvas,0,0,tiny.width,tiny.height);
+          data=tiny.toDataURL('image/jpeg',0.45);
+        }
+        if(data.length>600000){reject(new Error(`Görsel yeterince küçültülemedi (${Math.round(data.length/1024)} KB) — Firestore doküman sınırına takılabilir.`));return;}
         resolve(data);
       };
       img.onerror=()=>reject(new Error('Görsel okunamadı.'));
@@ -2992,10 +3013,32 @@ async function adminYapayZekaGorseliYenile(post){
     if(status) status.textContent=s.mesaj;
     const controller=new AbortController();
     const zamanlayici=setTimeout(()=>controller.abort(), s.sure);
+    let blob, provider, model;
     try{
-      const {blob, provider, model}=await s.fn(post.title||'', post.text||'', controller.signal);
+      ({blob, provider, model}=await s.fn(post.title||'', post.text||'', controller.signal));
       clearTimeout(zamanlayici);
+    }catch(err){
+      clearTimeout(zamanlayici);
+      const mesaj = err?.name==='AbortError'
+        ? `${s.ad} isteği ${Math.round(s.sure/1000)} saniyede tamamlanmadı.`
+        : (err?.message || `${s.ad} başarısız oldu.`);
+      console.warn(`${s.ad} başarısız:`, mesaj);
+      hatalar.push(`${s.ad}: ${mesaj}`);
+      continue; // sıradaki sağlayıcıyı dene
+    }
 
+    // DÜZELTME: Görsel ÜRETİMİ (yukarıdaki s.fn çağrısı) başarılı oldu — buradan
+    // sonraki adım (sıkıştırma + Firestore'a yazma) artık sağlayıcıya özgü
+    // DEĞİL. Önceden bu adım da AYNI try/catch içindeydi ve hata alınca "bu
+    // sağlayıcı başarısız oldu" sanılıp bir sonraki sağlayıcı deneniyordu —
+    // oysa görsel gerçekten üretilmişti, sorun sadece kaydetmedeydi (örn.
+    // Firestore'un ~1MB doküman sınırı, şiirin mevcut yorum/puan verileriyle
+    // birleşince aşılıyordu). Bu yüzden panelin "Test Et" butonları (Firestore'a
+    // hiç yazmadıkları için) başarılı görünürken gerçek buton hep GIPHY'ye
+    // düşüyordu. Artık kaydetme hatası bir sonraki sağlayıcıyı denetmeden
+    // DOĞRUDAN ve NET şekilde kullanıcıya gösteriliyor (yeniden denemek bir işe
+    // yaramaz, aynı kaydetme sorunuyla tekrar karşılaşılır).
+    try{
       if(status) status.textContent='💾 AI görseli kaydediliyor...';
       const aiImageDataUrl=await blobToCompressedDataUrl(blob);
 
@@ -3014,13 +3057,8 @@ async function adminYapayZekaGorseliYenile(post){
       refreshCard(post.id);
 
       return { type:'ai', provider, model };
-    }catch(err){
-      clearTimeout(zamanlayici);
-      const mesaj = err?.name==='AbortError'
-        ? `${s.ad} isteği ${Math.round(s.sure/1000)} saniyede tamamlanmadı.`
-        : (err?.message || `${s.ad} başarısız oldu.`);
-      console.warn(`${s.ad} başarısız:`, mesaj);
-      hatalar.push(`${s.ad}: ${mesaj}`);
+    }catch(kaydetmeErr){
+      throw new Error(`${s.ad} ile görsel BAŞARIYLA üretildi ama kaydedilemedi: ${kaydetmeErr?.message||kaydetmeErr}`);
     }
   }
 
@@ -3301,7 +3339,11 @@ function postCard(post, forceExpand=false, autoOpenComments=false, hedefYorumId=
         const sonuc=await adminYapayZekaGorseliYenile(post);
         const saglayiciAdlari={cloudflare:'Cloudflare FLUX',pollinations:'Pollinations',huggingface:'Hugging Face (FLUX)',gemini:'Google Gemini (Nano Banana)'};
         if(sonuc?.type==='giphy'){
-          revalStatus.textContent='🔄 Tüm AI sağlayıcıları kullanılamadı; farklı bir GIPHY getirildi.';
+          // DÜZELTME: Önceden sonuc.fallbackReason (4 sağlayıcının GERÇEK hata
+          // mesajları) hiç gösterilmiyordu, kullanıcı "neden GIPHY'ye düştü"
+          // hiçbir zaman göremiyordu. Artık kısaltılmış olarak gösteriliyor.
+          const kisaSebep = (sonuc.fallbackReason||'').slice(0,400);
+          revalStatus.textContent='🔄 Tüm AI sağlayıcıları kullanılamadı; farklı bir GIPHY getirildi.'+(kisaSebep?(' — '+kisaSebep):'');
           revalStatus.style.color='#fbbf24';
         }else{
           revalStatus.textContent=`✅ ${saglayiciAdlari[sonuc?.provider]||'AI'} ile yeni görsel oluşturuldu.`;
