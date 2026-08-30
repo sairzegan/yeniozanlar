@@ -7,9 +7,7 @@
         {
           "type": "header",
           "key": "user-agent",
-          "value": {
-            "re": "[Ff]acebookexternalhit|[Ff]acebot|[Ww]hatsapp|[Tt]witterbot|[Ll]inkedInBot|[Tt]elegramBot|[Dd]iscordbot|[Ss]lackbot|[Ss]kypeUriPreview|[Pp]interest|[Gg]ooglebot"
-          }
+          "value": "(facebookexternalhit|Facebot|WhatsApp|Twitterbot|LinkedInBot|TelegramBot|Discordbot|Slackbot|SkypeUriPreview|Pinterest|Googlebot|Google-InspectionTool)"
         }
       ],
       "destination": "/api/postPreview?slug=:slug"

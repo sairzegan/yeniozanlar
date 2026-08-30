@@ -3,18 +3,14 @@ import { getFirestore } from "firebase-admin/firestore";
 
 const PROJECT_ID = "yeniozanlar-68b49";
 const APP_URL = "https://yeniozanlar.vercel.app";
-const DEFAULT_IMAGE = `${APP_URL}/og-image.png`;
 
 function firebaseAdmin() {
   if (getApps().length) return getApps()[0];
   const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
   if (!raw) throw new Error("FIREBASE_SERVICE_ACCOUNT_JSON Vercel ortam değişkeninde yok.");
   let serviceAccount;
-  try {
-    serviceAccount = JSON.parse(raw);
-  } catch {
-    throw new Error("FIREBASE_SERVICE_ACCOUNT_JSON geçerli JSON değil.");
-  }
+  try { serviceAccount = JSON.parse(raw); }
+  catch { throw new Error("FIREBASE_SERVICE_ACCOUNT_JSON geçerli JSON değil."); }
   return initializeApp({ credential: cert(serviceAccount), projectId: PROJECT_ID });
 }
 
@@ -42,40 +38,56 @@ function getPostId(slug) {
 
 function excerpt(text) {
   const clean = String(text || "").replace(/\s+/g, " ").trim();
-  if (!clean) return "Yeni Ozanlar'da bir şiir.";
-  if (clean.length <= 280) return clean;
-  return clean.slice(0, 277).replace(/\s+\S*$/, "") + "…";
+  if (!clean) return "Şiirlerini paylaş, oku, puanla.";
+  if (clean.length <= 300) return clean;
+  return clean.slice(0, 297).replace(/\s+\S*$/, "") + "…";
 }
 
-function imageInfo(post, postId) {
+function getImageInfo(post, postId) {
   const raw = String(post?.image || "").trim();
   if (!raw) return null;
 
   if (/^https?:\/\//i.test(raw)) {
-    const clean = raw.split("#")[0];
-    const pathname = (() => { try { return new URL(clean).pathname.toLowerCase(); } catch { return ""; } })();
     let type = "image/jpeg";
-    if (pathname.endsWith(".png")) type = "image/png";
-    else if (pathname.endsWith(".webp")) type = "image/webp";
-    else if (pathname.endsWith(".gif")) type = "image/gif";
-    else if (pathname.endsWith(".avif")) type = "image/avif";
-    return { url: clean, type };
+    try {
+      const pathname = new URL(raw).pathname.toLowerCase();
+      if (pathname.endsWith(".png")) type = "image/png";
+      else if (pathname.endsWith(".webp")) type = "image/webp";
+      else if (pathname.endsWith(".gif")) type = "image/gif";
+      else if (pathname.endsWith(".avif")) type = "image/avif";
+    } catch {}
+    return { url: raw, type };
   }
 
-  if (/^data:image\//i.test(raw)) {
-    const m = raw.match(/^data:(image\/[A-Za-z0-9.+-]+);base64,/i);
-    return {
-      url: `${APP_URL}/api/postImage?id=${encodeURIComponent(postId)}`,
-      type: (m?.[1] || "image/jpeg").toLowerCase()
-    };
-  }
+  const match = raw.match(/^data:(image\/[A-Za-z0-9.+-]+);base64,[A-Za-z0-9+/=\s]+$/i);
+  if (!match) return null;
 
-  return null;
+  return {
+    url: `${APP_URL}/api/postImage?id=${encodeURIComponent(postId)}`,
+    type: match[1].toLowerCase()
+  };
+}
+
+function getYouTubeId(url) {
+  const match = String(url || "").match(
+    /(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|shorts\/|live\/))([A-Za-z0-9_-]{11})/
+  );
+  return match ? match[1] : null;
 }
 
 function previewHtml(data) {
-  const image = data.image || DEFAULT_IMAGE;
-  const imageType = data.imageType || "image/png";
+  const imageTags = data.image ? `
+<meta property="og:image" content="${esc(data.image)}">
+<meta property="og:image:url" content="${esc(data.image)}">
+<meta property="og:image:secure_url" content="${esc(data.image)}">
+<meta property="og:image:type" content="${esc(data.imageType || "image/jpeg")}">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="${esc(data.title)}">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="${esc(data.image)}">
+<meta name="twitter:image:alt" content="${esc(data.title)}">` : `
+<meta name="twitter:card" content="summary">`;
 
   return `<!doctype html>
 <html lang="tr">
@@ -90,88 +102,86 @@ function previewHtml(data) {
 <meta property="og:url" content="${esc(data.canonical)}">
 <meta property="og:title" content="${esc(data.title)}">
 <meta property="og:description" content="${esc(data.description)}">
-<meta property="og:image" content="${esc(image)}">
-<meta property="og:image:url" content="${esc(image)}">
-<meta property="og:image:secure_url" content="${esc(image)}">
-<meta property="og:image:type" content="${esc(imageType)}">
-<meta property="og:image:alt" content="${esc(data.title)}">
-<meta name="twitter:card" content="summary_large_image">
+${imageTags}
 <meta name="twitter:title" content="${esc(data.title)}">
 <meta name="twitter:description" content="${esc(data.description)}">
-<meta name="twitter:image" content="${esc(image)}">
-<meta name="twitter:image:alt" content="${esc(data.title)}">
 </head>
 <body>
+<main>
 <h1>${esc(data.title)}</h1>
 <p>${esc(data.description)}</p>
-<img src="${esc(image)}" alt="${esc(data.title)}">
+${data.image ? `<img src="${esc(data.image)}" alt="${esc(data.title)}">` : ""}
+<p><a href="${esc(data.canonical)}">Şiiri Yeni Ozanlar'da görüntüle</a></p>
+</main>
 </body>
 </html>`;
 }
 
-export default async function handler(req, res) {
-  const slug = String(req.query?.slug || "").trim();
-  const postId = getPostId(slug);
-  const canonicalSlug = slug.split("?")[0];
-  const canonical = `${APP_URL}/post/${encodeURIComponent(canonicalSlug)}`;
+async function getPost(postId) {
+  const timeout = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error("Firestore timeout")), 7000)
+  );
+  const read = db().collection("posts").doc(postId).get();
+  return Promise.race([read, timeout]);
+}
 
-  // This function is intended for social crawlers only. Normal visitors are
-  // sent to the SPA by vercel.json and never execute this Firebase query.
+export default async function handler(req, res) {
+  const rawSlug = String(req.query?.slug || "").trim();
+  const slug = rawSlug.split("?")[0];
+  const postId = getPostId(slug);
+  const canonical = `${APP_URL}/post/${encodeURIComponent(slug)}`;
+
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Cache-Control", "no-store, max-age=0");
+
   if (!postId) {
-    res.setHeader("Content-Type", "text/html; charset=utf-8");
-    res.setHeader("Cache-Control", "public, s-maxage=3600, stale-while-revalidate=86400");
     return res.status(200).send(previewHtml({
       title: "Yeni Ozanlar 🪶",
       description: "Şiirlerini paylaş, oku, puanla.",
-      image: DEFAULT_IMAGE,
-      imageType: "image/png",
+      image: null,
+      imageType: null,
       canonical
     }));
   }
 
   try {
-    const snapshot = await db().collection("posts").doc(postId).get();
-
+    const snapshot = await getPost(postId);
     if (!snapshot.exists) {
-      res.setHeader("Content-Type", "text/html; charset=utf-8");
-      res.setHeader("Cache-Control", "public, s-maxage=300, stale-while-revalidate=3600");
       return res.status(200).send(previewHtml({
         title: "Yeni Ozanlar 🪶",
         description: "Şiirlerini paylaş, oku, puanla.",
-        image: DEFAULT_IMAGE,
-        imageType: "image/png",
+        image: null,
+        imageType: null,
         canonical
       }));
     }
 
     const post = snapshot.data() || {};
-    const title = String(post.title || "Yeni Ozanlar").trim();
-    const description = excerpt(post.text);
-    const info = imageInfo(post, postId);
+    let image = getImageInfo(post, postId);
 
-    const data = {
-      title,
-      description,
-      image: info?.url || DEFAULT_IMAGE,
-      imageType: info?.type || "image/png",
+    if (!image && post.youtube) {
+      const yt = getYouTubeId(post.youtube);
+      if (yt) image = {
+        url: `https://img.youtube.com/vi/${yt}/hqdefault.jpg`,
+        type: "image/jpeg"
+      };
+    }
+
+    return res.status(200).send(previewHtml({
+      title: String(post.title || "Yeni Ozanlar 🪶").trim(),
+      description: excerpt(post.text),
+      image: image?.url || null,
+      imageType: image?.type || null,
       canonical
-    };
-
-    res.setHeader("Content-Type", "text/html; charset=utf-8");
-    res.setHeader("Cache-Control", "public, s-maxage=86400, stale-while-revalidate=604800");
-    res.setHeader("Vercel-CDN-Cache-Control", "public, max-age=86400, stale-while-revalidate=604800");
-    res.setHeader("X-Content-Type-Options", "nosniff");
-    return res.status(200).send(previewHtml(data));
+    }));
   } catch (error) {
     console.error("postPreview.js HATASI:", error);
-    // Never turn a social preview request into a 500/redirect loop.
-    res.setHeader("Content-Type", "text/html; charset=utf-8");
-    res.setHeader("Cache-Control", "public, s-maxage=60, stale-while-revalidate=300");
     return res.status(200).send(previewHtml({
       title: "Yeni Ozanlar 🪶",
       description: "Şiirlerini paylaş, oku, puanla.",
-      image: DEFAULT_IMAGE,
-      imageType: "image/png",
+      image: null,
+      imageType: null,
       canonical
     }));
   }

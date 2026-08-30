@@ -18,20 +18,27 @@ function db() {
   return getFirestore();
 }
 
+async function getPost(id) {
+  const timeout = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error("Firestore timeout")), 7000)
+  );
+  const read = db().collection("posts").doc(id).get();
+  return Promise.race([read, timeout]);
+}
+
 export default async function handler(req, res) {
   try {
     const id = String(req.query?.id || "").trim();
     if (!/^[A-Za-z0-9]{7}$/.test(id)) return res.status(400).send("Geçersiz şiir ID.");
 
-    const snapshot = await db().collection("posts").doc(id).get();
+    const snapshot = await getPost(id);
     if (!snapshot.exists) return res.status(404).send("Şiir bulunamadı.");
 
     const raw = String(snapshot.data()?.image || "").trim();
     if (!raw) return res.status(404).send("Şiirin görseli bulunamadı.");
 
-    // External CDN image: keep it as a real HTTP image. The preview code uses
-    // this URL directly, so this branch is only a compatibility fallback.
     if (/^https?:\/\//i.test(raw)) {
+      res.setHeader("Cache-Control", "public, max-age=300, s-maxage=300");
       return res.redirect(302, raw);
     }
 
