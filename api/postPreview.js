@@ -1,23 +1,22 @@
-export default async function handler(req, res) {
+export default function handler(req, res) {
   try {
     const userAgent = req.headers['user-agent'] || '';
     const isBot = /facebookexternalhit|Twitterbot|LinkedInBot|WhatsApp|TelegramBot|Applebot|Discordbot|SkypeUriPreview/i.test(userAgent);
 
-    // URL'den slug/id değerini güvenli şekilde alalım
-    const pathParts = req.url.split('?')[0].split('/');
-    const slugWithId = pathParts[pathParts.length - 1];
+    // URL'den slug değerini ve query parametrelerini güvenle ayıkla
+    const fullUrl = req.url || '';
+    const pathWithoutQuery = fullUrl.split('?')[0];
+    const pathParts = pathWithoutQuery.split('/');
+    const slug = pathParts[pathParts.length - 1] || 'siir';
 
-    // Şiir verisi (Veritabanı bağlantısı serverless ortamda hata verse bile sayfa çökmesin diye try-catch içinde)
-    let title = "Yeni Ozanlar";
-    let description = "Yeni Ozanlar'da paylaşılan bu güzel şiiri okuyun.";
-    let imageUrl = "";
-
-    // Eğer slug varsa başlığa yansıtabiliriz
-    if (slugWithId && slugWithId !== 'post') {
-      title = `Şiir: ${slugWithId.replace(/-/g, ' ')}`;
-    }
-
-    const currentFullUrl = `https://${req.headers.host}${req.url}`;
+    // Şiir başlığı ve metin düzenlemesi
+    const cleanTitle = decodeURIComponent(slug).replace(/[-_]/g, ' ');
+    const title = `Şiir: ${cleanTitle}`;
+    const description = "Yeni Ozanlar'da paylaşılan bu eşsiz şiiri okumak için tıklayın.";
+    
+    // Varsayılan sabit bir Open Graph görseli (projenizde public klasöründe og-image.jpg olmalı veya doğrudan site logonuzun linkini yazabilirsiniz)
+    const imageUrl = `https://${req.headers.host}/og-image.jpg`;
+    const currentFullUrl = `https://${req.headers.host}${fullUrl}`;
 
     if (isBot) {
       const html = `<!DOCTYPE html>
@@ -30,11 +29,13 @@ export default async function handler(req, res) {
             <meta property="og:description" content="${description}" />
             <meta property="og:url" content="${currentFullUrl}" />
             <meta property="og:type" content="article" />
-            ${imageUrl ? `<meta property="og:image" content="${imageUrl}" />` : ''}
-            <meta name="twitter:card" content="${imageUrl ? 'summary_large_image' : 'summary'}" />
+            <meta property="og:image" content="${imageUrl}" />
+            <meta property="og:image:width" content="1200" />
+            <meta property="og:image:height" content="630" />
+            <meta name="twitter:card" content="summary_large_image" />
             <meta name="twitter:title" content="${title}" />
             <meta name="twitter:description" content="${description}" />
-            ${imageUrl ? `<meta name="twitter:image" content="${imageUrl}" />` : ''}
+            <meta name="twitter:image" content="${imageUrl}" />
         </head>
         <body>
             <h1>${title}</h1>
@@ -45,7 +46,7 @@ export default async function handler(req, res) {
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
       return res.status(200).send(html);
     } else {
-      // Normal kullanıcılar için yönlendirme
+      // Normal kullanıcılar tarayıcıdan tıkladığında direkt siteye yönlendirilir
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
       return res.status(200).send(`<!DOCTYPE html>
         <html>
@@ -57,9 +58,8 @@ export default async function handler(req, res) {
           </body>
         </html>`);
     }
-  } catch (err) {
-    // Sunucu patlasa bile Facebook'a her zaman 200 dön ki 500 hatası alınmasın
+  } catch (error) {
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    return res.status(200).send(`<!DOCTYPE html><html><head><title>Yeni Ozanlar</title><meta property="og:title" content="Yeni Ozanlar"><meta property="og:description" content="Yeni Ozanlar şiir platformu."></head><body><h1>Yeni Ozanlar</h1></body></html>`);
+    return res.status(200).send(`<!DOCTYPE html><html><head><title>Yeni Ozanlar</title></head><body><h1>Yeni Ozanlar</h1></body></html>`);
   }
 }
