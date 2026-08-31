@@ -60,13 +60,24 @@ export default async function handler(req, res) {
   const slug = pathParts[pathParts.length - 1] || "siir";
   const canonical = `https://${host}${pathWithoutQuery}`;
 
-  // Gerçek ziyaretçi (bot değil) ise: HİÇBİR ek ağ isteği yapmadan anında
-  // ana sayfaya yönlendir. Önceki sürümde burada kendi kendine fetch
-  // yapılıyordu, bu da zaman aşımına (Facebook "Curl Molası" hatası) yol
-  // açıyordu. Redirect anlık olduğu için bu risk tamamen ortadan kalkar.
   if (!isBot(req.headers["user-agent"])) {
-    res.writeHead(302, { Location: `https://${host}/` });
-    return res.end();
+    // Gerçek ziyaretçi: asıl uygulamayı (SPA) aynı adreste sun ki tarayıcı
+    // /post/:slug URL'sinde kalsın ve React router doğru şiiri açsın.
+    // index.html statik bir dosya olduğu için (Firestore'a gitmiyor) bu
+    // istek her zaman hızlıdır; yine de güvenlik için 4 saniyelik bir
+    // zaman sınırı var. Süre aşılırsa veya istek başarısız olursa ana
+    // sayfaya yönlendirilir (sonsuz beklemek yerine).
+    try {
+      const r = await fetch(`https://${host}/index.html`, { signal: AbortSignal.timeout(4000) });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const body = await r.text();
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      return res.status(200).send(body);
+    } catch (e) {
+      console.error("postPreview: index.html getirilemedi:", e);
+      res.writeHead(302, { Location: `https://${host}/` });
+      return res.end();
+    }
   }
 
 
