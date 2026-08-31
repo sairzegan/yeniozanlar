@@ -47,6 +47,11 @@ function excerpt(t) {
   return s.length <= 280 ? s : s.slice(0, 277).replace(/\s+\S*$/g, "") + "…";
 }
 
+
+function isBot(ua) {
+  return /(facebookexternalhit|meta-externalagent|meta-externalfetcher|twitterbot|linkedinbot|whatsapp|telegrambot|discordbot|slackbot|skypeuripreview|pinterest|applebot|google-inspectiontool|bingbot)/i.test(String(ua || ""));
+}
+
 export default async function handler(req, res) {
   const host = req.headers.host;
   const fullUrl = req.url || "";
@@ -54,6 +59,20 @@ export default async function handler(req, res) {
   const pathParts = pathWithoutQuery.split("/");
   const slug = pathParts[pathParts.length - 1] || "siir";
   const canonical = `https://${host}${pathWithoutQuery}`;
+
+  // Gerçek ziyaretçi (bot değil) ise asıl uygulamayı (SPA) alsın.
+  if (!isBot(req.headers["user-agent"])) {
+    try {
+      const r = await fetch(`https://${host}/`, { signal: AbortSignal.timeout(8000) });
+      const body = await r.text();
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      return res.status(200).send(body);
+    } catch (e) {
+      res.writeHead(302, { Location: `https://${host}/` });
+      return res.end();
+    }
+  }
+
 
   let title = `Şiir: ${decodeURIComponent(slug).replace(/[-_]/g, " ")}`;
   let description = "Yeni Ozanlar'da paylaşılan bu eşsiz şiiri okumak için tıklayın.";
