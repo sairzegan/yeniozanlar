@@ -1,6 +1,19 @@
 {
   "rewrites": [
-    { "source": "/post/:slug", "destination": "/api/postPreview" },
-    { "source": "/(.*)", "destination": "/index.html" }
+    {
+      "source": "/post/:slug",
+      "has": [
+        {
+          "type": "header",
+          "key": "user-agent",
+          "value": "(facebookexternalhit|Twitterbot|LinkedInBot|WhatsApp|TelegramBot|Applebot|Discordbot|SkypeUriPreview|Instagram)"
+        }
+      ],
+      "destination": "/api/postPreview"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
   ]
 }
