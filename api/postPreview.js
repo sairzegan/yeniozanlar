@@ -47,6 +47,11 @@ function excerpt(t) {
   return s.length <= 280 ? s : s.slice(0, 277).replace(/\s+\S*$/g, "") + "…";
 }
 
+
+function isBot(ua) {
+  return /(facebookexternalhit|meta-externalagent|meta-externalfetcher|twitterbot|linkedinbot|whatsapp|telegrambot|discordbot|slackbot|skypeuripreview|pinterest|applebot|google-inspectiontool|bingbot)/i.test(String(ua || ""));
+}
+
 export default async function handler(req, res) {
   const host = req.headers.host;
   const fullUrl = req.url || "";
@@ -55,6 +60,16 @@ export default async function handler(req, res) {
   const slug = pathParts[pathParts.length - 1] || "siir";
   const canonical = `https://${host}${pathWithoutQuery}`;
 
+  // Gerçek ziyaretçi (bot değil) ise: HİÇBİR ek ağ isteği yapmadan anında
+  // ana sayfaya yönlendir. Önceki sürümde burada kendi kendine fetch
+  // yapılıyordu, bu da zaman aşımına (Facebook "Curl Molası" hatası) yol
+  // açıyordu. Redirect anlık olduğu için bu risk tamamen ortadan kalkar.
+  if (!isBot(req.headers["user-agent"])) {
+    res.writeHead(302, { Location: `https://${host}/` });
+    return res.end();
+  }
+
+
   let title = `Şiir: ${decodeURIComponent(slug).replace(/[-_]/g, " ")}`;
   let description = "Yeni Ozanlar'da paylaşılan bu eşsiz şiiri okumak için tıklayın.";
   let imageUrl = null;
@@ -62,7 +77,16 @@ export default async function handler(req, res) {
   try {
     const id = getPostId(slug);
     if (id) {
-      const snap = await getDb().collection("posts").doc(id).get();
+      // Firestore isteğine sabit bir zaman sınırı: soğuk başlangıç veya ağ
+      // gecikmesi yüzünden istek uzun sürerse fonksiyon sonsuza kadar
+      // beklemez, süre dolunca hemen (görselsiz) geçerli bir OG cevabına
+      // düşer. Facebook'un "Curl Molası" (zaman aşımı) hatasının tekrar
+      // yaşanmaması için bu sınır kritik.
+      const timeout = (ms) => new Promise((_, rej) => setTimeout(() => rej(new Error("Firestore zaman aşımı")), ms));
+      const snap = await Promise.race([
+        getDb().collection("posts").doc(id).get(),
+        timeout(6000),
+      ]);
       if (snap.exists) {
         const post = snap.data() || {};
         if (post.title) title = String(post.title).trim();
@@ -73,7 +97,8 @@ export default async function handler(req, res) {
     }
   } catch (e) {
     console.error("postPreview: Firestore HATASI:", e);
-    // Veri çekilemezse jenerik başlık/açıklama ile devam edilir, sayfa yine 200 döner.
+    // Veri çekilemezse veya zaman aşımına uğrarsa jenerik başlık/açıklama
+    // ile devam edilir; sayfa YİNE DE hemen ve 200 ile döner.
   }
 
   const html = `<!DOCTYPE html>
