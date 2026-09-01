@@ -1,5 +1,6 @@
 import { cert, getApps, initializeApp } from "firebase-admin/app";
 import { getStorage } from "firebase-admin/storage";
+import { randomUUID } from "crypto";
 
 const PROJECT_ID = "yeniozanlar-68b49";
 // Firebase projeniz için doğru bucket adını Firebase Console -> Storage
@@ -106,10 +107,19 @@ export default async function handler(req, res) {
     const bucket = getBucket();
     const filePath = `audio/${cleanPostId}.mp3`;
     const file = bucket.file(filePath);
-    await file.save(audioBuffer, { metadata: { contentType: "audio/mpeg", cacheControl: "public, max-age=31536000" } });
-    await file.makePublic();
+    const downloadToken = randomUUID();
+    // makePublic() yerine Firebase'in kendi indirme-token yöntemi kullanılıyor:
+    // bucket'ın "Uniform Bucket-Level Access" ayarından TAMAMEN bağımsız
+    // çalışır (o ayar açıksa makePublic() sessizce başarısız oluyordu).
+    await file.save(audioBuffer, {
+      metadata: {
+        contentType: "audio/mpeg",
+        cacheControl: "public, max-age=31536000",
+        metadata: { firebaseStorageDownloadTokens: downloadToken },
+      },
+    });
 
-    const audioUrl = `https://storage.googleapis.com/${bucket.name}/${filePath}`;
+    const audioUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(filePath)}?alt=media&token=${downloadToken}`;
     return res.status(200).json({ audioUrl, voiceKey: secilenAnahtar });
   } catch (e) {
     console.error("ttsGenerate HATASI:", e);
