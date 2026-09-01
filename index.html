@@ -2279,6 +2279,34 @@ function otomatikSesUygulaGerekirse(postId, title, text){
   });
 }
 
+// Admin panelinden, ESKİ paylaşımlar dahil, sesi manuel olarak (yeniden)
+// oluşturmak için kullanılır. otomatikSesUygulaGerekirse ile AYNI akışı
+// izler, ama sonucu bekleyip (await edilebilir) hata fırlatır — böylece
+// "Yapay Zeka ile Sesi Yeniden Oluştur" butonu kullanıcıya anlık durum ve
+// hata mesajı gösterebilir (sessizce yutmaz).
+async function adminSesiYenile(post){
+  const yon = await aiSesYonlendirmesiGroqlaOlustur(post.title, post.text);
+  const res = await fetch('/api/ttsGenerate', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ title: post.title, text: post.text, postId: post.id, ...yon })
+  });
+  if(!res.ok){
+    let detay='';
+    try{ const j=await res.json(); detay=j?.error||j?.detail||''; }catch{}
+    throw new Error(detay || ('HTTP '+res.status));
+  }
+  const data = await res.json();
+  if(!data?.audioUrl) throw new Error('Ses linki dönmedi.');
+  const idx = S.posts.findIndex(p=>p.id===post.id);
+  if(idx>-1){
+    S.posts[idx].audioUrl = data.audioUrl;
+    save();
+    await db.collection("posts").doc(post.id).update({ audioUrl: data.audioUrl });
+  }
+  return data;
+}
+
 // Şiirin duygusuna göre uygun bir ElevenLabs sesi + okuma tonu seçtirir.
 // Görsel oluşturmadaki aiGorselPromptuGroqlaOlustur ile AYNI mantık: Groq'a
 // sadece SEÇİM yaptırıyoruz (sabit bir ses listesinden), gerçek ses üretimi
@@ -3767,7 +3795,29 @@ function postCard(post, forceExpand=false, autoOpenComments=false, hedefYorumId=
       }catch(err){ revalStatus.textContent='❌ Görsel/GIPHY hatası: '+err.message; revalStatus.style.color='#f87171'; }
       aiImageBtn.disabled=false; aiImageBtn.textContent='🎨 Yapay Zeka ile Yeniden Resim Oluştur';
     };
-    const actionRow=h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'6px'}},[revalBtn2,aiImageBtn]);
+    // Eski paylaşımlarda (ses üretimi eklenmeden önce paylaşılmış ya da
+    // önceki denemede hata almış şiirlerde) sesi admin'in manuel olarak
+    // (yeniden) oluşturabilmesi için buton. otomatikSesUygulaGerekirse
+    // paylaşım ANINDA arka planda çalışır; bu buton her zaman, istenildiği
+    // kadar tekrar tetiklenebilir.
+    const aiAudioBtn=h('button',{class:'btn',style:{width:'100%',marginTop:'6px',background:'linear-gradient(135deg,#1a1030,#2a1750)',color:'#c4b5fd',border:'1px solid #6d28d9',fontSize:'.8rem',padding:'8px'}},post.audioUrl?'🎙️ Sesi Yeniden Oluştur':'🎙️ Yapay Zeka ile Ses Oluştur');
+    aiAudioBtn.onclick=async(e)=>{
+      e.stopPropagation();
+      aiAudioBtn.disabled=true; aiAudioBtn.textContent='⏳ Ses hazırlanıyor...';
+      revalStatus.style.display='block'; revalStatus.style.color='#6b5b8a'; revalStatus.textContent='🎙️ Şiirin tonuna uygun ses seçiliyor, seslendiriliyor...';
+      try{
+        await adminSesiYenile(post);
+        refreshCard(post.id);
+        const newCard=document.querySelector('[data-pid="'+post.id+'"]');
+        const newStatus=newCard?newCard.querySelector('.reval-status'):null;
+        if(newStatus){newStatus.style.display='block';newStatus.textContent='✅ Ses oluşturuldu!';newStatus.style.color='#34d399';}
+      }catch(err){
+        revalStatus.textContent='❌ Ses hatası: '+err.message;
+        revalStatus.style.color='#f87171';
+      }
+      aiAudioBtn.disabled=false; aiAudioBtn.textContent=post.audioUrl?'🎙️ Sesi Yeniden Oluştur':'🎙️ Yapay Zeka ile Ses Oluştur';
+    };
+    const actionRow=h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:'6px'}},[revalBtn2,aiImageBtn,aiAudioBtn]);
     revalDiv.appendChild(modelSecici);
     revalDiv.appendChild(actionRow);
     revalDiv.appendChild(revalStatus);
