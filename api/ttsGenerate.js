@@ -1,17 +1,24 @@
 import { put } from "@vercel/blob";
+import { EdgeTTS } from "node-edge-tts";
+import fs from "fs/promises";
+import os from "os";
+import path from "path";
 
-// Sabit ses eşlemesi: istemci (Groq) sadece bu 5 anahtardan birini seçer,
-// gerçek ElevenLabs ses ID'leri HER ZAMAN burada, sunucu tarafında sabit
-// kalır — Groq'un uydurabileceği geçersiz/yanlış bir ID asla kullanılmaz.
-// ÖNEMLİ: Bu 5 ses ElevenLabs hesabınızda "Voice Library" üzerinden
-// "Add to my voices" ile eklenmiş olmalı, yoksa ücretsiz hesaplarda 402
-// (payment_required) hatası alırsınız.
+// ElevenLabs'ten Microsoft Edge'in ücretsiz TTS motoruna geçildi: Edge/Windows
+// "Sesli Oku" özelliğinin arkasındaki, API anahtarı GEREKTİRMEYEN, tamamen
+// bedava serviste sadece 2 resmi Türkçe nöral ses var: Emel (kadın) ve
+// Ahmet (erkek). ElevenLabs'teki 5 farklı sesi birebir taklit edemesek de,
+// Groq'un seçtiği 5 "karakter"i bu iki sese, farklı konuşma hızı (rate) ve
+// perde (pitch) ayarlarıyla eşleyip biraz tonlama farkı yaratıyoruz.
+// ÖNEMLİ: Bu servis Microsoft tarafından resmi/belgeli bir API değil —
+// Edge tarayıcısının kullandığı servisi taklit ediyor. Yıllardır stabil
+// çalışıyor ama garanti yok; karşılığında ücretsiz ve kotasız.
 const VOICE_MAP = {
-  huzunlu:  "MF3mGyEYCl7XYWbV9V6O", // Elli — duygusal, hüzünlü kadın sesi
-  romantik: "EXAVITQu4vr4xnSDxMaL", // Bella — yumuşak, sıcak kadın sesi
-  dramatik: "ErXwobaYiN019PkySvjV", // Antoni — güçlü, dramatik erkek sesi
-  sakin:    "21m00Tcm4TlvDq8ikWAM", // Rachel — sakin, dingin kadın sesi
-  tutkulu:  "pNInz6obpgDQGcFmaJgB", // Adam — derin, tutkulu erkek sesi
+  huzunlu:  { voice: "tr-TR-EmelNeural",  pitch: "-8%", rate: "-12%" }, // hüzünlü, yavaş, kısık kadın sesi
+  romantik: { voice: "tr-TR-EmelNeural",  pitch: "+0%", rate: "-5%"  }, // yumuşak, sıcak kadın sesi
+  dramatik: { voice: "tr-TR-AhmetNeural", pitch: "-5%", rate: "-8%"  }, // güçlü, ağır erkek sesi
+  sakin:    { voice: "tr-TR-EmelNeural",  pitch: "-3%", rate: "-10%" }, // sakin, dingin kadın sesi
+  tutkulu:  { voice: "tr-TR-AhmetNeural", pitch: "+3%", rate: "+2%"  }, // canlı, kararlı erkek sesi
 };
 const VARSAYILAN_SES = "sakin";
 
@@ -21,8 +28,9 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: "Sadece POST." });
   }
 
+  let tmpPath = null;
   try {
-    const { text, title, postId, voiceKey, stability, style } = req.body || {};
+    const { text, title, postId, voiceKey } = req.body || {};
     const cleanText = String(text || "").trim();
     const cleanPostId = String(postId || "").trim();
 
@@ -32,55 +40,40 @@ export default async function handler(req, res) {
     if (!/^[A-Za-z0-9]+$/.test(cleanPostId)) {
       return res.status(400).json({ error: "Geçersiz şiir ID." });
     }
-    if (!process.env.ELEVENLABS_API_KEY) {
-      return res.status(500).json({ error: "ELEVENLABS_API_KEY tanımlı değil." });
-    }
-    // NOT: Blob deposu artık OIDC ile bağlı (BLOB_STORE_ID + Vercel'in otomatik
-    // enjekte ettiği VERCEL_OIDC_TOKEN). Eski statik BLOB_READ_WRITE_TOKEN
-    // yöntemi kullanılmadığından bu değişken hiç oluşmaz — onu aramak yanlış
-    // pozitif hataya yol açıyordu. Yerine BLOB_STORE_ID kontrol ediliyor.
     if (!process.env.BLOB_STORE_ID) {
       return res.status(500).json({ error: "BLOB_STORE_ID tanımlı değil (Blob deposu projeye bağlı mı?)." });
     }
 
     const secilenAnahtar = Object.prototype.hasOwnProperty.call(VOICE_MAP, voiceKey) ? voiceKey : VARSAYILAN_SES;
-    const voiceId = VOICE_MAP[secilenAnahtar];
-    const clamp01 = (v, def) => (Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : def);
-    const finalStability = clamp01(Number(stability), 0.5);
-    const finalStyle = clamp01(Number(style), 0.35);
+    const secim = VOICE_MAP[secilenAnahtar];
 
     const spoken = (title ? `${title}. ` : "") + cleanText;
+    // Edge TTS servisi çok uzun metinlerde zaman aşımına uğrayabiliyor,
+    // ElevenLabs'teki gibi güvenli bir üst sınır koruyoruz.
     const trimmed = spoken.length > 4500 ? spoken.slice(0, 4500) : spoken;
 
-    const elevenRes = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
-      method: "POST",
-      headers: {
-        "xi-api-key": process.env.ELEVENLABS_API_KEY,
-        "Content-Type": "application/json",
-        "Accept": "audio/mpeg",
-      },
-      body: JSON.stringify({
-        text: trimmed,
-        model_id: "eleven_multilingual_v2",
-        voice_settings: { stability: finalStability, similarity_boost: 0.75, style: finalStyle, use_speaker_boost: true },
-      }),
-      signal: AbortSignal.timeout(25000),
+    const tts = new EdgeTTS({
+      voice: secim.voice,
+      lang: "tr-TR",
+      outputFormat: "audio-24khz-96kbitrate-mono-mp3",
+      pitch: secim.pitch,
+      rate: secim.rate,
+      volume: "default",
+      timeout: 20000,
     });
 
-    if (!elevenRes.ok) {
-      let detay = "";
-      try { detay = await elevenRes.text(); } catch {}
-      console.error("ElevenLabs HATASI:", elevenRes.status, detay);
-      return res.status(502).json({ error: "Ses oluşturulamadı.", detail: detay.slice(0, 300) });
-    }
+    // Vercel serverless ortamında dosya sistemi salt-okunur, sadece /tmp
+    // yazılabilir — bu yüzden Edge TTS'in dosyaya yazma API'sini /tmp'ye
+    // yazdırıp sonra buffer olarak geri okuyoruz.
+    tmpPath = path.join(os.tmpdir(), `${cleanPostId}-${Date.now()}.mp3`);
+    await tts.ttsPromise(trimmed, tmpPath);
 
-    const audioBuffer = Buffer.from(await elevenRes.arrayBuffer());
+    const audioBuffer = await fs.readFile(tmpPath);
     if (!audioBuffer.length) {
       return res.status(502).json({ error: "Boş ses verisi döndü." });
     }
 
-    // Vercel Blob'a yükle — Firebase/Blaze'e hiç gerek yok, Hobby planda
-    // ücretsiz (1GB/ay). access:'public' ile link doğrudan çalınabilir olur.
+    // Vercel Blob'a yükle — access:'public' ile link doğrudan çalınabilir olur.
     const blob = await put(`audio/${cleanPostId}.mp3`, audioBuffer, {
       access: "public",
       contentType: "audio/mpeg",
@@ -93,5 +86,9 @@ export default async function handler(req, res) {
   } catch (e) {
     console.error("ttsGenerate HATASI:", e);
     return res.status(500).json({ error: "Sunucu hatası.", detail: String(e?.message || e).slice(0, 300) });
+  } finally {
+    if (tmpPath) {
+      fs.unlink(tmpPath).catch(() => {});
+    }
   }
 }
