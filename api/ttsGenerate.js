@@ -35,8 +35,12 @@ export default async function handler(req, res) {
     if (!process.env.ELEVENLABS_API_KEY) {
       return res.status(500).json({ error: "ELEVENLABS_API_KEY tanımlı değil." });
     }
-    if (!process.env.BLOB_READ_WRITE_TOKEN) {
-      return res.status(500).json({ error: "BLOB_READ_WRITE_TOKEN tanımlı değil (Vercel Storage -> Blob bağlı mı?)." });
+    // NOT: Blob deposu artık OIDC ile bağlı (BLOB_STORE_ID + Vercel'in otomatik
+    // enjekte ettiği VERCEL_OIDC_TOKEN). Eski statik BLOB_READ_WRITE_TOKEN
+    // yöntemi kullanılmadığından bu değişken hiç oluşmaz — onu aramak yanlış
+    // pozitif hataya yol açıyordu. Yerine BLOB_STORE_ID kontrol ediliyor.
+    if (!process.env.BLOB_STORE_ID) {
+      return res.status(500).json({ error: "BLOB_STORE_ID tanımlı değil (Blob deposu projeye bağlı mı?)." });
     }
 
     const secilenAnahtar = Object.prototype.hasOwnProperty.call(VOICE_MAP, voiceKey) ? voiceKey : VARSAYILAN_SES;
