@@ -1,18 +1,11 @@
-import { cert, getApps, initializeApp } from "firebase-admin/app";
-import { getStorage } from "firebase-admin/storage";
-import { randomUUID } from "crypto";
-
-const PROJECT_ID = "yeniozanlar-68b49";
-// Firebase projeniz için doğru bucket adını Firebase Console -> Storage
-// sayfasının üstünde görebilirsiniz (gs://... kısmının hemen sonrası).
-// Farklıysa Vercel'de FIREBASE_STORAGE_BUCKET ortam değişkeni ile geçersiz kılın.
-const STORAGE_BUCKET = process.env.FIREBASE_STORAGE_BUCKET || `${PROJECT_ID}.firebasestorage.app`;
+import { put } from "@vercel/blob";
 
 // Sabit ses eşlemesi: istemci (Groq) sadece bu 5 anahtardan birini seçer,
 // gerçek ElevenLabs ses ID'leri HER ZAMAN burada, sunucu tarafında sabit
 // kalır — Groq'un uydurabileceği geçersiz/yanlış bir ID asla kullanılmaz.
-// Farklı bir ses istersen ilgili ID'yi ElevenLabs sitesindeki
-// (VoiceLab -> ilgili ses -> ... -> Copy Voice ID) ile değiştirebilirsin.
+// ÖNEMLİ: Bu 5 ses ElevenLabs hesabınızda "Voice Library" üzerinden
+// "Add to my voices" ile eklenmiş olmalı, yoksa ücretsiz hesaplarda 402
+// (payment_required) hatası alırsınız.
 const VOICE_MAP = {
   huzunlu:  "MF3mGyEYCl7XYWbV9V6O", // Elli — duygusal, hüzünlü kadın sesi
   romantik: "EXAVITQu4vr4xnSDxMaL", // Bella — yumuşak, sıcak kadın sesi
@@ -21,28 +14,6 @@ const VOICE_MAP = {
   tutkulu:  "pNInz6obpgDQGcFmaJgB", // Adam — derin, tutkulu erkek sesi
 };
 const VARSAYILAN_SES = "sakin";
-
-function getBucket() {
-  if (!getApps().length) {
-    const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
-    if (raw) {
-      initializeApp({ credential: cert(JSON.parse(raw)), projectId: PROJECT_ID, storageBucket: STORAGE_BUCKET });
-    } else {
-      const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
-      const privateKey = process.env.FIREBASE_PRIVATE_KEY;
-      if (!clientEmail || !privateKey) throw new Error("Firebase Admin ortam değişkenleri eksik.");
-      initializeApp({
-        credential: cert({
-          projectId: process.env.FIREBASE_PROJECT_ID || PROJECT_ID,
-          clientEmail,
-          privateKey: privateKey.replace(/\\n/g, "\n"),
-        }),
-        storageBucket: STORAGE_BUCKET,
-      });
-    }
-  }
-  return getStorage().bucket();
-}
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
@@ -64,16 +35,16 @@ export default async function handler(req, res) {
     if (!process.env.ELEVENLABS_API_KEY) {
       return res.status(500).json({ error: "ELEVENLABS_API_KEY tanımlı değil." });
     }
+    if (!process.env.BLOB_READ_WRITE_TOKEN) {
+      return res.status(500).json({ error: "BLOB_READ_WRITE_TOKEN tanımlı değil (Vercel Storage -> Blob bağlı mı?)." });
+    }
 
-    // Groq'un önerdiği ses/duygu — geçersizse (veya hiç gelmezse) güvenli
-    // varsayılana düşülür, ASLA client'tan gelen bir ID doğrudan kullanılmaz.
     const secilenAnahtar = Object.prototype.hasOwnProperty.call(VOICE_MAP, voiceKey) ? voiceKey : VARSAYILAN_SES;
     const voiceId = VOICE_MAP[secilenAnahtar];
     const clamp01 = (v, def) => (Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : def);
     const finalStability = clamp01(Number(stability), 0.5);
     const finalStyle = clamp01(Number(style), 0.35);
 
-    // ElevenLabs karakter sınırlarını aşmamak için makul bir üst sınır.
     const spoken = (title ? `${title}. ` : "") + cleanText;
     const trimmed = spoken.length > 4500 ? spoken.slice(0, 4500) : spoken;
 
@@ -104,25 +75,19 @@ export default async function handler(req, res) {
       return res.status(502).json({ error: "Boş ses verisi döndü." });
     }
 
-    const bucket = getBucket();
-    const filePath = `audio/${cleanPostId}.mp3`;
-    const file = bucket.file(filePath);
-    const downloadToken = randomUUID();
-    // makePublic() yerine Firebase'in kendi indirme-token yöntemi kullanılıyor:
-    // bucket'ın "Uniform Bucket-Level Access" ayarından TAMAMEN bağımsız
-    // çalışır (o ayar açıksa makePublic() sessizce başarısız oluyordu).
-    await file.save(audioBuffer, {
-      metadata: {
-        contentType: "audio/mpeg",
-        cacheControl: "public, max-age=31536000",
-        metadata: { firebaseStorageDownloadTokens: downloadToken },
-      },
+    // Vercel Blob'a yükle — Firebase/Blaze'e hiç gerek yok, Hobby planda
+    // ücretsiz (1GB/ay). access:'public' ile link doğrudan çalınabilir olur.
+    const blob = await put(`audio/${cleanPostId}.mp3`, audioBuffer, {
+      access: "public",
+      contentType: "audio/mpeg",
+      addRandomSuffix: false,
+      allowOverwrite: true,
+      cacheControlMaxAge: 31536000,
     });
 
-    const audioUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(filePath)}?alt=media&token=${downloadToken}`;
-    return res.status(200).json({ audioUrl, voiceKey: secilenAnahtar });
+    return res.status(200).json({ audioUrl: blob.url, voiceKey: secilenAnahtar });
   } catch (e) {
     console.error("ttsGenerate HATASI:", e);
-    return res.status(500).json({ error: "Sunucu hatası." });
+    return res.status(500).json({ error: "Sunucu hatası.", detail: String(e?.message || e).slice(0, 300) });
   }
 }
