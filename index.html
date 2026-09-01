@@ -2250,6 +2250,114 @@ function otomatikGifUygulaGerekirse(postId, title, text, mevcutGorsel, mevcutYou
     db.collection("posts").doc(postId).update({ image: sonuc.gifUrl, autoGif: true, gifCaption: sonuc.caption || null }).catch(err=>console.error("Otomatik GIF kaydetme hatası:",err));
   });
 }
+// Bir şiir paylaşıldığında arka planda otomatik seslendirme (ElevenLabs)
+// oluşturup Firestore'a audioUrl olarak kaydeder. Hata olursa (ör. API key
+// tanımlı değilse veya kota dolmuşsa) sessizce yutulur — paylaşım akışını
+// asla engellemez, tıpkı otomatikGifUygulaGerekirse gibi.
+function otomatikSesUygulaGerekirse(postId, title, text){
+  if(!text || text.trim().length<10) return;
+  // Görsel promptunda olduğu gibi (aiGorselPromptuGroqlaOlustur), önce Groq'a
+  // şiirin duygusuna/temasına göre HANGİ ses karakterinin ve okuma tarzının
+  // uygun olduğunu soruyoruz. Groq başarısız olursa varsayılan (sakin) sesle
+  // devam edilir — asla paylaşım akışını engellemez.
+  aiSesYonlendirmesiGroqlaOlustur(title, text).then(yon=>{
+    fetch('/api/ttsGenerate', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ title, text, postId, ...yon })
+    }).then(async res=>{
+      if(!res.ok){ console.warn('Otomatik ses oluşturulamadı:', res.status); return; }
+      const data = await res.json();
+      if(!data?.audioUrl) return;
+      const idx = S.posts.findIndex(p=>p.id===postId);
+      if(idx<0) return;
+      S.posts[idx].audioUrl = data.audioUrl;
+      save();
+      refreshCard(postId);
+      db.collection("posts").doc(postId).update({ audioUrl: data.audioUrl }).catch(err=>console.error("Ses kaydetme hatası:",err));
+    }).catch(e=>console.warn('Otomatik ses oluşturulamadı:', e.message));
+  });
+}
+
+// Şiirin duygusuna göre uygun bir ElevenLabs sesi + okuma tonu seçtirir.
+// Görsel oluşturmadaki aiGorselPromptuGroqlaOlustur ile AYNI mantık: Groq'a
+// sadece SEÇİM yaptırıyoruz (sabit bir ses listesinden), gerçek ses üretimi
+// sunucu tarafında (api/ttsGenerate.js) sabit ID'lerle yapılıyor — böylece
+// Groq'un uydurabileceği geçersiz bir ses ID'si asla ElevenLabs'e gitmez.
+async function aiSesYonlendirmesiGroqlaOlustur(title, text){
+  const baslik=String(title||'').trim().slice(0,250);
+  const siir=String(text||'').trim().slice(0,2200);
+  const VARSAYILAN={voiceKey:'sakin', stability:0.5, style:0.35};
+  if(!siir) return VARSAYILAN;
+  try{
+    const sonuc=await groqBotCall(
+      'Sen şiirleri seslendirecek bir seslendirme yönetmenisin. YALNIZCA JSON döndür.',
+      `Bu şiiri analiz et ve aşağıdaki 5 ses karakterinden şiirin duygusuna/temasına EN UYGUN olanını seç:
+- "huzunlu": hüzünlü, melankolik, ayrılık/özlem temalı şiirler için duygusal kadın sesi
+- "romantik": aşk, sevgi, sıcaklık temalı şiirler için yumuşak, sıcak kadın sesi
+- "dramatik": yoğun, çarpıcı, isyan/hesaplaşma temalı şiirler için güçlü erkek sesi
+- "sakin": huzur, doğa, tefekkür temalı şiirler için sakin, dingin kadın sesi
+- "tutkulu": tutku, öfke, güçlü duygular içeren şiirler için derin, kararlı erkek sesi
+
+Ayrıca 0 ile 1 arasında iki değer belirle:
+- "stability": şiir ne kadar duygusal/değişken okunmalı (düşük=daha duygusal/oynak, yüksek=daha durağan/kararlı)
+- "style": okuma ne kadar abartılı/tiyatral olmalı (düşük=doğal, yüksek=abartılı)
+
+Şiirin başlığı: ${baslik}
+
+Şiir:
+${siir}
+
+JSON: {"voiceKey":"...", "stability":0.0, "style":0.0}`
+    );
+    const voiceKey=String(sonuc?.voiceKey||'').trim();
+    const gecerliAnahtarlar=['huzunlu','romantik','dramatik','sakin','tutkulu'];
+    const stability=Number(sonuc?.stability);
+    const style=Number(sonuc?.style);
+    return {
+      voiceKey: gecerliAnahtarlar.includes(voiceKey) ? voiceKey : VARSAYILAN.voiceKey,
+      stability: Number.isFinite(stability) ? Math.min(1,Math.max(0,stability)) : VARSAYILAN.stability,
+      style: Number.isFinite(style) ? Math.min(1,Math.max(0,style)) : VARSAYILAN.style
+    };
+  }catch(err){
+    console.warn('Groq ses yönlendirmesi oluşturamadı, varsayılan ses kullanılacak:',err);
+    return VARSAYILAN;
+  }
+}
+
+// Paylaşım detayında ve kaydırma modunda kullanılan ortak, mor-yeşil temalı
+// ses oynatıcı: oynat/duraklat, durdur, ses seviyesi. new Audio() DOM'a hiç
+// eklenmeden de çalabildiği için audio elemanı kontrol amaçlı dışarı (opts
+// üzerinden çağırana) döndürülür; DOM'dan kaldırılması oynatmayı OTOMATİK
+// durdurmaz, bu yüzden çağıran taraf (postCard / SwipeMode) sekme kapanırken
+// veya bir sonraki şiire geçilirken audio.pause() çağırmalıdır.
+function sesOynaticiOlustur(audioUrl){
+  const audio=new Audio(audioUrl);
+  audio.preload='metadata';
+  audio.volume=0.9;
+  const wrap=h('div',{style:{display:'flex',alignItems:'center',gap:'10px',background:'#0f0a1a',border:'1px solid #2d1b52',borderRadius:'14px',padding:'8px 12px',marginBottom:'14px'},onclick:(e)=>e.stopPropagation()});
+  const label=h('span',{style:{fontSize:'.72rem',color:'#a78bfa',flexShrink:'0',whiteSpace:'nowrap'}},'🎙️ Dinle');
+  const playBtn=h('button',{class:'btn',style:{background:'linear-gradient(135deg,#7c3aed,#34d399)',border:'none',borderRadius:'50%',width:'34px',height:'34px',display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:'.95rem',flexShrink:'0',padding:'0',lineHeight:'1'},
+    onclick:(e)=>{e.stopPropagation(); if(audio.paused) audio.play().catch(()=>{}); else audio.pause();}
+  },'▶️');
+  const stopBtn=h('button',{class:'btn',style:{background:'#1a0f2e',border:'1px solid #3d1f6e',borderRadius:'50%',width:'28px',height:'28px',display:'flex',alignItems:'center',justifyContent:'center',color:'#a78bfa',fontSize:'.75rem',flexShrink:'0',padding:'0',lineHeight:'1'},
+    onclick:(e)=>{e.stopPropagation(); audio.pause(); audio.currentTime=0;}
+  },'⏹️');
+  const volIcon=h('span',{style:{fontSize:'.8rem',flexShrink:'0'}},'🔊');
+  const volSlider=h('input',{type:'range',min:'0',max:'1',step:'0.05',value:String(audio.volume),style:{flex:'1',minWidth:'40px',accentColor:'#34d399',cursor:'pointer'},
+    oninput:(e)=>{e.stopPropagation(); audio.volume=parseFloat(e.target.value); volIcon.textContent=audio.volume===0?'🔇':(audio.volume<0.5?'🔉':'🔊');},
+    onclick:(e)=>e.stopPropagation()
+  });
+  audio.addEventListener('play',()=>{playBtn.textContent='⏸️';});
+  audio.addEventListener('pause',()=>{playBtn.textContent='▶️';});
+  audio.addEventListener('ended',()=>{playBtn.textContent='▶️';});
+  wrap.appendChild(label);
+  wrap.appendChild(playBtn);
+  wrap.appendChild(stopBtn);
+  wrap.appendChild(volIcon);
+  wrap.appendChild(volSlider);
+  return { el:wrap, audio };
+}
 // Otomatik bulunmuş bir GIF'in (post.autoGif) üzerine, varsa post.gifCaption metnini
 // alt kısımda okunaklı bir gradyan üzerinde bindirir. imgEl'i saran, position:relative
 // bir wrapper döndürür; caption yoksa imgEl aynen (değişmeden) geri döner.
@@ -2337,6 +2445,7 @@ A.addPost = async function(pd){
     db.collection("posts").doc(np.id).set(np).catch(err=>console.error("Kaydetme hatası:",err));
     facebookOnizlemeyiTazele(np.id);
     otomatikGifUygulaGerekirse(np.id, np.title, np.text, np.image, np.youtube);
+    otomatikSesUygulaGerekirse(np.id, np.title, np.text);
 
     // Takipçilere yeni paylaşım bildirimi gönder
     const takipciler = Object.keys(S.follows).filter(uid => (S.follows[uid]||[]).includes(S.me.id));
@@ -3149,38 +3258,13 @@ async function adminGiphyFallbackUygula(post){
   return data;
 }
 
-// ── AI görsel sağlayıcıları (Cloudflare FLUX → Pollinations → Hugging Face → Gemini) ──
-// Dördü de aynı sözleşmeyi izler: (title, text, signal) alır, başarılıysa
-// {blob, provider, model} döner, başarısızsa Error fırlatır. Bu sayede
-// adminYapayZekaGorseliYenile hepsini TEK bir döngüyle deneyebilir.
-// flux-image.js, huggingface-image.js ve gemini-image.js ham görsel binary'si
-// (image/*) döner; pollinations-image.js JSON içinde base64 data URL döner —
-// hepsi burada aynı {blob} şekline normalize edilir.
-// ── Görsel AI sağlayıcıları durum takibi (admin panelindeki "Görsel AI
-// Sağlayıcıları Durumu" kartı için) — her sağlayıcının en son DOĞRUDAN
-// testinin sonucunu (kota/hata dahil) tutar. adminYapayZekaGorseliYenile'nin
-// otomatik zincirinden BAĞIMSIZDIR; admin panelindeki "Test Et" butonları
-// sağlayıcıyı zincirdeki sıraya bakmaksızın doğrudan çağırır.
-const gorselKota = {
-  cloudflare:   { basarili:null, hata:null, sonTest:null },
-  pollinations: { basarili:null, hata:null, sonTest:null },
-  huggingface:  { basarili:null, hata:null, sonTest:null },
-  gemini:       { basarili:null, hata:null, sonTest:null }
-};
-async function gorselSaglayiciTestEt(anahtar, fn){
-  const denemeBasligi='Deneme';
-  const denemeSiiri='Deneme şiiri:\nGüneş doğar dağların ardından,\nBu satırlar sadece test eder.';
-  try{
-    await fn(denemeBasligi, denemeSiiri, undefined);
-    gorselKota[anahtar].basarili = true;
-    gorselKota[anahtar].hata = null;
-  }catch(e){
-    gorselKota[anahtar].basarili = false;
-    gorselKota[anahtar].hata = e?.message || String(e);
-  }
-  gorselKota[anahtar].sonTest = new Date().toLocaleTimeString('tr-TR');
-}
-
+// ── AI görsel sağlayıcıları (Cloudflare FLUX → Hugging Face) ──────────────
+// Pollinations ve Google Gemini (Nano Banana) çalışmadığı için zincirden
+// tamamen çıkarıldı (bkz. kullanıcı talebi). İkisi de aynı sözleşmeyi
+// izler: (title, text, signal) alır, başarılıysa {blob, provider, model}
+// döner, başarısızsa Error fırlatır. Bu sayede adminYapayZekaGorseliYenile
+// hepsini TEK bir döngüyle deneyebilir. flux-image.js ve huggingface-image.js
+// ham görsel binary'si (image/*) döner.
 async function fluxGorselDene(title, text, signal){
   const r=await fetch('/api/flux-image',{
     method:'POST', headers:{'Content-Type':'application/json'}, signal,
@@ -3198,17 +3282,6 @@ async function fluxGorselDene(title, text, signal){
   if(!blob || !blob.size) throw new Error('FLUX boş görsel döndürdü.');
   return { blob, provider:'cloudflare', model:'@cf/black-forest-labs/flux-1-schnell' };
 }
-async function pollinationsGorselDene(title, text, signal){
-  const r=await fetch('/api/pollinations-image',{
-    method:'POST', headers:{'Content-Type':'application/json'}, signal,
-    body:JSON.stringify({title,text})
-  });
-  let data={}; try{ data=await r.json(); }catch(_){}
-  if(!r.ok || !data?.imageData) throw new Error(data?.error || `Pollinations HTTP ${r.status}`);
-  const blob=await (await fetch(data.imageData)).blob(); // data: URL → Blob (basit, güvenilir dönüşüm)
-  if(!blob || !blob.size) throw new Error('Pollinations boş görsel döndürdü.');
-  return { blob, provider:'pollinations', model:data.model||'flux' };
-}
 async function huggingfaceGorselDene(title, text, signal){
   const r=await fetch('/api/huggingface-image',{
     method:'POST', headers:{'Content-Type':'application/json'}, signal,
@@ -3225,23 +3298,6 @@ async function huggingfaceGorselDene(title, text, signal){
   const blob=await r.blob();
   if(!blob || !blob.size) throw new Error('Hugging Face boş görsel döndürdü.');
   return { blob, provider:'huggingface', model:'black-forest-labs/FLUX.1-schnell' };
-}
-async function geminiGorselDene(title, text, signal){
-  const r=await fetch('/api/gemini-image',{
-    method:'POST', headers:{'Content-Type':'application/json'}, signal,
-    body:JSON.stringify({title,text})
-  });
-  const contentType=(r.headers.get('content-type')||'').split(';')[0].trim().toLowerCase();
-  if(!r.ok){
-    let hata='';
-    try{ const data=await r.json(); hata=data?.error||''; }
-    catch(_){ try{ hata=(await r.text()).slice(0,300); }catch(__){} }
-    throw new Error(`Gemini HTTP ${r.status}${hata?` — ${hata}`:''}`);
-  }
-  if(!contentType.startsWith('image/')) throw new Error(`Gemini görsel yerine ${contentType||'bilinmeyen veri'} döndürdü.`);
-  const blob=await r.blob();
-  if(!blob || !blob.size) throw new Error('Gemini boş görsel döndürdü.');
-  return { blob, provider:'gemini', model:'gemini-2.5-flash-image' };
 }
 // Herhangi bir sağlayıcıdan gelen görsel blob'unu makul bir boyuta küçültüp
 // Firestore'a sığacak bir JPEG data URL'sine çevirir. Firebase Storage
@@ -3351,16 +3407,12 @@ async function adminYapayZekaGorseliYenile(post){
     ? `${post.text||''}\n\nVISUAL DIRECTION FROM GROQ (follow this direction):\n${groqGorselPromptu}`
     : (post.text||'');
 
-  // Sırasıyla denenecek AI sağlayıcıları: Cloudflare FLUX → Pollinations →
-  // Hugging Face → Gemini. Biri kota/hata verirse otomatik olarak bir
-  // sonrakine geçilir ("yapay zeka yorumunda olduğu gibi" — Groq→Gemini→Claude
-  // kademesiyle aynı mantık). Gemini en sona eklendi; sırayı değiştirmek
-  // isterse admin bu listedeki satırların yerini değiştirmesi yeterli.
+  // Sırasıyla denenecek AI sağlayıcıları: Cloudflare FLUX → Hugging Face.
+  // Pollinations ve Gemini (Nano Banana) çalışmadığı için zincirden çıkarıldı.
+  // Cloudflare kota/hata verirse otomatik olarak Hugging Face denenir.
   const saglayicilar=[
     { ad:'Cloudflare FLUX', fn:fluxGorselDene, sure:90000, mesaj:'🧠 Cloudflare FLUX ile görsel oluşturuluyor...' },
-    { ad:'Pollinations',    fn:pollinationsGorselDene, sure:60000, mesaj:'🧠 Cloudflare kullanılamadı, Pollinations deneniyor...' },
-    { ad:'Hugging Face',    fn:huggingfaceGorselDene, sure:60000, mesaj:'🧠 Pollinations da kullanılamadı, Hugging Face deneniyor...' },
-    { ad:'Gemini',          fn:geminiGorselDene, sure:60000, mesaj:'🧠 Hugging Face de kullanılamadı, Gemini deneniyor...' }
+    { ad:'Hugging Face',    fn:huggingfaceGorselDene, sure:60000, mesaj:'🧠 Cloudflare kullanılamadı, Hugging Face deneniyor...' }
   ];
 
   const hatalar=[];
@@ -3418,7 +3470,7 @@ async function adminYapayZekaGorseliYenile(post){
     }
   }
 
-  // Dört AI sağlayıcısı da başarısız oldu (kota/hata) → son çare GIPHY.
+  // İki AI sağlayıcısı da başarısız oldu (kota/hata) → son çare GIPHY.
   try{
     const data=await adminGiphyFallbackUygula(post);
     return { type:'giphy', provider:'giphy', gifUrl:data?.gifUrl||null, fallbackReason:hatalar.join(' | ') };
@@ -3537,6 +3589,13 @@ function postCard(post, forceExpand=false, autoOpenComments=false, hedefYorumId=
     full.appendChild(gifUzeriAforizmaBindir(fullImg, post, {marginBottom:'14px', borderRadius:'12px'}));
   }
   if(vid){const w=h('div',{style:{borderRadius:'12px',overflow:'hidden',marginBottom:'14px'}});w.innerHTML=`<iframe src="https://www.youtube.com/embed/${vid}" allowfullscreen style="width:100%;aspect-ratio:16/9;border:none;border-radius:12px"></iframe>`;full.appendChild(w);}
+
+  // Sesli okuma (varsa) — devamını gör açılınca otomatik başlar, kapanınca durur.
+  let sesOynatici=null;
+  if(post.audioUrl){
+    sesOynatici=sesOynaticiOlustur(post.audioUrl);
+    full.appendChild(sesOynatici.el);
+  }
 
   // Instagram Hikayede paylaş (tam görünümde, gözden kaçmasın diye tam genişlik buton)
   const igFullBtn=h('button',{class:'btn',style:{display:'flex',alignItems:'center',justifyContent:'center',gap:'8px',width:'100%',background:'linear-gradient(135deg,#4f5bd5,#962fbf,#d62976,#fa7e1e,#feda75)',border:'none',borderRadius:'12px',padding:'11px',color:'#fff',fontSize:'.88rem',fontWeight:'700',marginBottom:'14px'},onclick:(e)=>{e.stopPropagation();document.body.appendChild(instagramHikayeModal(post));}});
@@ -3693,7 +3752,7 @@ function postCard(post, forceExpand=false, autoOpenComments=false, hedefYorumId=
       revalStatus.style.display='block'; revalStatus.style.color='#6b5b8a'; revalStatus.dataset.fluxStatus='true'; revalStatus.textContent='🧠 Şiir analiz ediliyor, AI sağlayıcıları deneniyor...';
       try{
         const sonuc=await adminYapayZekaGorseliYenile(post);
-        const saglayiciAdlari={cloudflare:'Cloudflare FLUX',pollinations:'Pollinations',huggingface:'Hugging Face (FLUX)',gemini:'Google Gemini (Nano Banana)'};
+        const saglayiciAdlari={cloudflare:'Cloudflare FLUX',huggingface:'Hugging Face (FLUX)'};
         if(sonuc?.type==='giphy'){
           // DÜZELTME: Önceden sonuc.fallbackReason (4 sağlayıcının GERÇEK hata
           // mesajları) hiç gösterilmiyordu, kullanıcı "neden GIPHY'ye düştü"
@@ -3786,7 +3845,7 @@ function postCard(post, forceExpand=false, autoOpenComments=false, hedefYorumId=
   }
 
   // kapat butonu
-  const closeBtn=h('button',{class:'btn',style:{background:'none',color:'#5b21b6',fontSize:'.8rem',width:'100%',textAlign:'center',marginTop:'10px',paddingTop:'8px',borderTop:'1px solid #2d1b5244'},onclick:(e)=>{e.stopPropagation();expanded=false;full.style.display='none';preview.style.display='block';expandLabel.textContent='Devamını gör ▼';}},'▲ Kapat');
+  const closeBtn=h('button',{class:'btn',style:{background:'none',color:'#5b21b6',fontSize:'.8rem',width:'100%',textAlign:'center',marginTop:'10px',paddingTop:'8px',borderTop:'1px solid #2d1b5244'},onclick:(e)=>{e.stopPropagation();expanded=false;full.style.display='none';preview.style.display='block';expandLabel.textContent='Devamını gör ▼';if(sesOynatici){sesOynatici.audio.pause();sesOynatici.audio.currentTime=0;}}},'▲ Kapat');
   full.appendChild(closeBtn);
   card.appendChild(full);
 
@@ -3796,9 +3855,13 @@ function postCard(post, forceExpand=false, autoOpenComments=false, hedefYorumId=
     preview.style.display=expanded?'none':'block';
     full.style.display=expanded?'block':'none';
     expandLabel.textContent=expanded?'Kapat ▲':'Devamını gör ▼';
+    if(sesOynatici){
+      if(expanded) sesOynatici.audio.play().catch(()=>{});
+      else { sesOynatici.audio.pause(); sesOynatici.audio.currentTime=0; }
+    }
   };
 
-  if(forceExpand){preview.style.display='none';full.style.display='block';}
+  if(forceExpand){preview.style.display='none';full.style.display='block';if(sesOynatici)sesOynatici.audio.play().catch(()=>{});}
 
   return card;
 }
@@ -4210,8 +4273,15 @@ function SwipeMode(){
 
   const wrap=h('div',{class:'swipe-wrap'});
 
+  // Kaydırma modunda aktif olan tek ses referansı — yeni şiire geçerken veya
+  // sekme kapanırken öncekini durdurmak için kullanılır.
+  let aktifSes=null;
+  function aktifSesiDurdur(){
+    if(aktifSes){ aktifSes.pause(); aktifSes.currentTime=0; aktifSes=null; }
+  }
+
   const topbar=h('div',{class:'swipe-topbar'});
-  const closeBtn=h('button',{class:'btn swipe-close',onclick:()=>go('feed')},'✕');
+  const closeBtn=h('button',{class:'btn swipe-close',onclick:()=>{aktifSesiDurdur();go('feed');}},'✕');
   topbar.appendChild(closeBtn);
   const tabsWrap=h('div',{class:'swipe-tabs'});
   const tabsDef=[{k:'latest',lb:'🕐 Yeni'},{k:'random',lb:'🎲 Rastgele'},{k:'top',lb:'🏆 En İyi'}];
@@ -4236,6 +4306,7 @@ function SwipeMode(){
   wrap.appendChild(stage);
 
   function renderCard(){
+    aktifSesiDurdur();
     stage.innerHTML='';
     if(!list.length){
       stage.appendChild(h('div',{class:'swipe-empty'},'Bu modda henüz gösterilecek şiir yok. 🌙'));
@@ -4245,7 +4316,9 @@ function SwipeMode(){
     if(idx<0)idx=list.length-1;
     if(idx>=list.length)idx=0;
     const post=list[idx];
-    stage.appendChild(swipeCard(post,()=>{idx++;renderCard();}));
+    const kart=swipeCard(post,()=>{idx++;renderCard();});
+    stage.appendChild(kart);
+    if(kart._sesAudio){ aktifSes=kart._sesAudio; aktifSes.play().catch(()=>{}); }
     counter.textContent=`${idx+1} / ${list.length} · sola kaydır = sonraki`;
   }
 
@@ -4315,6 +4388,14 @@ function swipeCard(post,sonrakineGec){
 
   if(post.title) scroller.appendChild(h('h3',{class:'swipe-title'},`"${post.title}"`));
   if(post.text) scroller.appendChild(h('p',{class:'swipe-text'},post.text));
+
+  // Sesli okuma (varsa) — SwipeMode bu şiir ekrana gelince card._sesAudio'yu
+  // otomatik oynatır, sıradaki/önceki şiire geçilince durdurur.
+  if(post.audioUrl){
+    const sesOynatici=sesOynaticiOlustur(post.audioUrl);
+    scroller.appendChild(sesOynatici.el);
+    card._sesAudio=sesOynatici.audio;
+  }
 
   const footer=h('div',{class:'swipe-footer'});
   footer.appendChild(h('button',{class:'btn swipe-footer-btn',onclick:()=>go('postdetail',{postId:post.id})},`💬 ${(post.comments||[]).length} yorum`));
@@ -4520,89 +4601,9 @@ function Profile(){
       onclick:()=>{kotaGoster();}
     },'🔄 Yenile');
 
-    const testBtn=h('button',{style:{marginTop:'8px',marginLeft:'8px',fontSize:'.7rem',padding:'4px 10px',background:'transparent',color:'#34d399',border:'1px solid #1d5c3d',borderRadius:'8px',cursor:'pointer'},
-      onclick:async(ev)=>{
-        const btn=ev.currentTarget;
-        btn.disabled=true; const eskiMetin=btn.textContent; btn.textContent='⏳ Test ediliyor...';
-        await scorePoem('Deneme şiiri:\nGökyüzü mavi, rüzgar eser,\nBu satırlar sadece test eder.');
-        kotaGoster();
-        btn.disabled=false; btn.textContent=eskiMetin;
-      }
-    },'🔍 Groq Test Et');
-
-    const geminiTestBtn=h('button',{style:{marginTop:'8px',marginLeft:'8px',fontSize:'.7rem',padding:'4px 10px',background:'transparent',color:'#60a5fa',border:'1px solid #1e3a5f',borderRadius:'8px',cursor:'pointer'},
-      onclick:async(ev)=>{
-        const btn=ev.currentTarget;
-        btn.disabled=true; const eskiMetin=btn.textContent; btn.textContent='⏳ Test ediliyor...';
-        await scorePoemGeminiIle('Deneme şiiri:\nDeniz mavi, martı öter,\nBu satırlar sadece test eder.');
-        kotaGoster();
-        btn.disabled=false; btn.textContent=eskiMetin;
-      }
-    },'✨ Gemini Test Et');
-
-    const claudeTestBtn=h('button',{style:{marginTop:'8px',marginLeft:'8px',fontSize:'.7rem',padding:'4px 10px',background:'transparent',color:'#f0abfc',border:'1px solid #4a1d5c',borderRadius:'8px',cursor:'pointer'},
-      onclick:async(ev)=>{
-        const btn=ev.currentTarget;
-        btn.disabled=true; const eskiMetin=btn.textContent; btn.textContent='⏳ Test ediliyor...';
-        await scorePoemClaudeIle('Deneme şiiri:\nYağmur yağar, toprak kokar,\nBu satırlar sadece test eder.');
-        kotaGoster();
-        btn.disabled=false; btn.textContent=eskiMetin;
-      }
-    },'🎭 Claude Test Et');
-
     kotaDiv.appendChild(kotaIcerik);
     kotaDiv.appendChild(yenileBtn);
-    kotaDiv.appendChild(testBtn);
-    kotaDiv.appendChild(geminiTestBtn);
-    kotaDiv.appendChild(claudeTestBtn);
     adminPanel.appendChild(kotaDiv);
-
-    // Görsel AI Sağlayıcıları Durumu (Cloudflare FLUX / Pollinations / Hugging Face / Gemini)
-    const gorselDiv=h('div',{style:{background:'#0f0a1a',border:'1px solid #2d1b52',borderRadius:'10px',padding:'12px',marginBottom:'14px'}});
-    gorselDiv.appendChild(h('p',{style:{color:'#a78bfa',fontSize:'.8rem',fontWeight:'bold',marginBottom:'8px'}},'🎨 Görsel AI Sağlayıcıları Durumu'));
-    const gorselIcerik=h('div');
-    const GORSEL_SAGLAYICI_LISTESI=[
-      { anahtar:'cloudflare',   ad:'Cloudflare FLUX',              fn:fluxGorselDene },
-      { anahtar:'pollinations', ad:'Pollinations',                  fn:pollinationsGorselDene },
-      { anahtar:'huggingface',  ad:'Hugging Face (FLUX)',           fn:huggingfaceGorselDene },
-      { anahtar:'gemini',       ad:'Google Gemini (Nano Banana)',   fn:geminiGorselDene }
-    ];
-    function gorselKotaGoster(){
-      gorselIcerik.innerHTML='';
-      GORSEL_SAGLAYICI_LISTESI.forEach(s=>{
-        const durum=gorselKota[s.anahtar];
-        const blok=h('div',{style:{marginBottom:'10px',paddingBottom:'10px',borderBottom:'1px solid #2d1b52'}});
-        blok.appendChild(h('p',{style:{color:'#e9d5ff',fontSize:'.8rem',fontWeight:'bold',marginBottom:'4px'}},s.ad));
-        if(durum.sonTest===null){
-          blok.appendChild(h('p',{style:{color:'#6b5b8a',fontSize:'.72rem',fontStyle:'italic'}},'Henüz test edilmedi.'));
-        } else if(durum.basarili){
-          blok.appendChild(h('p',{style:{color:'#34d399',fontSize:'.75rem'}},'✅ Başarılı — görsel üretildi.'));
-        } else {
-          blok.appendChild(h('p',{style:{color:'#f87171',fontSize:'.75rem',lineHeight:'1.5',wordBreak:'break-word'}},'❌ '+durum.hata));
-        }
-        if(durum.sonTest) blok.appendChild(h('p',{style:{color:'#4b3d6b',fontSize:'.65rem',marginTop:'4px'}},'Son test: '+durum.sonTest));
-        gorselIcerik.appendChild(blok);
-      });
-    }
-    gorselKotaGoster();
-    gorselDiv.appendChild(gorselIcerik);
-
-    const gorselTestBtnRow=h('div',{style:{display:'flex',flexWrap:'wrap',gap:'6px',marginTop:'4px'}});
-    GORSEL_SAGLAYICI_LISTESI.forEach(s=>{
-      const btn=h('button',{style:{fontSize:'.7rem',padding:'4px 10px',background:'transparent',color:'#34d399',border:'1px solid #1d5c3d',borderRadius:'8px',cursor:'pointer'},
-        onclick:async(ev)=>{
-          const b=ev.currentTarget;
-          b.disabled=true; const eski=b.textContent; b.textContent='⏳ Test ediliyor...';
-          await gorselSaglayiciTestEt(s.anahtar, s.fn);
-          gorselKotaGoster();
-          b.disabled=false; b.textContent=eski;
-        }
-      }, `🔍 ${s.ad} Test Et`);
-      gorselTestBtnRow.appendChild(btn);
-    });
-    gorselDiv.appendChild(gorselTestBtnRow);
-    gorselDiv.appendChild(h('p',{style:{color:'#4b3d6b',fontSize:'.65rem',fontStyle:'italic',marginTop:'8px',lineHeight:'1.4'}},'Not: Bu testler otomatik zinciri (Cloudflare FLUX→Pollinations→Hugging Face→Gemini→GIPHY) atlayıp sağlayıcıyı DOĞRUDAN çağırır; hangisinin neden başarısız olduğunu (kota, eksik/yanlış anahtar, model hatası vb.) tam mesajıyla görmek içindir.'));
-    adminPanel.appendChild(gorselDiv);
 
     const durumEl=h('p',{style:{color:'#6b5b8a',fontSize:'.85rem',marginTop:'10px',fontStyle:'italic'}},'');
     const topluModelSecici=h('select',{class:'inp',style:{marginBottom:'8px',fontSize:'.82rem',padding:'8px',borderRadius:'8px'}},[
