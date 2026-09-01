@@ -5,6 +5,7 @@
   "dependencies": {
     "@huggingface/inference": "^4.13.28",
     "@vercel/blob": "^2.8.0",
-    "firebase-admin": "^13.5.0"
+    "firebase-admin": "^13.5.0",
+    "node-edge-tts": "^1.2.10"
   }
 }
