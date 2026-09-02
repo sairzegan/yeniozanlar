@@ -1,127 +1,105 @@
 // /api/musicGenerate.js
-// Hugging Face "Inference Providers" (hf-inference) üzerinden Meta'nın
-// MusicGen (facebook/musicgen-small) modeliyle ÜCRETSİZ enstrümantal müzik
-// üretir ve Vercel Blob'a yükler. ttsGenerate.js ile AYNI sözleşmeyi izler:
-// {audioUrl-benzeri bir alan} döndürür, burada alan adı "musicUrl".
+// v5 — HİÇBİR dış AI servisi ÇAĞIRMAZ. Bunun yerine, sizin Colab'da bir kez
+// ürettiğiniz ve Vercel Blob'a yüklediğiniz sabit bir müzik KÜTÜPHANESİNDEN,
+// şiirin ruh haline (Groq'un ürettiği musicPrompt'taki anahtar kelimelere)
+// göre en uygun parçayı seçer. Böylece:
+//   - Asla dış servis hatası / 404 / kota / ücret sorunu olmaz (%100 ücretsiz).
+//   - Her şiire aynı müzik gitmez (8 farklı ruh hali + eşleştirme + rastgelelik).
+//   - Frontend'de HİÇBİR DEĞİŞİKLİK gerekmez; eski "🎵 Yapay Zeka ile Müzik
+//     Oluştur" butonu ve adminMuzikYenile() fonksiyonu aynen çalışmaya devam
+//     eder, çünkü aynı { musicUrl, prompt } sözleşmesini döndürüyoruz.
 //
-// ÖNEMLİ SINIRLAMA (kullanıcıya da anlatılmalı): MusicGen SÖZLÜ ŞARKI/VOKAL
-// ÜRETEMEZ — yalnızca enstrümantal (sözsüz) müzik üretir. Türkçe sözlü,
-// gerçekten "söylenen" bir şarkı üreten, API-anahtarı gerektirmeyen/ücretsiz
-// ve resmi bir servis şu an mevcut değil (Suno/Udio gibi servisler ücretli
-// ve resmi genel API sunmuyor). Bu yüzden burada üretilen şey, şiirin
-// duygusuna uygun sözsüz bir arka plan/tema müziğidir.
-//
-// Vercel Environment Variable (huggingface-image.js ile PAYLAŞILIR):
-// HUGGINGFACE_API_TOKEN = hf_...
-//
-// Vercel Environment (package.json) bağımlılığı (huggingface-image.js ile
-// PAYLAŞILIR, ayrıca kurulum gerekmez):
-// "@huggingface/inference"
-//
-// NOT: MusicGen "hf-inference" sağlayıcısında CPU üzerinde çalışıyor, bu
-// yüzden görsel/TTS üretimine göre daha YAVAŞ olabilir ve ilk istekte model
-// "soğuk" ise (henüz belleğe yüklenmemişse) 500/503 hatası dönebilir — bu
-// durumda birkaç saniye sonra tekrar denemek genelde çalışır.
-
-import { put } from "@vercel/blob";
-
-// ═══════════════════════════════════════════════════════════════════════
-// DÜZELTME GEÇMİŞİ:
-// v1: router.huggingface.co (Inference Providers) üzerinden musicgen-small
-//     -> ÇALIŞMADI, HF bu modeli Inference Providers'tan tamamen kaldırmış.
-// v2: "@gradio/client" npm paketiyle facebook/MusicGen Space'ini çağırdı
-//     -> ÇALIŞMADI (HTTP 500, hiçbir hata mesajı bile dönmedi). Bu paket
-//        WebSocket/EventSource gibi tarayıcıya özgü API'lere dayanıyor ve
-//        Vercel'in serverless Node ortamında import anında/çalışırken
-//        çöküyor olabilir — try/catch'e bile girmeden fonksiyon patlıyor.
-// v3 (BU SÜRÜM): Hiçbir ekstra npm paketi KULLANMIYOR. Gradio'nun resmi,
-//     dokümante "düz HTTP/curl" API desenini native fetch ile uyguluyor:
-//       1) POST {SPACE}/gradio_api/call/predict  {"data":[prompt, null]}
-//          -> {"event_id": "..."}
-//       2) GET  {SPACE}/gradio_api/call/predict/{event_id}
-//          -> "event: complete\ndata: [ {...ses dosyası...} ]" (SSE metni)
-//     Eski Gradio sürümleri "/gradio_api/call/..." yerine "/call/..." kullanıyor
-//     olabileceğinden iki yol da sırayla denenir.
-// Bu YİNE de resmi/garantili bir API değildir (bkz. önceki not: paylaşımlı
-// ücretsiz GPU kotası, kuyruk, HF'nin haber vermeden değiştirme ihtimali).
-// Ama artık üçüncü parti bir pakete bağımlı olmadığı için "sessizce çökme"
-// riski ortadan kalkıyor — her hata artık JSON olarak {error:"..."} dönecek.
+// KURULUM:
+// 1) musicgen_kutuphane.ipynb notebook'unu Colab'da çalıştırıp 8 mp3 üretin.
+// 2) Hepsini Vercel Blob'a yükleyin (Storage > Blob store > Yüklemek).
+// 3) Her birinin public URL'sini kopyalayıp aşağıdaki TRACKS listesindeki
+//    ilgili "url" alanına yapıştırın (şu an hepsi "REPLACE_ME" yazıyor).
 // ═══════════════════════════════════════════════════════════════════════
 
-const SPACE_BASE = "https://facebook-musicgen.hf.space";
-const TIMEOUT_MS = 55000;
-const API_YOLLARI = ["/gradio_api/call/predict", "/call/predict"];
+// Notebook'taki dosya adları ve etiketlerle BİREBİR eşleşiyor.
+// url alanlarını Blob'a yükledikten sonra kendi linklerinizle değiştirin.
+const TRACKS = [
+  {
+    file: "melankolik_piano",
+    url: "https://se7mxjrrxj6hacua.public.blob.vercel-storage.com/audio/melankolik_piano.mp3",
+    tags: ["melancholic", "sad", "piano", "hüzün", "kayıp", "yalnızlık", "gözyaşı", "acı"]
+  },
+  {
+    file: "umutlu_gitar",
+    url: "https://se7mxjrrxj6hacua.public.blob.vercel-storage.com/audio/umutlu_gitar.mp3",
+    tags: ["hopeful", "warm", "guitar", "umut", "sevinç", "aşk", "mutluluk"]
+  },
+  {
+    file: "sakin_ambient",
+    url: "https://se7mxjrrxj6hacua.public.blob.vercel-storage.com/audio/sakin_ambient.mp3",
+    tags: ["calm", "ambient", "peaceful", "sakin", "huzur", "doğa", "dinginlik"]
+  },
+  {
+    file: "hazin_keman",
+    url: "https://se7mxjrrxj6hacua.public.blob.vercel-storage.com/audio/hazin_keman.mp3",
+    tags: ["mournful", "violin", "emotional", "hüzün", "ayrılık", "gözyaşı", "veda"]
+  },
+  {
+    file: "epik_orkestra",
+    url: "https://se7mxjrrxj6hacua.public.blob.vercel-storage.com/audio/epik_orkestra.mp3",
+    tags: ["epic", "orchestral", "powerful", "güçlü", "savaş", "kahramanlık", "mücadele"]
+  },
+  {
+    file: "romantik_yayli",
+    url: "https://se7mxjrrxj6hacua.public.blob.vercel-storage.com/audio/romantik_yayli.mp3",
+    tags: ["romantic", "strings", "tender", "aşk", "romantik", "özlem", "sevgili"]
+  },
+  {
+    file: "gizemli_karanlik",
+    url: "https://se7mxjrrxj6hacua.public.blob.vercel-storage.com/audio/gizemli_karanlik.mp3",
+    tags: ["mysterious", "dark", "tense", "gizem", "karanlık", "korku", "endişe"]
+  },
+  {
+    file: "nostaljik_lofi",
+    url: "https://se7mxjrrxj6hacua.public.blob.vercel-storage.com/audio/nostaljik_lofi.mp3",
+    tags: ["nostalgic", "lofi", "soft", "nostalji", "anı", "geçmiş", "hatıra"]
+  }
+];
 
-function buildPrompt(customPrompt, title) {
-  const custom = String(customPrompt || "").trim();
-  if (custom) return custom.slice(0, 300);
-  const heading = String(title || "").trim().slice(0, 120);
-  return [
-    "Instrumental cinematic theme music, no vocals, no singing, no lyrics, no words.",
-    "Emotional, atmospheric, slow tempo, soft piano and strings, melancholic mood, fits a Turkish poem.",
-    heading ? `Poem title (for mood reference only): ${heading}` : ""
-  ].filter(Boolean).join(" ");
-}
+function enUygunParcayiSec(musicPrompt, title) {
+  const metin = `${musicPrompt || ""} ${title || ""}`.toLowerCase();
 
-// SSE metnini ("event: ...\ndata: ...\n\n" blokları) ayrıştırıp son "data:" satırını döner.
-function sseSonVeriyiAyikla(metin) {
-  const satirlar = metin.split("\n");
-  let sonVeri = null;
-  let hataOldu = false;
-  let sonEventTipi = "";
-  for (const satir of satirlar) {
-    if (satir.startsWith("event:")) sonEventTipi = satir.slice(6).trim();
-    if (satir.startsWith("data:")) {
-      const icerik = satir.slice(5).trim();
-      if (sonEventTipi === "error") { hataOldu = true; sonVeri = icerik; }
-      else sonVeri = icerik;
+  let enIyi = null;
+  let enIyiPuan = -1;
+  const adaylar = []; // en yuksek puana esit birden fazla parca olursa rastgele sec
+
+  for (const parca of TRACKS) {
+    let puan = 0;
+    for (const etiket of parca.tags) {
+      if (metin.includes(etiket.toLowerCase())) puan++;
+    }
+    if (puan > enIyiPuan) {
+      enIyiPuan = puan;
+      adaylar.length = 0;
+      adaylar.push(parca);
+    } else if (puan === enIyiPuan) {
+      adaylar.push(parca);
     }
   }
-  return { veri: sonVeri, hataOldu };
+
+  // Hicbir eslesme yoksa (puan 0), tamamen rastgele sec (adaylar = hepsi olur zaten)
+  const secilenler = enIyiPuan > 0 ? adaylar : TRACKS;
+  enIyi = secilenler[Math.floor(Math.random() * secilenler.length)];
+  return enIyi;
 }
-
-async function musicGenCagir(prompt, hfToken, signal) {
-  const gövde = JSON.stringify({ data: [prompt, null] });
-  const baslikGrubu = { "Content-Type": "application/json" };
-  if (hfToken) baslikGrubu["Authorization"] = `Bearer ${hfToken}`;
-
-  let sonHata = null;
-  for (const yol of API_YOLLARI) {
-    try {
-      const postYaniti = await fetch(SPACE_BASE + yol, { method: "POST", headers: baslikGrubu, body: gövde, signal });
-      if (!postYaniti.ok) { sonHata = new Error(`(${yol}) POST HTTP ${postYaniti.status}`); continue; }
-      const postVeri = await postYaniti.json().catch(() => null);
-      const eventId = postVeri?.event_id;
-      if (!eventId) { sonHata = new Error(`(${yol}) event_id dönmedi.`); continue; }
-
-      const getYaniti = await fetch(`${SPACE_BASE}${yol}/${eventId}`, {
-        headers: { Accept: "text/event-stream", ...(hfToken ? { Authorization: `Bearer ${hfToken}` } : {}) },
-        signal
-      });
-      if (!getYaniti.ok) { sonHata = new Error(`(${yol}) sonuç HTTP ${getYaniti.status}`); continue; }
-      const metin = await getYaniti.text();
-      const { veri, hataOldu } = sseSonVeriyiAyikla(metin);
-      if (!veri) { sonHata = new Error(`(${yol}) SSE yanıtında veri bulunamadı.`); continue; }
-      if (hataOldu) { sonHata = new Error(`(${yol}) MusicGen demo'su hata döndürdü: ${veri.slice(0, 200)}`); continue; }
-
-      const dizi = JSON.parse(veri);
-      return dizi;
-    } catch (e) {
-      sonHata = e;
-    }
-  }
-  throw sonHata || new Error("MusicGen demo'suna hiçbir yoldan ulaşılamadı.");
-}
-
-export const maxDuration = 60;
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     res.setHeader("Allow", "POST");
     return res.status(405).json({ error: "Sadece POST." });
   }
-  if (!process.env.BLOB_STORE_ID) {
-    return res.status(500).json({ error: "BLOB_STORE_ID tanımlı değil (Blob deposu projeye bağlı mı?)." });
+
+  const eksikUrl = TRACKS.find(t => !t.url || t.url.startsWith("REPLACE_ME"));
+  if (eksikUrl) {
+    return res.status(500).json({
+      error: `Müzik kütüphanesi henüz kurulmamış: "${eksikUrl.file}" için gerçek bir Blob URL'si girilmemiş. ` +
+             `musicGenerate.js dosyasındaki TRACKS listesini Vercel Blob'a yüklediğiniz gerçek linklerle güncelleyin.`
+    });
   }
 
   const { title, postId, musicPrompt } = req.body || {};
@@ -130,47 +108,11 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: "Geçersiz şiir ID." });
   }
 
-  const prompt = buildPrompt(musicPrompt, title);
-  const hfToken = String(process.env.HUGGINGFACE_API_TOKEN || "").trim() || undefined;
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
-
   try {
-    const dizi = await musicGenCagir(prompt, hfToken, controller.signal);
-    clearTimeout(timer);
-
-    const cikti = Array.isArray(dizi) ? dizi[0] : null;
-    const kaynakYolu = cikti?.url || cikti?.path || (typeof cikti === "string" ? cikti : null);
-    if (!kaynakYolu) {
-      throw new Error("MusicGen demo'sundan geçerli bir ses dosyası alınamadı (boş/beklenmeyen çıktı).");
-    }
-    const tamUrl = kaynakYolu.startsWith("http") ? kaynakYolu : `${SPACE_BASE}/gradio_api/file=${kaynakYolu}`;
-
-    const sesYaniti = await fetch(tamUrl, hfToken ? { headers: { Authorization: `Bearer ${hfToken}` } } : undefined);
-    if (!sesYaniti.ok) throw new Error(`Üretilen ses dosyası indirilemedi (HTTP ${sesYaniti.status}).`);
-    const buffer = Buffer.from(await sesYaniti.arrayBuffer());
-    if (!buffer.length) throw new Error("Üretilen ses dosyası boş.");
-
-    const contentType = (sesYaniti.headers.get("content-type") || "audio/wav").split(";")[0];
-    const ext = contentType.includes("wav") ? "wav" : (contentType.includes("mpeg") ? "mp3" : "wav");
-
-    const uploaded = await put(`music/${cleanPostId}.${ext}`, buffer, {
-      access: "public",
-      contentType: contentType.startsWith("audio/") ? contentType : "audio/wav",
-      addRandomSuffix: false,
-      allowOverwrite: true,
-      cacheControlMaxAge: 31536000
-    });
-
-    return res.status(200).json({ musicUrl: uploaded.url, prompt });
+    const secilen = enUygunParcayiSec(musicPrompt, title);
+    return res.status(200).json({ musicUrl: secilen.url, prompt: musicPrompt || "" });
   } catch (e) {
-    clearTimeout(timer);
-    const msg =
-      e?.name === "AbortError"
-        ? "Müzik demo'su (facebook/MusicGen) meşgul/kuyrukta — zaman aşımına uğradı. Birkaç dakika sonra tekrar deneyin."
-        : `Hugging Face MusicGen demo'su şu an kullanılamıyor: ${String(e?.message || e).slice(0, 250)}`;
     console.error("musicGenerate HATASI:", e);
-    return res.status(502).json({ error: msg });
+    return res.status(502).json({ error: `Müzik seçilemedi: ${String(e?.message || e).slice(0, 250)}` });
   }
 }
