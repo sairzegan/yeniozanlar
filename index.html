@@ -651,17 +651,19 @@ async function ffmpegMp4Donustur(webmBlob, durum, progText){
   progText.textContent='MP4 dönüştürme başladı...';
 
   ffmpeg.FS('writeFile','input.webm',await fetchFile(webmBlob));
-  await ffmpeg.run(
+  const ffArgs=[
     '-i','input.webm',
     '-c:v','libx264',
     '-preset','veryfast',
     '-crf','22',
-    '-pix_fmt','yuv420p',
-    '-c:a','aac',
-    '-b:a','192k',
-    '-movflags','+faststart',
-    'output.mp4'
-  );
+    '-pix_fmt','yuv420p'
+  ];
+  // Sessiz videoda ses akışı olmadığı için AAC parametreleri eklenmez.
+  if(webmBlob.type.includes('audio') || webmBlob.type.includes('opus')){
+    ffArgs.push('-c:a','aac','-b:a','192k');
+  }
+  ffArgs.push('-movflags','+faststart','output.mp4');
+  await ffmpeg.run(...ffArgs);
 
   const data=ffmpeg.FS('readFile','output.mp4');
   const mp4Blob=new Blob([data.buffer],{type:'video/mp4'});
@@ -676,10 +678,11 @@ async function ffmpegMp4Donustur(webmBlob, durum, progText){
 
 async function siiriVideoOlarakKaydet(post){
   const audioUrl = post?.audioUrl || post?.musicUrl;
-  if(!audioUrl){
-    toastGoster('🎙️ Bu şiirde kaydedilecek ses dosyası yok.');
-    return;
-  }
+  const youtubeId = ytId(post?.youtube);
+  const hasAudio = !!audioUrl;
+  // YouTube iframe'i canvas/MediaRecorder içine güvenilir biçimde aktarılamaz
+  // (cross-origin). Bu nedenle YouTube bağlantısı varsa, video alanında kapak
+  // görselini kullanıyoruz. Kendi ses dosyası varsa yine ses kayda eklenir.
 
   const author=byId(post.authorId);
   const bg=h('div',{class:'modal-bg'});
@@ -693,7 +696,9 @@ async function siiriVideoOlarakKaydet(post){
   ]);
   modal.appendChild(baslik);
   const bilgi=h('p',{style:{color:'#a78bfa',fontSize:'.76rem',lineHeight:'1.45',marginBottom:'10px'}},
-    'Şiirin resmi arka plan olur; yazılar kaydırma modundaki gibi akar. Video, ses dosyasının tamamı kadar sürer ve MP4 olarak indirilir.');
+    hasAudio
+      ? 'Şiirin resmi arka plan olur; YouTube varsa video kapak görseli kullanılır. Yazılar kaydırma modundaki gibi akar. Video, ses dosyasının tamamı kadar sürer ve MP4 olarak indirilir.'
+      : 'Ses dosyası yok. Video 20 saniye sessiz olarak hazırlanır. YouTube varsa video kapak görseli kullanılır. MP4 olarak indirilir.');
   modal.appendChild(bilgi);
 
   const preview=h('canvas',{width:'540',height:'960',style:{width:'270px',height:'480px',display:'block',margin:'8px auto',borderRadius:'14px',background:'#0a0718',border:'1px solid #3d1f6e'}});
@@ -717,16 +722,19 @@ async function siiriVideoOlarakKaydet(post){
   try{
     await igFontlariHazirla();
 
-    // Ses dosyasını indirip AudioBuffer'a çeviriyoruz. Böylece kayıt, sesin
-    // tam uzunluğu kadar sürer ve MediaRecorder'a Web Audio üzerinden aktarılır.
-    durum.textContent='⏳ Ses dosyası yükleniyor...';
-    const audioRes=await fetch(audioUrl,{mode:'cors',cache:'no-store'});
-    if(!audioRes.ok) throw new Error('Ses dosyasına erişilemedi (HTTP '+audioRes.status+').');
-    const audioBuf=await audioRes.arrayBuffer();
+    let decoded=null;
+    let duration=20;
 
-    audioCtx=new (window.AudioContext||window.webkitAudioContext)();
-    const decoded=await audioCtx.decodeAudioData(audioBuf.slice(0));
-    const duration=Math.max(1,decoded.duration);
+    // Ses varsa indirip AudioBuffer'a çeviriyoruz. Ses yoksa süre sabit 20 sn.
+    if(hasAudio){
+      durum.textContent='⏳ Ses dosyası yükleniyor...';
+      const audioRes=await fetch(audioUrl,{mode:'cors',cache:'no-store'});
+      if(!audioRes.ok) throw new Error('Ses dosyasına erişilemedi (HTTP '+audioRes.status+').');
+      const audioBuf=await audioRes.arrayBuffer();
+      audioCtx=new (window.AudioContext||window.webkitAudioContext)();
+      decoded=await audioCtx.decodeAudioData(audioBuf.slice(0));
+      duration=Math.max(1,decoded.duration);
+    }
 
     const W=1080,H=1920;
     const ctx=preview.getContext('2d');
@@ -734,7 +742,7 @@ async function siiriVideoOlarakKaydet(post){
     hiddenCanvas.width=W; hiddenCanvas.height=H;
     const c=hiddenCanvas.getContext('2d');
 
-    // Arka plan resmi
+    // Arka plan: önce şiirin kendi resmi; resim yoksa YouTube kapak görseli.
     let bgImg=null;
     if(post.image){
       try{
@@ -747,6 +755,29 @@ async function siiriVideoOlarakKaydet(post){
         });
       }catch{
         bgImg=null;
+      }
+    }
+    if(!bgImg && youtubeId){
+      try{
+        // Aynı-origin API kullanılırsa canvas'a güvenli biçimde çizilebilir.
+        bgImg=await new Promise((resolve,reject)=>{
+          const im=new Image();
+          im.onload=()=>resolve(im);
+          im.onerror=reject;
+          im.src=`/api/ytThumb?vid=${youtubeId}`;
+        });
+      }catch{
+        // API yoksa doğrudan YouTube küçük resmi denenir; canvas CORS izin
+        // vermiyorsa aşağıdaki gradient yedeği kullanılır.
+        try{
+          bgImg=await new Promise((resolve,reject)=>{
+            const im=new Image();
+            im.crossOrigin='anonymous';
+            im.onload=()=>resolve(im);
+            im.onerror=reject;
+            im.src=`https://img.youtube.com/vi/${youtubeId}/hqdefault.jpg`;
+          });
+        }catch{ bgImg=null; }
       }
     }
 
@@ -841,7 +872,9 @@ async function siiriVideoOlarakKaydet(post){
     }
 
     frame(0);
-    durum.textContent=`✅ Ses hazır · ${Math.round(duration)} saniye`;
+    durum.textContent=hasAudio
+      ? `✅ Ses hazır · ${Math.round(duration)} saniye`
+      : '✅ Ses yok · 20 saniyelik sessiz video hazır';
     kaydetBtn.disabled=false;
 
     kaydetBtn.onclick=async()=>{
@@ -851,15 +884,20 @@ async function siiriVideoOlarakKaydet(post){
       progText.textContent='0%';
 
       const canvasStream=hiddenCanvas.captureStream(30);
-      const dest=audioCtx.createMediaStreamDestination();
-      audioSource=audioCtx.createBufferSource();
-      audioSource.buffer=decoded;
-      audioSource.connect(dest);
-      audioSource.connect(audioCtx.destination);
-      stream=new MediaStream([
-        ...canvasStream.getVideoTracks(),
-        ...dest.stream.getAudioTracks()
-      ]);
+      if(hasAudio){
+        const dest=audioCtx.createMediaStreamDestination();
+        audioSource=audioCtx.createBufferSource();
+        audioSource.buffer=decoded;
+        audioSource.connect(dest);
+        audioSource.connect(audioCtx.destination);
+        stream=new MediaStream([
+          ...canvasStream.getVideoTracks(),
+          ...dest.stream.getAudioTracks()
+        ]);
+      }else{
+        // Ses yoksa yalnızca görüntü kaydı yapılır: tam 20 saniye.
+        stream=new MediaStream([...canvasStream.getVideoTracks()]);
+      }
 
       // Önce tarayıcının doğrudan MP4 kaydını dene. Desteklenmiyorsa
       // WebM ara dosyası oluşturup hemen ardından FFmpeg ile MP4'e çeviriyoruz.
@@ -887,8 +925,10 @@ async function siiriVideoOlarakKaydet(post){
         mediaRecorder.onerror=e=>reject(e.error||new Error('Video kaydı başarısız.'));
       });
 
-      await audioCtx.resume();
-      audioSource.start(0);
+      if(hasAudio){
+        await audioCtx.resume();
+        audioSource.start(0);
+      }
       mediaRecorder.start(250);
 
       const start=performance.now();
@@ -903,14 +943,14 @@ async function siiriVideoOlarakKaydet(post){
       animId=requestAnimationFrame(animate);
 
       setTimeout(()=>{
-        try{audioSource.stop();}catch{}
+        if(hasAudio){try{audioSource.stop();}catch{}}
         try{mediaRecorder.stop();}catch{}
       },Math.ceil(duration*1000)+250);
 
       await bitti;
       running=false;
       stream.getTracks().forEach(t=>t.stop());
-      audioSource.disconnect();
+      if(hasAudio){try{audioSource.disconnect();}catch{}}
       const recordedBlob=new Blob(chunks,{type:mime});
       if(!recordedBlob.size) throw new Error('Boş video oluştu.');
 
