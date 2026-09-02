@@ -2307,6 +2307,27 @@ async function adminSesiYenile(post){
   return data;
 }
 
+// Seslendirmeyi/müziği paylaşımdan kaldırır (dosyayı Blob'dan silmez, sadece
+// post.audioUrl / post.musicUrl alanını temizler). Yetki: admin HER paylaşımdan,
+// normal kullanıcı SADECE kendi paylaşımından kaldırabilir.
+function sesMuzikKaldirmaYetkisiVarMi(post){
+  if(!S.me) return false;
+  if(S.me.username===ADMIN_USERNAME) return true;
+  return post.authorId===S.me.id;
+}
+async function postSesiKaldir(post){
+  if(!sesMuzikKaldirmaYetkisiVarMi(post)) throw new Error('Bu işlem için yetkiniz yok.');
+  await db.collection('posts').doc(post.id).update({ audioUrl: null });
+  const idx=S.posts.findIndex(p=>p.id===post.id);
+  if(idx>-1){ S.posts[idx].audioUrl=null; save(); }
+}
+async function postMuzigiKaldir(post){
+  if(!sesMuzikKaldirmaYetkisiVarMi(post)) throw new Error('Bu işlem için yetkiniz yok.');
+  await db.collection('posts').doc(post.id).update({ musicUrl: null });
+  const idx=S.posts.findIndex(p=>p.id===post.id);
+  if(idx>-1){ S.posts[idx].musicUrl=null; save(); }
+}
+
 // Şiirin duygusuna göre uygun bir ElevenLabs sesi + okuma tonu seçtirir.
 // Görsel oluşturmadaki aiGorselPromptuGroqlaOlustur ile AYNI mantık: Groq'a
 // sadece SEÇİM yaptırıyoruz (sabit bir ses listesinden), gerçek ses üretimi
@@ -2386,6 +2407,24 @@ function sesOynaticiOlustur(audioUrl,opts={}){
   wrap.appendChild(stopBtn);
   wrap.appendChild(volIcon);
   wrap.appendChild(volSlider);
+  // opts.onDelete verilirse (yetki varsa) sona bir 🗑️ kaldırma tuşu eklenir.
+  if(typeof opts.onDelete==='function'){
+    const delBtn=h('button',{class:'btn',title:'Kaldır',style:{background:'#2a0f14',border:'1px solid #7f1d1d',borderRadius:'50%',width:'28px',height:'28px',display:'flex',alignItems:'center',justifyContent:'center',color:'#fca5a5',fontSize:'.75rem',flexShrink:'0',padding:'0',lineHeight:'1'},
+      onclick:async(e)=>{
+        e.stopPropagation();
+        if(!confirm(`${etiketMetni} kaldırılsın mı? Bu işlem geri alınamaz.`)) return;
+        delBtn.disabled=true; delBtn.textContent='⏳';
+        try{
+          audio.pause(); audio.currentTime=0;
+          await opts.onDelete();
+        }catch(err){
+          alert('Kaldırılamadı: '+err.message);
+          delBtn.disabled=false; delBtn.textContent='🗑️';
+        }
+      }
+    },'🗑️');
+    wrap.appendChild(delBtn);
+  }
   return { el:wrap, audio };
 }
 // Otomatik bulunmuş bir GIF'in (post.autoGif) üzerine, varsa post.gifCaption metnini
@@ -2475,7 +2514,11 @@ A.addPost = async function(pd){
     db.collection("posts").doc(np.id).set(np).catch(err=>console.error("Kaydetme hatası:",err));
     facebookOnizlemeyiTazele(np.id);
     otomatikGifUygulaGerekirse(np.id, np.title, np.text, np.image, np.youtube);
-    otomatikSesUygulaGerekirse(np.id, np.title, np.text);
+    // Kullanıcı "🎙️ Ses Ekle" ile kendi ses linkini zaten girdiyse, otomatik
+    // TTS onun üzerine yazmasın diye ATLANIR.
+    if(!np.audioUrl){
+      otomatikSesUygulaGerekirse(np.id, np.title, np.text);
+    }
 
     // Takipçilere yeni paylaşım bildirimi gönder
     const takipciler = Object.keys(S.follows).filter(uid => (S.follows[uid]||[]).includes(S.me.id));
@@ -3681,15 +3724,23 @@ function postCard(post, forceExpand=false, autoOpenComments=false, hedefYorumId=
 
   // Sesli okuma (varsa) — NORMAL MODDA otomatik başlamaz, kullanıcı ▶️ ile
   // kendi başlatır (kapanınca/panel kapatılınca yine de durdurulur).
+  // Kaldırma (🗑️) tuşu: admin HER paylaşımda, normal kullanıcı SADECE
+  // kendi paylaşımında görür.
+  const sesMuzikKaldirYetkisi = isOwn || isAdmin;
   let sesOynatici=null;
   if(post.audioUrl){
-    sesOynatici=sesOynaticiOlustur(post.audioUrl);
+    sesOynatici=sesOynaticiOlustur(post.audioUrl, sesMuzikKaldirYetkisi ? {
+      onDelete: async()=>{ await postSesiKaldir(post); refreshCard(post.id); }
+    } : {});
     full.appendChild(sesOynatici.el);
   }
   // AI müzik (varsa) — enstrümantal tema müziği, otomatik BAŞLAMAZ (sesli
   // okumayla çakışmaması için kullanıcı kendi başlatır).
   if(post.musicUrl){
-    const muzikOynatici=sesOynaticiOlustur(post.musicUrl,{label:'🎵 Müzik',gradient:'linear-gradient(135deg,#4d7c0f,#84cc16)'});
+    const muzikOynatici=sesOynaticiOlustur(post.musicUrl, Object.assign(
+      {label:'🎵 Müzik',gradient:'linear-gradient(135deg,#4d7c0f,#84cc16)'},
+      sesMuzikKaldirYetkisi ? { onDelete: async()=>{ await postMuzigiKaldir(post); refreshCard(post.id); } } : {}
+    ));
     full.appendChild(muzikOynatici.el);
   }
 
@@ -4061,6 +4112,10 @@ function composeModal(onClose, existingPost=null){
     fi.value='';
   }},'🗑️ Resmi Kaldır');
   const yti=inp('YouTube linki yapıştır...');yti.style.display=showYt?'block':'none';yti.value=ytUrl;yti.oninput=e=>ytUrl=e.target.value;
+  let audioUrl=existingPost?.audioUrl||'';
+  let showSes=!!existingPost?.audioUrl;
+  const sesi=inp('Ses/seslendirme linki yapıştır (mp3, wav...)...');sesi.style.display=showSes?'block':'none';sesi.value=audioUrl;sesi.oninput=e=>audioUrl=e.target.value;
+  const sesBtn=h('button',{class:'btn',style:{background:showSes?'#3d1f6e':'transparent',color:'#c4b5fd',padding:'7px 14px',borderRadius:'20px',border:'1px solid #6d28d9',fontSize:'.83rem'},onclick:()=>{showSes=!showSes;sesi.style.display=showSes?'block':'none';sesBtn.style.background=showSes?'#3d1f6e':'transparent';}},'🎙️ Ses Ekle');
   const ti=inp('Şiirin başlığı...');ti.style.border='1px solid #5b21b6';ti.style.fontFamily="'Playfair Display',serif";ti.value=title;ti.oninput=e=>title=e.target.value;
   const ta=h('textarea',{placeholder:'Şiirini buraya yaz... Yapay zeka anında değerlendirecek! 🤖',class:'inp',rows:'5',style:{resize:'none',lineHeight:'1.8'}});ta.value=text;ta.oninput=e=>text=e.target.value;
   const ytBtn=h('button',{class:'btn',style:{background:showYt?'#3d1f6e':'transparent',color:'#a78bfa',padding:'7px 14px',borderRadius:'20px',border:'1px solid #3d1f6e',fontSize:'.83rem'},onclick:()=>{showYt=!showYt;yti.style.display=showYt?'block':'none';ytBtn.style.background=showYt?'#3d1f6e':'transparent';}},'▶ YouTube');
@@ -4071,21 +4126,22 @@ function composeModal(onClose, existingPost=null){
     h('div',{style:{display:'flex',gap:'12px'}},[
       av(S.me,40),
       h('div',{style:{flex:'1',display:'flex',flexDirection:'column',gap:'10px'}},[
-        ti,ta,prev,resimDurum,yti,fi,
+        ti,ta,prev,resimDurum,yti,sesi,fi,
         h('div',{style:{display:'flex',gap:'8px',flexWrap:'wrap',alignItems:'center'}},[
           h('button',{class:'btn',style:{background:'transparent',color:'#a78bfa',padding:'7px 14px',borderRadius:'20px',border:'1px solid #3d1f6e',fontSize:'.83rem'},onclick:()=>fi.click()},duzenlemeModu?'🖼️ Yeni Resim Ekle':'🖼️ Resim'),
           kaldirBtn,
           ytBtn,
+          sesBtn,
           h('button',{class:'pb btn',style:{marginLeft:'auto'},onclick:async(e)=>{
             if(!text.trim()&&!ytUrl&&!image)return;
             const btn=e.target;
             if(duzenlemeModu){
               btn.disabled=true;btn.textContent='⏳ Kaydediliyor...';
-              A.editPost(existingPost.id,{title,text,youtube:ytUrl||null,image});
+              A.editPost(existingPost.id,{title,text,youtube:ytUrl||null,image,audioUrl:audioUrl.trim()||null});
               onClose();
             } else {
               btn.disabled=true;btn.textContent='⏳ AI değerlendiriyor...';
-              await A.addPost({title,text,youtube:ytUrl||null,image});
+              await A.addPost({title,text,youtube:ytUrl||null,image,audioUrl:audioUrl.trim()||null});
               btn.disabled=false;btn.textContent='Paylaş';
               onClose();
             }
@@ -4503,6 +4559,7 @@ function swipeCard(post,sonrakineGec){
   const vid=ytId(post.youtube);
   const avg=calcAvg(post.userRatings,post.aiScore);
   const isOwn=post.authorId===S.me?.id;
+  const isAdmin=S.me?.username===ADMIN_USERNAME;
   const myR=post.userRatings?.[S.me?.id]??null;
 
   const card=h('div',{class:'swipe-card fade'});
@@ -4540,13 +4597,19 @@ function swipeCard(post,sonrakineGec){
   // SwipeMode bu şiir ekrana gelince card._sesAudio VE card._muzikAudio'yu
   // BİRLİKTE otomatik oynatır, sıradaki/önceki şiire geçilince ikisini de durdurur.
   if(!vid){
+    const sesMuzikKaldirYetkisi = isOwn || isAdmin;
     if(post.audioUrl){
-      const sesOynatici=sesOynaticiOlustur(post.audioUrl);
+      const sesOynatici=sesOynaticiOlustur(post.audioUrl, sesMuzikKaldirYetkisi ? {
+        onDelete: async()=>{ await postSesiKaldir(post); sesOynatici.el.remove(); card._sesAudio=null; }
+      } : {});
       scroller.appendChild(sesOynatici.el);
       card._sesAudio=sesOynatici.audio;
     }
     if(post.musicUrl){
-      const muzikOynatici=sesOynaticiOlustur(post.musicUrl,{label:'🎵 Müzik',gradient:'linear-gradient(135deg,#4d7c0f,#84cc16)'});
+      const muzikOynatici=sesOynaticiOlustur(post.musicUrl, Object.assign(
+        {label:'🎵 Müzik',gradient:'linear-gradient(135deg,#4d7c0f,#84cc16)'},
+        sesMuzikKaldirYetkisi ? { onDelete: async()=>{ await postMuzigiKaldir(post); muzikOynatici.el.remove(); card._muzikAudio=null; } } : {}
+      ));
       scroller.appendChild(muzikOynatici.el);
       card._muzikAudio=muzikOynatici.audio;
     }
