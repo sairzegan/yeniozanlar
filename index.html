@@ -4114,19 +4114,90 @@ function composeModal(onClose, existingPost=null){
   const yti=inp('YouTube linki yapıştır...');yti.style.display=showYt?'block':'none';yti.value=ytUrl;yti.oninput=e=>ytUrl=e.target.value;
   let audioUrl=existingPost?.audioUrl||'';
   let showSes=!!existingPost?.audioUrl;
-  const sesi=inp('Ses/seslendirme linki yapıştır (mp3, wav...)...');sesi.style.display=showSes?'block':'none';sesi.value=audioUrl;sesi.oninput=e=>audioUrl=e.target.value;
-  const sesBtn=h('button',{class:'btn',style:{background:showSes?'#3d1f6e':'transparent',color:'#c4b5fd',padding:'7px 14px',borderRadius:'20px',border:'1px solid #6d28d9',fontSize:'.83rem'},onclick:()=>{showSes=!showSes;sesi.style.display=showSes?'block':'none';sesBtn.style.background=showSes?'#3d1f6e':'transparent';}},'🎙️ Ses Ekle');
+  const sesi=inp('Ses/seslendirme linki yapıştır (mp3, wav...)...');sesi.value=audioUrl;sesi.oninput=e=>audioUrl=e.target.value;
+  const sesDurum=h('p',{style:{fontSize:'.72rem',color:'#a78bfa',margin:'2px 0'},});sesDurum.style.display=audioUrl?'block':'none';sesDurum.textContent=audioUrl?'🎙️ Ses bağlı':'';
+  const sesPreview=h('audio',{controls:true,style:{width:'100%',display:audioUrl?'block':'none',height:'32px'},src:audioUrl||''});
+  function sesUrlGuncelle(yeniUrl,mesaj){
+    audioUrl=yeniUrl; sesi.value=yeniUrl;
+    sesPreview.src=yeniUrl; sesPreview.style.display=yeniUrl?'block':'none';
+    sesDurum.textContent=mesaj||(yeniUrl?'🎙️ Ses bağlı':''); sesDurum.style.display=mesaj||yeniUrl?'block':'none';
+  }
+  // Bir File/Blob'u base64'e çevirip /api/audioUpload'a yükler, dönen URL'yi uygular.
+  async function sesDosyasiniYukle(blob,mimeType){
+    sesUrlGuncelle(audioUrl,'⏳ Ses yükleniyor...');
+    try{
+      const base64Data=await new Promise((resolve,reject)=>{
+        const r=new FileReader();
+        r.onload=()=>resolve(r.result);
+        r.onerror=()=>reject(new Error('Dosya okunamadı.'));
+        r.readAsDataURL(blob);
+      });
+      const res=await fetch('/api/audioUpload',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({base64Data,mimeType:mimeType||blob.type||'audio/mpeg',ownerId:S.me?.id||'kullanici'})
+      });
+      if(!res.ok){ let detay=''; try{const j=await res.json();detay=j?.error||'';}catch{} throw new Error(detay||('HTTP '+res.status)); }
+      const data=await res.json();
+      if(!data?.audioUrl) throw new Error('Ses linki dönmedi.');
+      sesUrlGuncelle(data.audioUrl,'✅ Ses yüklendi');
+    }catch(err){
+      sesUrlGuncelle(audioUrl,'❌ Yükleme hatası: '+err.message);
+    }
+  }
+  // Bilgisayardan gerçek mp3/wav/m4a dosyası seçme
+  const sesFi=h('input',{type:'file',accept:'audio/*',style:{display:'none'}});
+  sesFi.onchange=e=>{ const f=e.target.files[0]; if(f) sesDosyasiniYukle(f,f.type); sesFi.value=''; };
+  const sesYukleBtn=h('button',{class:'btn',style:{background:'transparent',color:'#c4b5fd',padding:'6px 12px',borderRadius:'20px',border:'1px solid #6d28d9',fontSize:'.78rem'},onclick:()=>sesFi.click()},'📁 MP3/Ses Dosyası Yükle');
+  // Mikrofonla kendi seslendirmesini kaydetme
+  let mediaRecorder=null, kayitParcalari=[], kayitStream=null, kayitBaslangic=0, kayitTimer=null;
+  const kayitBtn=h('button',{class:'btn',style:{background:'transparent',color:'#fca5a5',padding:'6px 12px',borderRadius:'20px',border:'1px solid #7f1d1d',fontSize:'.78rem'}},'🎤 Kendi Sesini Kaydet');
+  function kayitDurdur(){
+    if(mediaRecorder && mediaRecorder.state!=='inactive') mediaRecorder.stop();
+    if(kayitStream) kayitStream.getTracks().forEach(t=>t.stop());
+    if(kayitTimer) clearInterval(kayitTimer);
+    kayitBtn.textContent='🎤 Kendi Sesini Kaydet';
+    kayitBtn.style.background='transparent';
+  }
+  kayitBtn.onclick=async()=>{
+    if(mediaRecorder && mediaRecorder.state==='recording'){ kayitDurdur(); return; }
+    if(!navigator.mediaDevices?.getUserMedia){ alert('Tarayıcınız mikrofon kaydını desteklemiyor.'); return; }
+    try{
+      kayitStream=await navigator.mediaDevices.getUserMedia({audio:true});
+      kayitParcalari=[];
+      mediaRecorder=new MediaRecorder(kayitStream);
+      mediaRecorder.ondataavailable=e=>{ if(e.data.size>0) kayitParcalari.push(e.data); };
+      mediaRecorder.onstop=()=>{
+        const blob=new Blob(kayitParcalari,{type:mediaRecorder.mimeType||'audio/webm'});
+        sesDosyasiniYukle(blob, blob.type);
+      };
+      mediaRecorder.start();
+      kayitBaslangic=Date.now();
+      kayitBtn.style.background='#7f1d1d';
+      kayitTimer=setInterval(()=>{
+        const sn=Math.floor((Date.now()-kayitBaslangic)/1000);
+        kayitBtn.textContent=`⏹️ Durdur (${sn}sn)`;
+        if(sn>=300) kayitDurdur(); // güvenlik: 5 dakikada otomatik durdur
+      },500);
+    }catch(err){
+      alert('Mikrofona erişilemedi: '+err.message+'\n(Tarayıcı izin istemiş olabilir, izin verin ve tekrar deneyin.)');
+    }
+  };
+  const sesLinkPanel=h('div',{style:{display:'flex',flexDirection:'column',gap:'6px'}},[sesi,sesPreview,sesDurum,h('div',{style:{display:'flex',gap:'6px',flexWrap:'wrap'}},[sesYukleBtn,kayitBtn,sesFi])]);
+  sesLinkPanel.style.display=showSes?'flex':'none';
+  const sesBtn=h('button',{class:'btn',style:{background:showSes?'#3d1f6e':'transparent',color:'#c4b5fd',padding:'7px 14px',borderRadius:'20px',border:'1px solid #6d28d9',fontSize:'.83rem'},onclick:()=>{showSes=!showSes;sesLinkPanel.style.display=showSes?'flex':'none';sesBtn.style.background=showSes?'#3d1f6e':'transparent'; if(!showSes) kayitDurdur();}},'🎙️ Ses Ekle');
   const ti=inp('Şiirin başlığı...');ti.style.border='1px solid #5b21b6';ti.style.fontFamily="'Playfair Display',serif";ti.value=title;ti.oninput=e=>title=e.target.value;
   const ta=h('textarea',{placeholder:'Şiirini buraya yaz... Yapay zeka anında değerlendirecek! 🤖',class:'inp',rows:'5',style:{resize:'none',lineHeight:'1.8'}});ta.value=text;ta.oninput=e=>text=e.target.value;
   const ytBtn=h('button',{class:'btn',style:{background:showYt?'#3d1f6e':'transparent',color:'#a78bfa',padding:'7px 14px',borderRadius:'20px',border:'1px solid #3d1f6e',fontSize:'.83rem'},onclick:()=>{showYt=!showYt;yti.style.display=showYt?'block':'none';ytBtn.style.background=showYt?'#3d1f6e':'transparent';}},'▶ YouTube');
   const bg=h('div',{class:'modal-bg'});
-  bg.onclick=e=>{if(e.target===bg)onClose();};
+  const kapatVeTemizle=()=>{ kayitDurdur(); onClose(); };
+  bg.onclick=e=>{if(e.target===bg)kapatVeTemizle();};
   bg.appendChild(h('div',{class:'modal'},[
-    h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'18px'}},[h('h3',{style:{fontFamily:"'Playfair Display',serif",color:'#e9d5ff',fontSize:'1.15rem'}},duzenlemeModu?'✏️ Şiiri Düzenle':'🪶 Yeni Şiir Ekle'),h('button',{class:'btn',style:{background:'none',color:'#6b5b8a',fontSize:'1.4rem'},onclick:onClose},'✕')]),
+    h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'18px'}},[h('h3',{style:{fontFamily:"'Playfair Display',serif",color:'#e9d5ff',fontSize:'1.15rem'}},duzenlemeModu?'✏️ Şiiri Düzenle':'🪶 Yeni Şiir Ekle'),h('button',{class:'btn',style:{background:'none',color:'#6b5b8a',fontSize:'1.4rem'},onclick:kapatVeTemizle},'✕')]),
     h('div',{style:{display:'flex',gap:'12px'}},[
       av(S.me,40),
       h('div',{style:{flex:'1',display:'flex',flexDirection:'column',gap:'10px'}},[
-        ti,ta,prev,resimDurum,yti,sesi,fi,
+        ti,ta,prev,resimDurum,yti,sesLinkPanel,fi,
         h('div',{style:{display:'flex',gap:'8px',flexWrap:'wrap',alignItems:'center'}},[
           h('button',{class:'btn',style:{background:'transparent',color:'#a78bfa',padding:'7px 14px',borderRadius:'20px',border:'1px solid #3d1f6e',fontSize:'.83rem'},onclick:()=>fi.click()},duzenlemeModu?'🖼️ Yeni Resim Ekle':'🖼️ Resim'),
           kaldirBtn,
@@ -4134,6 +4205,7 @@ function composeModal(onClose, existingPost=null){
           sesBtn,
           h('button',{class:'pb btn',style:{marginLeft:'auto'},onclick:async(e)=>{
             if(!text.trim()&&!ytUrl&&!image)return;
+            kayitDurdur();
             const btn=e.target;
             if(duzenlemeModu){
               btn.disabled=true;btn.textContent='⏳ Kaydediliyor...';
