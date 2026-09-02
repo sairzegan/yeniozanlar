@@ -24,18 +24,38 @@
 // durumda birkaç saniye sonra tekrar denemek genelde çalışır.
 
 import { put } from "@vercel/blob";
-import { InferenceClient } from "@huggingface/inference";
+import { Client } from "@gradio/client";
 
-const MODEL = "facebook/musicgen-small";
+// ═══════════════════════════════════════════════════════════════════════
+// ÖNEMLİ / DÜZELTME GEÇMİŞİ:
+// İlk sürüm, Hugging Face "Inference Providers" (router.huggingface.co)
+// üzerinden facebook/musicgen-small'ı çağırıyordu. Bu, ŞU AN çalışmıyor —
+// Hugging Face, MusicGen'i (ve genel olarak text-to-music modellerini)
+// Inference Providers ağından tamamen KALDIRDI. Model sayfasında artık
+// "This model isn't deployed by any Inference Provider" yazıyor. Bu bir
+// prompt/parametre hatası DEĞİL, kaldırılmış bir özellik.
+//
+// ÇÖZÜM (en iyi çaba / best-effort): Hugging Face'in kendi herkese açık
+// demo sayfasını (huggingface.co/spaces/facebook/MusicGen) bir "Gradio
+// API"si gibi çağırıyoruz. Bu resmi/dokümante edilmiş, garantili bir API
+// DEĞİLDİR — paylaşımlı ücretsiz GPU (ZeroGPU) kotasına dayanır:
+//   • Yoğun saatlerde kuyrukta bekleyebilir veya zaman aşımına uğrayabilir.
+//   • Hugging Face bu demo sayfasını haber vermeden değiştirebilir/kaldırabilir.
+//   • Sadece ~15 saniyelik, ENSTRÜMANTAL (sözsüz) bir klip üretir.
+// Buna karşılık tamamen ücretsizdir ve zaten var olan HUGGINGFACE_API_TOKEN
+// ile (varsa) daha öncelikli kotadan çalışır; token yoksa anonim/misafir
+// kotasıyla dener.
+//
+// Vercel Environment (package.json) bağımlılığı — YENİ, eklenmesi gerekiyor:
+// "@gradio/client"
+// ═══════════════════════════════════════════════════════════════════════
+
+const SPACE = "facebook/MusicGen";
 const TIMEOUT_MS = 55000;
-// ~50 audio token/saniye üretir; 500 token ≈ 10 saniyelik bir tema.
-// Ücretsiz/serverless CPU zaman aşımına takılmamak için kısa tutuluyor.
-const MAX_NEW_TOKENS = 500;
 
 function buildPrompt(customPrompt, title) {
   const custom = String(customPrompt || "").trim();
-  if (custom) return custom.slice(0, 400);
-  // Groq prompt üretemezse (veya çağrılmadıysa) kullanılacak genel yedek.
+  if (custom) return custom.slice(0, 300);
   const heading = String(title || "").trim().slice(0, 120);
   return [
     "Instrumental cinematic theme music, no vocals, no singing, no lyrics, no words.",
@@ -44,19 +64,16 @@ function buildPrompt(customPrompt, title) {
   ].filter(Boolean).join(" ");
 }
 
+function zamanAsimi(ms) {
+  return new Promise((_, reject) => setTimeout(() => reject(new Error("TIMEOUT")), ms));
+}
+
 export const maxDuration = 60;
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     res.setHeader("Allow", "POST");
     return res.status(405).json({ error: "Sadece POST." });
-  }
-
-  const token = String(process.env.HUGGINGFACE_API_TOKEN || "").trim();
-  if (!token) {
-    return res.status(500).json({
-      error: "HUGGINGFACE_API_TOKEN Vercel Environment Variables içinde bulunamadı."
-    });
   }
   if (!process.env.BLOB_STORE_ID) {
     return res.status(500).json({ error: "BLOB_STORE_ID tanımlı değil (Blob deposu projeye bağlı mı?)." });
@@ -69,43 +86,38 @@ export default async function handler(req, res) {
   }
 
   const prompt = buildPrompt(musicPrompt, title);
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  // HF token varsa (huggingface-image.js ile paylaşılan) öncelikli kota için kullanılır.
+  const hfToken = String(process.env.HUGGINGFACE_API_TOKEN || "").trim() || undefined;
 
   try {
-    const client = new InferenceClient(token);
+    const client = await Promise.race([
+      Client.connect(SPACE, hfToken ? { hf_token: hfToken } : {}),
+      zamanAsimi(TIMEOUT_MS)
+    ]);
 
-    // provider: "hf-inference" — MusicGen'i sunan tek genel/ücretsiz
-    // sağlayıcı budur (görsellerdeki gibi fal-ai/replicate zinciri yok).
-    const blob = await client.textToSpeech(
-      {
-        model: MODEL,
-        inputs: prompt,
-        provider: "hf-inference",
-        parameters: { max_new_tokens: MAX_NEW_TOKENS }
-      },
-      { signal: controller.signal }
-    );
+    // Arayüz: [1] "Describe your music" (metin), [2] "Condition on a melody" (ses, opsiyonel).
+    const result = await Promise.race([
+      client.predict("/predict", [prompt, null]),
+      zamanAsimi(TIMEOUT_MS)
+    ]);
 
-    clearTimeout(timer);
-
-    if (!blob || typeof blob.arrayBuffer !== "function") {
-      return res.status(502).json({ error: "Hugging Face (MusicGen) beklenmeyen bir cevap döndürdü." });
+    const cikti = Array.isArray(result?.data) ? result.data[0] : null;
+    const kaynakUrl = cikti?.url || cikti?.path || (typeof cikti === "string" ? cikti : null);
+    if (!kaynakUrl) {
+      throw new Error("MusicGen demo'sundan geçerli bir ses dosyası alınamadı (boş/beklenmeyen çıktı).");
     }
 
-    const buffer = Buffer.from(await blob.arrayBuffer());
-    if (!buffer.length) {
-      return res.status(502).json({ error: "Hugging Face (MusicGen) boş ses verisi döndürdü." });
-    }
+    const kaynakYaniti = await fetch(kaynakUrl.startsWith("http") ? kaynakUrl : `https://facebook-musicgen.hf.space/file=${kaynakUrl}`);
+    if (!kaynakYaniti.ok) throw new Error(`Üretilen ses dosyası indirilemedi (HTTP ${kaynakYaniti.status}).`);
+    const buffer = Buffer.from(await kaynakYaniti.arrayBuffer());
+    if (!buffer.length) throw new Error("Üretilen ses dosyası boş.");
 
-    // MusicGen çıktısı genelde WAV'dır; sağlayıcı başka bir audio/* tipi
-    // dönerse (ör. mpeg) onu kullan, aksi halde wav varsay.
-    const contentType = blob.type && blob.type.startsWith("audio/") ? blob.type : "audio/wav";
+    const contentType = (kaynakYaniti.headers.get("content-type") || "audio/wav").split(";")[0];
     const ext = contentType.includes("wav") ? "wav" : (contentType.includes("mpeg") ? "mp3" : "wav");
 
     const uploaded = await put(`music/${cleanPostId}.${ext}`, buffer, {
       access: "public",
-      contentType,
+      contentType: contentType.startsWith("audio/") ? contentType : "audio/wav",
       addRandomSuffix: false,
       allowOverwrite: true,
       cacheControlMaxAge: 31536000
@@ -113,11 +125,10 @@ export default async function handler(req, res) {
 
     return res.status(200).json({ musicUrl: uploaded.url, prompt });
   } catch (e) {
-    clearTimeout(timer);
     const msg =
-      e?.name === "AbortError"
-        ? "Müzik isteği zaman aşımına uğradı (model 'ısınıyor' olabilir, birazdan tekrar deneyin)."
-        : String(e?.message || e).slice(0, 300);
+      e?.message === "TIMEOUT"
+        ? "Müzik demo'su (facebook/MusicGen) meşgul/kuyrukta — zaman aşımına uğradı. Birkaç dakika sonra tekrar deneyin."
+        : `Hugging Face MusicGen demo'su şu an kullanılamıyor: ${String(e?.message || e).slice(0, 250)}`;
     console.error("musicGenerate HATASI:", e);
     return res.status(502).json({ error: msg });
   }
