@@ -97,6 +97,11 @@
     .comment-suggestions{display:flex;gap:6px;flex-wrap:wrap;margin-top:7px}
     .comment-suggestion{background:linear-gradient(135deg,#1a0f2e,#241040);border:1px solid #4c1d95;color:#ddd6fe;border-radius:10px;padding:7px 9px;font-size:.72rem;cursor:pointer;text-align:left}
     .comment-suggestion:hover{border-color:#a855f7}
+
+    .video-save-btn{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;background:linear-gradient(135deg,#0891b2,#0e7490,#7c3aed);border:none;border-radius:12px;padding:11px;color:#fff;font-size:.88rem;font-weight:700;margin-bottom:14px;cursor:pointer}
+    .video-save-btn:disabled{opacity:.65;cursor:wait}
+    .video-progress{height:7px;background:#0f0a1a;border:1px solid #3d1f6e;border-radius:99px;overflow:hidden;margin:10px 0 6px}
+    .video-progress>div{height:100%;width:0;background:linear-gradient(90deg,#06b6d4,#8b5cf6);transition:width .12s linear}
   </style>
 
 </head>
@@ -614,6 +619,264 @@ async function igHikayeCanvasOlustur(post, author){
 // canvas'ı arka planda oluşturur, sabit genişlikte bir önizleme gösterir ve
 // kullanıcının önizlemeyi sürükleyerek (veya kaydırıcıyla) ne kadarının dahil
 // edileceğini seçmesini sağlar.
+
+// ═══════════════════════ ŞİİRİ VİDEO OLARAK KAYDET ═══════════════════════
+// Kaydırma modundaki okuma hissini taklit eder: 9:16 canvas + şiir görseli
+// arka plan + şiir metni + ses. Video süresi doğrudan audioUrl'un süresidir.
+// Tarayıcıların yerleşik MediaRecorder'ı nedeniyle çıktı WebM'dir.
+async function siiriVideoOlarakKaydet(post){
+  const audioUrl = post?.audioUrl || post?.musicUrl;
+  if(!audioUrl){
+    toastGoster('🎙️ Bu şiirde kaydedilecek ses dosyası yok.');
+    return;
+  }
+
+  const author=byId(post.authorId);
+  const bg=h('div',{class:'modal-bg'});
+  const kapat=()=>{ try{cancelAnimationFrame(animId);}catch{}; bg.remove(); };
+  bg.onclick=e=>{if(e.target===bg)kapat();};
+
+  const modal=h('div',{class:'modal',style:{maxWidth:'420px'}});
+  const baslik=h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'8px'}},[
+    h('h3',{style:{fontFamily:"'Playfair Display',serif",color:'#e9d5ff',fontSize:'1.05rem'}},'🎬 Video Olarak Kaydet'),
+    h('button',{class:'btn',style:{background:'none',color:'#6b5b8a',fontSize:'1.4rem'},onclick:kapat},'✕')
+  ]);
+  modal.appendChild(baslik);
+  const bilgi=h('p',{style:{color:'#a78bfa',fontSize:'.76rem',lineHeight:'1.45',marginBottom:'10px'}},
+    'Şiirin resmi arka plan olur; yazılar kaydırma modundaki gibi akar. Video, ses dosyasının tamamı kadar sürer.');
+  modal.appendChild(bilgi);
+
+  const preview=h('canvas',{width:'540',height:'960',style:{width:'270px',height:'480px',display:'block',margin:'8px auto',borderRadius:'14px',background:'#0a0718',border:'1px solid #3d1f6e'}});
+  modal.appendChild(preview);
+  const durum=h('p',{style:{textAlign:'center',color:'#a78bfa',fontSize:'.78rem',margin:'8px 0'}},'⏳ Ses ve görsel hazırlanıyor...');
+  modal.appendChild(durum);
+  const prog=h('div',{class:'video-progress'},[h('div')]);
+  modal.appendChild(prog);
+  const progText=h('p',{style:{textAlign:'center',color:'#6b5b8a',fontSize:'.68rem',marginBottom:'10px'}},'');
+  modal.appendChild(progText);
+  const btnRow=h('div',{style:{display:'flex',gap:'8px'}});
+  const kaydetBtn=h('button',{class:'pb btn',style:{flex:'1'},disabled:true},'🎬 Videoyu Oluştur');
+  const iptalBtn=h('button',{class:'btn',style:{flex:'0 0 90px',background:'transparent',color:'#a78bfa',border:'1px solid #3d1f6e',borderRadius:'10px',padding:'10px'},onclick:kapat},'Kapat');
+  btnRow.appendChild(kaydetBtn); btnRow.appendChild(iptalBtn); modal.appendChild(btnRow);
+  bg.appendChild(modal);
+  document.body.appendChild(bg);
+
+  let animId=0, mediaRecorder=null, chunks=[], audioCtx=null, audioSource=null, stream=null;
+  let running=false;
+
+  try{
+    await igFontlariHazirla();
+
+    // Ses dosyasını indirip AudioBuffer'a çeviriyoruz. Böylece kayıt, sesin
+    // tam uzunluğu kadar sürer ve MediaRecorder'a Web Audio üzerinden aktarılır.
+    durum.textContent='⏳ Ses dosyası yükleniyor...';
+    const audioRes=await fetch(audioUrl,{mode:'cors',cache:'no-store'});
+    if(!audioRes.ok) throw new Error('Ses dosyasına erişilemedi (HTTP '+audioRes.status+').');
+    const audioBuf=await audioRes.arrayBuffer();
+
+    audioCtx=new (window.AudioContext||window.webkitAudioContext)();
+    const decoded=await audioCtx.decodeAudioData(audioBuf.slice(0));
+    const duration=Math.max(1,decoded.duration);
+
+    const W=1080,H=1920;
+    const ctx=preview.getContext('2d');
+    const hiddenCanvas=document.createElement('canvas');
+    hiddenCanvas.width=W; hiddenCanvas.height=H;
+    const c=hiddenCanvas.getContext('2d');
+
+    // Arka plan resmi
+    let bgImg=null;
+    if(post.image){
+      try{
+        bgImg=await new Promise((resolve,reject)=>{
+          const im=new Image();
+          im.crossOrigin='anonymous';
+          im.onload=()=>resolve(im);
+          im.onerror=reject;
+          im.src=post.image;
+        });
+      }catch{
+        bgImg=null;
+      }
+    }
+
+    // Metin alanını hazırla
+    const PAD=92, textW=W-PAD*2;
+    const lines=[];
+    const wrap=(font,text)=>{
+      c.font=font;
+      String(text||'').split('\n').forEach(par=>{
+        if(!par.trim()){lines.push('');return;}
+        let line='';
+        for(const word of par.split(/\s+/)){
+          const test=line?line+' '+word:word;
+          if(c.measureText(test).width>textW && line){lines.push(line);line=word;}
+          else line=test;
+        }
+        lines.push(line);
+      });
+    };
+    wrap("700 62px 'Playfair Display'", post.title ? `"${post.title}"` : '');
+    if(post.title) lines.push('');
+    wrap("52px 'Crimson Text'", post.text||'');
+    const lineH=76;
+    const contentH=lines.length*lineH;
+    const topFixed=220;
+    const bottomFixed=150;
+    const viewTop=topFixed;
+    const viewBottom=H-bottomFixed;
+    const viewH=viewBottom-viewTop;
+    const maxScroll=Math.max(0,contentH-viewH);
+
+    function cover(img,x,y,w,h){
+      const ir=img.width/img.height, dr=w/h;
+      let sx,sy,sw,sh;
+      if(ir>dr){sh=img.height;sw=sh*dr;sx=(img.width-sw)/2;sy=0;}
+      else{sw=img.width;sh=sw/dr;sx=0;sy=(img.height-sh)/2;}
+      c.drawImage(img,sx,sy,sw,sh,x,y,w,h);
+    }
+
+    function frame(t){
+      const p=Math.min(1,t/duration);
+      c.clearRect(0,0,W,H);
+      if(bgImg) cover(bgImg,0,0,W,H);
+      else {
+        const g=c.createLinearGradient(0,0,W,H);
+        g.addColorStop(0,'#241040'); g.addColorStop(1,'#090612');
+        c.fillStyle=g;c.fillRect(0,0,W,H);
+      }
+
+      // Fotoğrafı karart: yazı her zaman okunaklı kalsın.
+      c.fillStyle='rgba(5,2,12,.48)';c.fillRect(0,0,W,H);
+      const vg=c.createLinearGradient(0,0,0,H);
+      vg.addColorStop(0,'rgba(5,2,12,.76)');
+      vg.addColorStop(.18,'rgba(5,2,12,.22)');
+      vg.addColorStop(.78,'rgba(5,2,12,.25)');
+      vg.addColorStop(1,'rgba(5,2,12,.82)');
+      c.fillStyle=vg;c.fillRect(0,0,W,H);
+
+      c.fillStyle='rgba(255,255,255,.9)';
+      c.font="600 34px 'Crimson Text'";
+      c.fillText('🪶 Yeni Ozanlar',PAD,72);
+
+      c.fillStyle='#fff';
+      c.font="700 42px 'Playfair Display'";
+      c.fillText(author?.name||'',PAD,132);
+      c.fillStyle='rgba(255,255,255,.72)';
+      c.font="30px 'Crimson Text'";
+      c.fillText(post.title?`"${post.title}"`:'Şiir',PAD,174);
+
+      c.save();
+      c.beginPath();c.rect(0,viewTop,W,viewH);c.clip();
+      const scroll=maxScroll*p;
+      let y=viewTop-scroll+lineH;
+      lines.forEach((line,i)=>{
+        if(!line){y+=lineH*.55;return;}
+        c.font=i===0&&post.title?"italic 700 58px 'Playfair Display'":"52px 'Crimson Text'";
+        c.fillStyle='rgba(255,255,255,.96)';
+        c.shadowColor='rgba(0,0,0,.8)';c.shadowBlur=12;
+        c.fillText(line,PAD,y);
+        y+=lineH;
+      });
+      c.restore();
+
+      c.fillStyle='rgba(255,255,255,.72)';
+      c.font="26px 'Crimson Text'";
+      c.textAlign='center';
+      c.fillText('yeniozanlar.vercel.app',W/2,H-70);
+      c.textAlign='left';
+
+      ctx.clearRect(0,0,preview.width,preview.height);
+      ctx.drawImage(hiddenCanvas,0,0,preview.width,preview.height);
+    }
+
+    frame(0);
+    durum.textContent=`✅ Ses hazır · ${Math.round(duration)} saniye`;
+    kaydetBtn.disabled=false;
+
+    kaydetBtn.onclick=async()=>{
+      if(running)return;
+      running=true; kaydetBtn.disabled=true; iptalBtn.disabled=true;
+      durum.textContent='🎥 Video oluşturuluyor...';
+      progText.textContent='0%';
+
+      const canvasStream=hiddenCanvas.captureStream(30);
+      const dest=audioCtx.createMediaStreamDestination();
+      audioSource=audioCtx.createBufferSource();
+      audioSource.buffer=decoded;
+      audioSource.connect(dest);
+      audioSource.connect(audioCtx.destination);
+      stream=new MediaStream([
+        ...canvasStream.getVideoTracks(),
+        ...dest.stream.getAudioTracks()
+      ]);
+
+      const mimeCandidates=[
+        'video/webm;codecs=vp9,opus',
+        'video/webm;codecs=vp8,opus',
+        'video/webm'
+      ];
+      const mime=mimeCandidates.find(x=>window.MediaRecorder?.isTypeSupported?.(x))||'';
+      if(!window.MediaRecorder || !mime) throw new Error('Bu tarayıcı video kaydını desteklemiyor.');
+
+      chunks=[];
+      mediaRecorder=new MediaRecorder(stream,{mimeType:mime,videoBitsPerSecond:7000000});
+      mediaRecorder.ondataavailable=e=>{if(e.data?.size)chunks.push(e.data);};
+
+      const bitti=new Promise((resolve,reject)=>{
+        mediaRecorder.onstop=resolve;
+        mediaRecorder.onerror=e=>reject(e.error||new Error('Video kaydı başarısız.'));
+      });
+
+      await audioCtx.resume();
+      audioSource.start(0);
+      mediaRecorder.start(250);
+
+      const start=performance.now();
+      function animate(now){
+        const elapsed=Math.min(duration,(now-start)/1000);
+        frame(elapsed);
+        const percent=Math.min(100,Math.round(elapsed/duration*100));
+        prog.firstChild.style.width=percent+'%';
+        progText.textContent=`%${percent} · ${elapsed.toFixed(1)} / ${duration.toFixed(1)} sn`;
+        if(elapsed<duration && running) animId=requestAnimationFrame(animate);
+      }
+      animId=requestAnimationFrame(animate);
+
+      setTimeout(()=>{
+        try{audioSource.stop();}catch{}
+        try{mediaRecorder.stop();}catch{}
+      },Math.ceil(duration*1000)+250);
+
+      await bitti;
+      running=false;
+      stream.getTracks().forEach(t=>t.stop());
+      audioSource.disconnect();
+      const blob=new Blob(chunks,{type:mime});
+      if(!blob.size) throw new Error('Boş video oluştu.');
+
+      const url=URL.createObjectURL(blob);
+      const a=document.createElement('a');
+      a.href=url;
+      a.download=`siir-${post.id}.webm`;
+      document.body.appendChild(a);a.click();a.remove();
+      setTimeout(()=>URL.revokeObjectURL(url),10000);
+
+      prog.firstChild.style.width='100%';
+      progText.textContent='%100 · Video hazır';
+      durum.textContent='✅ Video indirildi.';
+      kaydetBtn.disabled=false; iptalBtn.disabled=false;
+      kaydetBtn.textContent='🔄 Videoyu Yeniden Oluştur';
+    };
+  }catch(err){
+    console.error('Şiir video oluşturma hatası:',err);
+    durum.textContent='❌ '+(err?.message||'Video oluşturulamadı.');
+    progText.textContent='Ses dosyası veya tarayıcı video kaydına izin vermiyor olabilir.';
+    kaydetBtn.disabled=true;
+    iptalBtn.disabled=false;
+  }
+}
+
 function instagramHikayeModal(post){
   const author=byId(post.authorId);
   const bg=h('div',{class:'modal-bg'});
@@ -3748,6 +4011,11 @@ function postCard(post, forceExpand=false, autoOpenComments=false, hedefYorumId=
   const igFullBtn=h('button',{class:'btn',style:{display:'flex',alignItems:'center',justifyContent:'center',gap:'8px',width:'100%',background:'linear-gradient(135deg,#4f5bd5,#962fbf,#d62976,#fa7e1e,#feda75)',border:'none',borderRadius:'12px',padding:'11px',color:'#fff',fontSize:'.88rem',fontWeight:'700',marginBottom:'14px'},onclick:(e)=>{e.stopPropagation();document.body.appendChild(instagramHikayeModal(post));}});
   igFullBtn.innerHTML=igIkonSVG('full-'+post.id,20)+'<span>Instagram Hikayede Paylaş</span>';
   full.appendChild(igFullBtn);
+
+  // Şiiri, ses dosyasının tamamı boyunca kaydırmalı 9:16 video olarak kaydet.
+  // Çıktı tarayıcı desteklediği WebM formatında indirilir.
+  const videoFullBtn=h('button',{class:'btn video-save-btn',onclick:(e)=>{e.stopPropagation();siiriVideoOlarakKaydet(post);}},'🎬 Video Olarak Kaydet');
+  full.appendChild(videoFullBtn);
 
   // AI
   if(post.aiScore!==null&&post.aiScore!==undefined){
