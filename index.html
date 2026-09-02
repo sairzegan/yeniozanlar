@@ -3679,7 +3679,8 @@ function postCard(post, forceExpand=false, autoOpenComments=false, hedefYorumId=
   }
   if(vid){const w=h('div',{style:{borderRadius:'12px',overflow:'hidden',marginBottom:'14px'}});w.innerHTML=`<iframe src="https://www.youtube.com/embed/${vid}" allowfullscreen style="width:100%;aspect-ratio:16/9;border:none;border-radius:12px"></iframe>`;full.appendChild(w);}
 
-  // Sesli okuma (varsa) — devamını gör açılınca otomatik başlar, kapanınca durur.
+  // Sesli okuma (varsa) — NORMAL MODDA otomatik başlamaz, kullanıcı ▶️ ile
+  // kendi başlatır (kapanınca/panel kapatılınca yine de durdurulur).
   let sesOynatici=null;
   if(post.audioUrl){
     sesOynatici=sesOynaticiOlustur(post.audioUrl);
@@ -3991,13 +3992,13 @@ function postCard(post, forceExpand=false, autoOpenComments=false, hedefYorumId=
     preview.style.display=expanded?'none':'block';
     full.style.display=expanded?'block':'none';
     expandLabel.textContent=expanded?'Kapat ▲':'Devamını gör ▼';
-    if(sesOynatici){
-      if(expanded) sesOynatici.audio.play().catch(()=>{});
-      else { sesOynatici.audio.pause(); sesOynatici.audio.currentTime=0; }
+    if(sesOynatici && !expanded){
+      // Kapanınca sesi durdur; açılınca OTOMATİK BAŞLATMA — kullanıcı kendi başlatsın.
+      sesOynatici.audio.pause(); sesOynatici.audio.currentTime=0;
     }
   };
 
-  if(forceExpand){preview.style.display='none';full.style.display='block';if(sesOynatici)sesOynatici.audio.play().catch(()=>{});}
+  if(forceExpand){preview.style.display='none';full.style.display='block';}
 
   return card;
 }
@@ -4409,11 +4410,13 @@ function SwipeMode(){
 
   const wrap=h('div',{class:'swipe-wrap'});
 
-  // Kaydırma modunda aktif olan tek ses referansı — yeni şiire geçerken veya
-  // sekme kapanırken öncekini durdurmak için kullanılır.
-  let aktifSes=null;
+  // Kaydırma modunda aktif olan ses referansları (seslendirme + müzik aynı anda
+  // çalabilir) — yeni şiire geçerken veya sekme kapanırken hepsini durdurmak
+  // için kullanılır.
+  let aktifSesler=[];
   function aktifSesiDurdur(){
-    if(aktifSes){ aktifSes.pause(); aktifSes.currentTime=0; aktifSes=null; }
+    aktifSesler.forEach(a=>{ try{ a.pause(); a.currentTime=0; }catch(_){} });
+    aktifSesler=[];
   }
 
   const topbar=h('div',{class:'swipe-topbar'});
@@ -4454,7 +4457,10 @@ function SwipeMode(){
     const post=list[idx];
     const kart=swipeCard(post,()=>{idx++;renderCard();});
     stage.appendChild(kart);
-    if(kart._sesAudio){ aktifSes=kart._sesAudio; aktifSes.play().catch(()=>{}); }
+    // YouTube videolu paylaşımlarda kendi sesi çalar; seslendirme/müzik yoktur.
+    // Diğerlerinde seslendirme VE müzik otomatik ve birlikte başlar.
+    if(kart._sesAudio){ aktifSesler.push(kart._sesAudio); kart._sesAudio.play().catch(()=>{}); }
+    if(kart._muzikAudio){ aktifSesler.push(kart._muzikAudio); kart._muzikAudio.play().catch(()=>{}); }
     counter.textContent=`${idx+1} / ${list.length} · sola kaydır = sonraki`;
   }
 
@@ -4518,24 +4524,32 @@ function swipeCard(post,sonrakineGec){
     scroller.appendChild(gifUzeriAforizmaBindir(swipeImg, post, {marginBottom:'16px', borderRadius:'14px'}));
   } else if(vid){
     const w=h('div',{class:'swipe-media-video'});
-    w.innerHTML=`<iframe src="https://www.youtube.com/embed/${vid}?autoplay=1&mute=1&playsinline=1&rel=0&modestbranding=1" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe>`;
+    // Ses AÇIK otomatik oynatma: tarayıcı, kullanıcı bu sekmede zaten kaydırma
+    // hareketiyle etkileşime girdiği için genelde bunu engellemez; yine de bazı
+    // tarayıcılar sesli otomatik oynatmayı engelleyebilir (bu durumda video
+    // duraklamış/tıklanmayı bekler halde gelir, kullanıcı oynat'a basar).
+    w.innerHTML=`<iframe src="https://www.youtube.com/embed/${vid}?autoplay=1&mute=0&playsinline=1&rel=0&modestbranding=1" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe>`;
     scroller.appendChild(w);
   }
 
   if(post.title) scroller.appendChild(h('h3',{class:'swipe-title'},`"${post.title}"`));
   if(post.text) scroller.appendChild(h('p',{class:'swipe-text'},post.text));
 
-  // Sesli okuma (varsa) — SwipeMode bu şiir ekrana gelince card._sesAudio'yu
-  // otomatik oynatır, sıradaki/önceki şiire geçilince durdurur.
-  if(post.audioUrl){
-    const sesOynatici=sesOynaticiOlustur(post.audioUrl);
-    scroller.appendChild(sesOynatici.el);
-    card._sesAudio=sesOynatici.audio;
-  }
-  // AI müzik (varsa) — manuel başlatılır, sesli okumayla otomatik çakışmaz.
-  if(post.musicUrl){
-    const muzikOynatici=sesOynaticiOlustur(post.musicUrl,{label:'🎵 Müzik',gradient:'linear-gradient(135deg,#4d7c0f,#84cc16)'});
-    scroller.appendChild(muzikOynatici.el);
+  // Sesli okuma + AI müzik — SADECE YouTube videosu YOKSA gösterilir/çalar
+  // (video varsa kendi sesi zaten var, karışmasın diye ikisi de eklenmez).
+  // SwipeMode bu şiir ekrana gelince card._sesAudio VE card._muzikAudio'yu
+  // BİRLİKTE otomatik oynatır, sıradaki/önceki şiire geçilince ikisini de durdurur.
+  if(!vid){
+    if(post.audioUrl){
+      const sesOynatici=sesOynaticiOlustur(post.audioUrl);
+      scroller.appendChild(sesOynatici.el);
+      card._sesAudio=sesOynatici.audio;
+    }
+    if(post.musicUrl){
+      const muzikOynatici=sesOynaticiOlustur(post.musicUrl,{label:'🎵 Müzik',gradient:'linear-gradient(135deg,#4d7c0f,#84cc16)'});
+      scroller.appendChild(muzikOynatici.el);
+      card._muzikAudio=muzikOynatici.audio;
+    }
   }
 
   const footer=h('div',{class:'swipe-footer'});
