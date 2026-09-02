@@ -24,34 +24,33 @@
 // durumda birkaç saniye sonra tekrar denemek genelde çalışır.
 
 import { put } from "@vercel/blob";
-import { Client } from "@gradio/client";
 
 // ═══════════════════════════════════════════════════════════════════════
-// ÖNEMLİ / DÜZELTME GEÇMİŞİ:
-// İlk sürüm, Hugging Face "Inference Providers" (router.huggingface.co)
-// üzerinden facebook/musicgen-small'ı çağırıyordu. Bu, ŞU AN çalışmıyor —
-// Hugging Face, MusicGen'i (ve genel olarak text-to-music modellerini)
-// Inference Providers ağından tamamen KALDIRDI. Model sayfasında artık
-// "This model isn't deployed by any Inference Provider" yazıyor. Bu bir
-// prompt/parametre hatası DEĞİL, kaldırılmış bir özellik.
-//
-// ÇÖZÜM (en iyi çaba / best-effort): Hugging Face'in kendi herkese açık
-// demo sayfasını (huggingface.co/spaces/facebook/MusicGen) bir "Gradio
-// API"si gibi çağırıyoruz. Bu resmi/dokümante edilmiş, garantili bir API
-// DEĞİLDİR — paylaşımlı ücretsiz GPU (ZeroGPU) kotasına dayanır:
-//   • Yoğun saatlerde kuyrukta bekleyebilir veya zaman aşımına uğrayabilir.
-//   • Hugging Face bu demo sayfasını haber vermeden değiştirebilir/kaldırabilir.
-//   • Sadece ~15 saniyelik, ENSTRÜMANTAL (sözsüz) bir klip üretir.
-// Buna karşılık tamamen ücretsizdir ve zaten var olan HUGGINGFACE_API_TOKEN
-// ile (varsa) daha öncelikli kotadan çalışır; token yoksa anonim/misafir
-// kotasıyla dener.
-//
-// Vercel Environment (package.json) bağımlılığı — YENİ, eklenmesi gerekiyor:
-// "@gradio/client"
+// DÜZELTME GEÇMİŞİ:
+// v1: router.huggingface.co (Inference Providers) üzerinden musicgen-small
+//     -> ÇALIŞMADI, HF bu modeli Inference Providers'tan tamamen kaldırmış.
+// v2: "@gradio/client" npm paketiyle facebook/MusicGen Space'ini çağırdı
+//     -> ÇALIŞMADI (HTTP 500, hiçbir hata mesajı bile dönmedi). Bu paket
+//        WebSocket/EventSource gibi tarayıcıya özgü API'lere dayanıyor ve
+//        Vercel'in serverless Node ortamında import anında/çalışırken
+//        çöküyor olabilir — try/catch'e bile girmeden fonksiyon patlıyor.
+// v3 (BU SÜRÜM): Hiçbir ekstra npm paketi KULLANMIYOR. Gradio'nun resmi,
+//     dokümante "düz HTTP/curl" API desenini native fetch ile uyguluyor:
+//       1) POST {SPACE}/gradio_api/call/predict  {"data":[prompt, null]}
+//          -> {"event_id": "..."}
+//       2) GET  {SPACE}/gradio_api/call/predict/{event_id}
+//          -> "event: complete\ndata: [ {...ses dosyası...} ]" (SSE metni)
+//     Eski Gradio sürümleri "/gradio_api/call/..." yerine "/call/..." kullanıyor
+//     olabileceğinden iki yol da sırayla denenir.
+// Bu YİNE de resmi/garantili bir API değildir (bkz. önceki not: paylaşımlı
+// ücretsiz GPU kotası, kuyruk, HF'nin haber vermeden değiştirme ihtimali).
+// Ama artık üçüncü parti bir pakete bağımlı olmadığı için "sessizce çökme"
+// riski ortadan kalkıyor — her hata artık JSON olarak {error:"..."} dönecek.
 // ═══════════════════════════════════════════════════════════════════════
 
-const SPACE = "facebook/MusicGen";
+const SPACE_BASE = "https://facebook-musicgen.hf.space";
 const TIMEOUT_MS = 55000;
+const API_YOLLARI = ["/gradio_api/call/predict", "/call/predict"];
 
 function buildPrompt(customPrompt, title) {
   const custom = String(customPrompt || "").trim();
@@ -64,8 +63,54 @@ function buildPrompt(customPrompt, title) {
   ].filter(Boolean).join(" ");
 }
 
-function zamanAsimi(ms) {
-  return new Promise((_, reject) => setTimeout(() => reject(new Error("TIMEOUT")), ms));
+// SSE metnini ("event: ...\ndata: ...\n\n" blokları) ayrıştırıp son "data:" satırını döner.
+function sseSonVeriyiAyikla(metin) {
+  const satirlar = metin.split("\n");
+  let sonVeri = null;
+  let hataOldu = false;
+  let sonEventTipi = "";
+  for (const satir of satirlar) {
+    if (satir.startsWith("event:")) sonEventTipi = satir.slice(6).trim();
+    if (satir.startsWith("data:")) {
+      const icerik = satir.slice(5).trim();
+      if (sonEventTipi === "error") { hataOldu = true; sonVeri = icerik; }
+      else sonVeri = icerik;
+    }
+  }
+  return { veri: sonVeri, hataOldu };
+}
+
+async function musicGenCagir(prompt, hfToken, signal) {
+  const gövde = JSON.stringify({ data: [prompt, null] });
+  const baslikGrubu = { "Content-Type": "application/json" };
+  if (hfToken) baslikGrubu["Authorization"] = `Bearer ${hfToken}`;
+
+  let sonHata = null;
+  for (const yol of API_YOLLARI) {
+    try {
+      const postYaniti = await fetch(SPACE_BASE + yol, { method: "POST", headers: baslikGrubu, body: gövde, signal });
+      if (!postYaniti.ok) { sonHata = new Error(`(${yol}) POST HTTP ${postYaniti.status}`); continue; }
+      const postVeri = await postYaniti.json().catch(() => null);
+      const eventId = postVeri?.event_id;
+      if (!eventId) { sonHata = new Error(`(${yol}) event_id dönmedi.`); continue; }
+
+      const getYaniti = await fetch(`${SPACE_BASE}${yol}/${eventId}`, {
+        headers: { Accept: "text/event-stream", ...(hfToken ? { Authorization: `Bearer ${hfToken}` } : {}) },
+        signal
+      });
+      if (!getYaniti.ok) { sonHata = new Error(`(${yol}) sonuç HTTP ${getYaniti.status}`); continue; }
+      const metin = await getYaniti.text();
+      const { veri, hataOldu } = sseSonVeriyiAyikla(metin);
+      if (!veri) { sonHata = new Error(`(${yol}) SSE yanıtında veri bulunamadı.`); continue; }
+      if (hataOldu) { sonHata = new Error(`(${yol}) MusicGen demo'su hata döndürdü: ${veri.slice(0, 200)}`); continue; }
+
+      const dizi = JSON.parse(veri);
+      return dizi;
+    } catch (e) {
+      sonHata = e;
+    }
+  }
+  throw sonHata || new Error("MusicGen demo'suna hiçbir yoldan ulaşılamadı.");
 }
 
 export const maxDuration = 60;
@@ -86,33 +131,28 @@ export default async function handler(req, res) {
   }
 
   const prompt = buildPrompt(musicPrompt, title);
-  // HF token varsa (huggingface-image.js ile paylaşılan) öncelikli kota için kullanılır.
   const hfToken = String(process.env.HUGGINGFACE_API_TOKEN || "").trim() || undefined;
 
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+
   try {
-    const client = await Promise.race([
-      Client.connect(SPACE, hfToken ? { hf_token: hfToken } : {}),
-      zamanAsimi(TIMEOUT_MS)
-    ]);
+    const dizi = await musicGenCagir(prompt, hfToken, controller.signal);
+    clearTimeout(timer);
 
-    // Arayüz: [1] "Describe your music" (metin), [2] "Condition on a melody" (ses, opsiyonel).
-    const result = await Promise.race([
-      client.predict("/predict", [prompt, null]),
-      zamanAsimi(TIMEOUT_MS)
-    ]);
-
-    const cikti = Array.isArray(result?.data) ? result.data[0] : null;
-    const kaynakUrl = cikti?.url || cikti?.path || (typeof cikti === "string" ? cikti : null);
-    if (!kaynakUrl) {
+    const cikti = Array.isArray(dizi) ? dizi[0] : null;
+    const kaynakYolu = cikti?.url || cikti?.path || (typeof cikti === "string" ? cikti : null);
+    if (!kaynakYolu) {
       throw new Error("MusicGen demo'sundan geçerli bir ses dosyası alınamadı (boş/beklenmeyen çıktı).");
     }
+    const tamUrl = kaynakYolu.startsWith("http") ? kaynakYolu : `${SPACE_BASE}/gradio_api/file=${kaynakYolu}`;
 
-    const kaynakYaniti = await fetch(kaynakUrl.startsWith("http") ? kaynakUrl : `https://facebook-musicgen.hf.space/file=${kaynakUrl}`);
-    if (!kaynakYaniti.ok) throw new Error(`Üretilen ses dosyası indirilemedi (HTTP ${kaynakYaniti.status}).`);
-    const buffer = Buffer.from(await kaynakYaniti.arrayBuffer());
+    const sesYaniti = await fetch(tamUrl, hfToken ? { headers: { Authorization: `Bearer ${hfToken}` } } : undefined);
+    if (!sesYaniti.ok) throw new Error(`Üretilen ses dosyası indirilemedi (HTTP ${sesYaniti.status}).`);
+    const buffer = Buffer.from(await sesYaniti.arrayBuffer());
     if (!buffer.length) throw new Error("Üretilen ses dosyası boş.");
 
-    const contentType = (kaynakYaniti.headers.get("content-type") || "audio/wav").split(";")[0];
+    const contentType = (sesYaniti.headers.get("content-type") || "audio/wav").split(";")[0];
     const ext = contentType.includes("wav") ? "wav" : (contentType.includes("mpeg") ? "mp3" : "wav");
 
     const uploaded = await put(`music/${cleanPostId}.${ext}`, buffer, {
@@ -125,8 +165,9 @@ export default async function handler(req, res) {
 
     return res.status(200).json({ musicUrl: uploaded.url, prompt });
   } catch (e) {
+    clearTimeout(timer);
     const msg =
-      e?.message === "TIMEOUT"
+      e?.name === "AbortError"
         ? "Müzik demo'su (facebook/MusicGen) meşgul/kuyrukta — zaman aşımına uğradı. Birkaç dakika sonra tekrar deneyin."
         : `Hugging Face MusicGen demo'su şu an kullanılamıyor: ${String(e?.message || e).slice(0, 250)}`;
     console.error("musicGenerate HATASI:", e);
