@@ -676,8 +676,19 @@ async function ffmpegMp4Donustur(webmBlob, durum, progText){
   return mp4Blob;
 }
 
+function sesPlatformBilgisiGlobal(url){
+  const u=String(url||'').trim();
+  if(!u) return {type:'none'};
+  if(/open\.spotify\.com\/(track|album|playlist|episode)\//i.test(u)) return {type:'spotify'};
+  if(/soundcloud\.com\//i.test(u)) return {type:'soundcloud'};
+  if(/(?:youtube\.com\/(?:watch|shorts|live|embed)|youtu\.be\/)/i.test(u)) return {type:'youtube'};
+  return {type:'direct'};
+}
+
 async function siiriVideoOlarakKaydet(post){
-  const audioUrl = post?.audioUrl || post?.musicUrl;
+  const rawAudioUrl = post?.audioUrl || post?.musicUrl || '';
+  const audioPlatform = sesPlatformBilgisiGlobal(rawAudioUrl);
+  const audioUrl = audioPlatform.type==='direct' ? rawAudioUrl : '';
   const youtubeId = ytId(post?.youtube);
   const hasAudio = !!audioUrl;
   // YouTube iframe'i canvas/MediaRecorder içine güvenilir biçimde aktarılamaz
@@ -2752,6 +2763,21 @@ JSON: {"voiceKey":"...", "stability":0.0, "style":0.0}`
 // durdurmaz, bu yüzden çağıran taraf (postCard / SwipeMode) sekme kapanırken
 // veya bir sonraki şiire geçilirken audio.pause() çağırmalıdır.
 function sesOynaticiOlustur(audioUrl,opts={}){
+  const platform=sesPlatformBilgisiGlobal(audioUrl);
+  if(platform.type!=='direct'){
+    const wrap=h('div',{style:{background:'#0f0a1a',border:'1px solid #2d1b52',borderRadius:'14px',padding:'8px',marginBottom:'14px'},onclick:e=>e.stopPropagation()});
+    let src=''; let height='166px';
+    if(platform.type==='spotify'){
+      const m=String(audioUrl).match(/open\.spotify\.com\/([^/?#]+)\/([^/?#]+)/i);
+      if(m) src=`https://open.spotify.com/embed/${m[1]}/${m[2]}?utm_source=generator`; height='152px';
+    } else if(platform.type==='youtube'){
+      const id=ytId(audioUrl); if(id) src=`https://www.youtube.com/embed/${id}?playsinline=1&rel=0`; height='180px';
+    } else if(platform.type==='soundcloud'){
+      src=`https://w.soundcloud.com/player/?url=${encodeURIComponent(audioUrl)}&auto_play=false&hide_related=true&show_comments=false&show_user=true&visual=true`;
+    }
+    if(src) wrap.appendChild(h('iframe',{src,style:{width:'100%',height,border:'0',borderRadius:'10px'},allow:'autoplay; encrypted-media; fullscreen; picture-in-picture',allowFullscreen:true,loading:'lazy'}));
+    return {el:wrap,audio:null};
+  }
   const audio=new Audio(audioUrl);
   audio.preload='metadata';
   audio.volume=0.9;
@@ -4490,35 +4516,72 @@ function composeModal(onClose, existingPost=null){
   const yti=inp('YouTube linki yapıştır...');yti.style.display=showYt?'block':'none';yti.value=ytUrl;yti.oninput=e=>ytUrl=e.target.value;
   let audioUrl=existingPost?.audioUrl||'';
   let showSes=!!existingPost?.audioUrl;
-  const sesi=inp('Ses/seslendirme linki yapıştır (mp3, wav...)...');sesi.value=audioUrl;sesi.oninput=e=>audioUrl=e.target.value;
-  const sesDurum=h('p',{style:{fontSize:'.72rem',color:'#a78bfa',margin:'2px 0'},});sesDurum.style.display=audioUrl?'block':'none';sesDurum.textContent=audioUrl?'🎙️ Ses bağlı':'';
-  const sesPreview=h('audio',{controls:true,style:{width:'100%',display:audioUrl?'block':'none',height:'32px'},src:audioUrl||''});
+  const sesi=inp('Ses / müzik linki (MP3, WAV, Spotify, SoundCloud, YouTube Music)...');sesi.value=audioUrl;sesi.oninput=e=>{audioUrl=e.target.value.trim(); sesOnizlemeOlustur(audioUrl);};
+  const sesDurum=h('p',{style:{fontSize:'.72rem',color:'#a78bfa',margin:'2px 0'},});
+  const sesPreviewWrap=h('div',{style:{width:'100%',display:audioUrl?'block':'none',marginTop:'6px'}});
+  function sesPlatformBilgisi(url){
+    const u=String(url||'').trim();
+    if(!u) return {type:'none'};
+    if(/open\.spotify\.com\/(track|album|playlist|episode)\//i.test(u)) return {type:'spotify'};
+    if(/soundcloud\.com\//i.test(u)) return {type:'soundcloud'};
+    if(/(?:youtube\.com\/(?:watch|shorts|live|embed)|youtu\.be\/)/i.test(u)) return {type:'youtube'};
+    return {type:'direct'};
+  }
+  function sesOnizlemeOlustur(url){
+    sesPreviewWrap.innerHTML='';
+    const info=sesPlatformBilgisi(url);
+    if(info.type==='spotify'){
+      const m=String(url).match(/open\.spotify\.com\/([^/?#]+)\/([^/?#]+)/i);
+      if(m) sesPreviewWrap.appendChild(h('iframe',{src:`https://open.spotify.com/embed/${m[1]}/${m[2]}?utm_source=generator`,style:{width:'100%',height:'152px',border:'0',borderRadius:'12px'},allow:'autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture',loading:'lazy'}));
+    } else if(info.type==='youtube'){
+      const id=ytId(url);
+      if(id) sesPreviewWrap.appendChild(h('iframe',{src:`https://www.youtube.com/embed/${id}?playsinline=1&rel=0`,style:{width:'100%',height:'180px',border:'0',borderRadius:'12px'},allow:'autoplay; encrypted-media; picture-in-picture',allowFullscreen:true}));
+    } else if(info.type==='soundcloud'){
+      sesPreviewWrap.appendChild(h('iframe',{src:`https://w.soundcloud.com/player/?url=${encodeURIComponent(url)}&color=%237c3aed&auto_play=false&hide_related=true&show_comments=false&show_user=true&show_reposts=false&visual=true`,style:{width:'100%',height:'166px',border:'0',borderRadius:'12px'},allow:'autoplay'}));
+    } else {
+      sesPreviewWrap.appendChild(h('audio',{controls:true,preload:'metadata',style:{width:'100%',height:'38px'},src:url}));
+    }
+    sesPreviewWrap.style.display=url?'block':'none';
+    if(info.type==='spotify') sesDurum.textContent='🎵 Spotify müziği bağlı';
+    else if(info.type==='soundcloud') sesDurum.textContent='☁️ SoundCloud müziği bağlı';
+    else if(info.type==='youtube') sesDurum.textContent='▶️ YouTube / YouTube Music bağlantısı bağlı';
+    else if(info.type==='direct') sesDurum.textContent='🎙️ Doğrudan ses dosyası bağlı';
+    else sesDurum.textContent='';
+    sesDurum.style.display=url?'block':'none';
+  }
+  sesOnizlemeOlustur(audioUrl);
   function sesUrlGuncelle(yeniUrl,mesaj){
     audioUrl=yeniUrl; sesi.value=yeniUrl;
-    sesPreview.src=yeniUrl; sesPreview.style.display=yeniUrl?'block':'none';
-    sesDurum.textContent=mesaj||(yeniUrl?'🎙️ Ses bağlı':''); sesDurum.style.display=mesaj||yeniUrl?'block':'none';
+    sesOnizlemeOlustur(yeniUrl);
+    if(mesaj){sesDurum.textContent=mesaj;sesDurum.style.display='block';}
   }
-  // Bir File/Blob'u base64'e çevirip /api/audioUpload'a yükler, dönen URL'yi uygular.
+  // Ses dosyaları Vercel'e dosya olarak kaydedilmez. Vercel yalnızca uygulamayı çalıştırır;
+  // kullanıcı yüklemeleri kalıcı depolamada tutulmalıdır. Bu uygulamada mevcut Cloudinary
+  // yükleme altyapısını kullanıyoruz. Böylece telefondan seçilen MP3/WAV/M4A/WebM de doğrudan
+  // Cloudinary'ye gider ve dönen kalıcı URL Firestore'daki audioUrl alanına kaydedilir.
   async function sesDosyasiniYukle(blob,mimeType){
+    if(!blob || !blob.size){ sesUrlGuncelle(audioUrl,'❌ Ses dosyası boş.'); return; }
+    if(blob.size>50*1024*1024){ sesUrlGuncelle(audioUrl,'❌ Ses dosyası en fazla 50 MB olabilir.'); return; }
     sesUrlGuncelle(audioUrl,'⏳ Ses yükleniyor...');
     try{
-      const base64Data=await new Promise((resolve,reject)=>{
-        const r=new FileReader();
-        r.onload=()=>resolve(r.result);
-        r.onerror=()=>reject(new Error('Dosya okunamadı.'));
-        r.readAsDataURL(blob);
-      });
-      const res=await fetch('/api/audioUpload',{
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({base64Data,mimeType:mimeType||blob.type||'audio/mpeg',ownerId:S.me?.id||'kullanici'})
-      });
-      if(!res.ok){ let detay=''; try{const j=await res.json();detay=j?.error||'';}catch{} throw new Error(detay||('HTTP '+res.status)); }
-      const data=await res.json();
-      if(!data?.audioUrl) throw new Error('Ses linki dönmedi.');
-      sesUrlGuncelle(data.audioUrl,'✅ Ses yüklendi');
+      const mime=mimeType||blob.type||'audio/mpeg';
+      const dosyaAdi=(blob.name||`ses-${Date.now()}.mp3`).replace(/[^a-zA-Z0-9._-]/g,'_').slice(-100);
+      const form=new FormData();
+      form.append('file',blob,dosyaAdi);
+      form.append('upload_preset',CLOUDINARY_PROFILE_PRESET);
+      form.append('folder',`audio/${S.me?.id||'kullanici'}`);
+      // Cloudinary'de ses dosyaları video resource type altında tutulur.
+      const endpoint=`https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/video/upload`;
+      const res=await fetch(endpoint,{method:'POST',body:form});
+      const data=await res.json().catch(()=>({}));
+      if(!res.ok || !data.secure_url){
+        console.error('Cloudinary ses yükleme hatası:',data);
+        throw new Error(data?.error?.message||`HTTP ${res.status}`);
+      }
+      sesUrlGuncelle(data.secure_url,'✅ Ses yüklendi ve kalıcı bağlantı oluşturuldu');
     }catch(err){
-      sesUrlGuncelle(audioUrl,'❌ Yükleme hatası: '+err.message);
+      console.error('Ses yükleme hatası:',err);
+      sesUrlGuncelle(audioUrl,'❌ Ses yüklenemedi: '+(err?.message||'Bilinmeyen hata'));
     }
   }
   // Bilgisayardan gerçek mp3/wav/m4a dosyası seçme
@@ -4559,7 +4622,7 @@ function composeModal(onClose, existingPost=null){
       alert('Mikrofona erişilemedi: '+err.message+'\n(Tarayıcı izin istemiş olabilir, izin verin ve tekrar deneyin.)');
     }
   };
-  const sesLinkPanel=h('div',{style:{display:'flex',flexDirection:'column',gap:'6px'}},[sesi,sesPreview,sesDurum,h('div',{style:{display:'flex',gap:'6px',flexWrap:'wrap'}},[sesYukleBtn,kayitBtn,sesFi])]);
+  const sesLinkPanel=h('div',{style:{display:'flex',flexDirection:'column',gap:'6px'}},[sesi,sesPreviewWrap,sesDurum,h('div',{style:{display:'flex',gap:'6px',flexWrap:'wrap'}},[sesYukleBtn,kayitBtn,sesFi])]);
   sesLinkPanel.style.display=showSes?'flex':'none';
   const sesBtn=h('button',{class:'btn',style:{background:showSes?'#3d1f6e':'transparent',color:'#c4b5fd',padding:'7px 14px',borderRadius:'20px',border:'1px solid #6d28d9',fontSize:'.83rem'},onclick:()=>{showSes=!showSes;sesLinkPanel.style.display=showSes?'flex':'none';sesBtn.style.background=showSes?'#3d1f6e':'transparent'; if(!showSes) kayitDurdur();}},'🎙️ Ses Ekle');
   const ti=inp('Şiirin başlığı...');ti.style.border='1px solid #5b21b6';ti.style.fontFamily="'Playfair Display',serif";ti.value=title;ti.oninput=e=>title=e.target.value;
