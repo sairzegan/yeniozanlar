@@ -2359,13 +2359,15 @@ JSON: {"voiceKey":"...", "stability":0.0, "style":0.0}`
 // üzerinden çağırana) döndürülür; DOM'dan kaldırılması oynatmayı OTOMATİK
 // durdurmaz, bu yüzden çağıran taraf (postCard / SwipeMode) sekme kapanırken
 // veya bir sonraki şiire geçilirken audio.pause() çağırmalıdır.
-function sesOynaticiOlustur(audioUrl){
+function sesOynaticiOlustur(audioUrl,opts={}){
   const audio=new Audio(audioUrl);
   audio.preload='metadata';
   audio.volume=0.9;
+  const etiketMetni=opts.label||'🎙️ Dinle';
+  const gradyan=opts.gradient||'linear-gradient(135deg,#7c3aed,#34d399)';
   const wrap=h('div',{style:{display:'flex',alignItems:'center',gap:'10px',background:'#0f0a1a',border:'1px solid #2d1b52',borderRadius:'14px',padding:'8px 12px',marginBottom:'14px'},onclick:(e)=>e.stopPropagation()});
-  const label=h('span',{style:{fontSize:'.72rem',color:'#a78bfa',flexShrink:'0',whiteSpace:'nowrap'}},'🎙️ Dinle');
-  const playBtn=h('button',{class:'btn',style:{background:'linear-gradient(135deg,#7c3aed,#34d399)',border:'none',borderRadius:'50%',width:'34px',height:'34px',display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:'.95rem',flexShrink:'0',padding:'0',lineHeight:'1'},
+  const label=h('span',{style:{fontSize:'.72rem',color:'#a78bfa',flexShrink:'0',whiteSpace:'nowrap'}},etiketMetni);
+  const playBtn=h('button',{class:'btn',style:{background:gradyan,border:'none',borderRadius:'50%',width:'34px',height:'34px',display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:'.95rem',flexShrink:'0',padding:'0',lineHeight:'1'},
     onclick:(e)=>{e.stopPropagation(); if(audio.paused) audio.play().catch(()=>{}); else audio.pause();}
   },'▶️');
   const stopBtn=h('button',{class:'btn',style:{background:'#1a0f2e',border:'1px solid #3d1f6e',borderRadius:'50%',width:'28px',height:'28px',display:'flex',alignItems:'center',justifyContent:'center',color:'#a78bfa',fontSize:'.75rem',flexShrink:'0',padding:'0',lineHeight:'1'},
@@ -3423,6 +3425,65 @@ JSON: {"prompt":"..."}`
   }
 }
 
+// ── AI müzik (Hugging Face MusicGen — ücretsiz, ama SÖZSÜZ/ENSTRÜMANTAL) ──
+// MusicGen gerçek/sözlü bir "şarkı" üretemez, yalnızca şiirin ruh haline
+// uygun enstrümantal bir tema müziği üretir. Groq önce şiiri analiz edip
+// tür/tempo/çalgı öneren kısa bir İngilizce prompt hazırlar; Groq başarısız
+// olursa /api/musicGenerate kendi genel yedek promptunu kullanır.
+async function aiMuzikPromptuGroqlaOlustur(post){
+  const baslik=String(post?.title||'').trim().slice(0,250);
+  const siir=String(post?.text||'').trim().slice(0,2200);
+  if(!siir) return '';
+  try{
+    const sonuc=await groqBotCall(
+      'Sen bir şiirin ruh haline uygun ENSTRÜMANTAL (sözsüz) arka plan/tema müziği tarif eden bir asistansın. Kullanılacak üretim modeli (MusicGen) ŞARKI SÖZÜ veya VOKAL ÜRETEMEZ, yalnızca enstrümantal müzik üretir. YALNIZCA JSON döndür.',
+      `Bu şiiri analiz et ve enstrümantal müzik üretim modeli için türü, tempoyu, öne çıkan çalgıları ve duygusal atmosferi anlatan kısa, öz bir İngilizce prompt hazırla.
+
+Şiirin başlığı: ${baslik}
+
+Şiir:
+${siir}
+
+Kurallar:
+- Prompt İngilizce olsun ve MUTLAKA "no vocals, no singing, no lyrics" ifadesini içersin.
+- Şiirin duygusuna uygun tür/tempo/çalgı belirt (örn. melancholic solo piano, sad violin, calm ambient pad, hopeful acoustic guitar, vb.).
+- Şiirde geçen somut olay/nesneleri birebir tarif etmeye çalışma; sadece DUYGU ve ATMOSFER'e odaklan.
+- Prompt en fazla 250 karakter olsun.
+
+JSON: {"prompt":"..."}`
+    );
+    const prompt=String(sonuc?.prompt||'').trim();
+    return prompt.slice(0,400);
+  }catch(err){
+    console.warn('Groq müzik promptu oluşturamadı, varsayılan prompt kullanılacak:',err);
+    return '';
+  }
+}
+
+async function adminMuzikYenile(post){
+  if(!S.me || S.me.username!==ADMIN_USERNAME){
+    throw new Error('Bu işlem yalnızca admin içindir.');
+  }
+  const prompt=await aiMuzikPromptuGroqlaOlustur(post);
+  const res=await fetch('/api/musicGenerate', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ title: post.title||'', postId: post.id, musicPrompt: prompt })
+  });
+  let data=null;
+  try{ data=await res.json(); }catch(_){}
+  if(!res.ok){
+    throw new Error(data?.error || `Müzik oluşturulamadı (HTTP ${res.status}).`);
+  }
+  if(!data?.musicUrl) throw new Error('Müzik linki dönmedi.');
+  const idx=S.posts.findIndex(p=>p.id===post.id);
+  if(idx>=0){
+    S.posts[idx].musicUrl=data.musicUrl;
+    save();
+  }
+  await db.collection('posts').doc(post.id).update({ musicUrl: data.musicUrl });
+  return data;
+}
+
 async function adminYapayZekaGorseliYenile(post){
   if(!S.me || S.me.username!==ADMIN_USERNAME){
     throw new Error('Bu işlem yalnızca admin içindir.');
@@ -3624,6 +3685,12 @@ function postCard(post, forceExpand=false, autoOpenComments=false, hedefYorumId=
     sesOynatici=sesOynaticiOlustur(post.audioUrl);
     full.appendChild(sesOynatici.el);
   }
+  // AI müzik (varsa) — enstrümantal tema müziği, otomatik BAŞLAMAZ (sesli
+  // okumayla çakışmaması için kullanıcı kendi başlatır).
+  if(post.musicUrl){
+    const muzikOynatici=sesOynaticiOlustur(post.musicUrl,{label:'🎵 Müzik',gradient:'linear-gradient(135deg,#4d7c0f,#84cc16)'});
+    full.appendChild(muzikOynatici.el);
+  }
 
   // Instagram Hikayede paylaş (tam görünümde, gözden kaçmasın diye tam genişlik buton)
   const igFullBtn=h('button',{class:'btn',style:{display:'flex',alignItems:'center',justifyContent:'center',gap:'8px',width:'100%',background:'linear-gradient(135deg,#4f5bd5,#962fbf,#d62976,#fa7e1e,#feda75)',border:'none',borderRadius:'12px',padding:'11px',color:'#fff',fontSize:'.88rem',fontWeight:'700',marginBottom:'14px'},onclick:(e)=>{e.stopPropagation();document.body.appendChild(instagramHikayeModal(post));}});
@@ -3817,7 +3884,26 @@ function postCard(post, forceExpand=false, autoOpenComments=false, hedefYorumId=
       }
       aiAudioBtn.disabled=false; aiAudioBtn.textContent=post.audioUrl?'🎙️ Sesi Yeniden Oluştur':'🎙️ Yapay Zeka ile Ses Oluştur';
     };
-    const actionRow=h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:'6px'}},[revalBtn2,aiImageBtn,aiAudioBtn]);
+    // Enstrümantal AI müzik (Hugging Face MusicGen) — ses ile aynı akışı
+    // izler ama SÖZLÜ değildir, bu yüzden ayrı bir buton/alan (post.musicUrl).
+    const aiMusicBtn=h('button',{class:'btn',style:{width:'100%',marginTop:'6px',background:'linear-gradient(135deg,#1a2a10,#274a17)',color:'#bef264',border:'1px solid #4d7c0f',fontSize:'.8rem',padding:'8px'}},post.musicUrl?'🎵 Müziği Yeniden Oluştur':'🎵 Yapay Zeka ile Müzik Oluştur');
+    aiMusicBtn.onclick=async(e)=>{
+      e.stopPropagation();
+      aiMusicBtn.disabled=true; aiMusicBtn.textContent='⏳ Müzik hazırlanıyor (30-60sn)...';
+      revalStatus.style.display='block'; revalStatus.style.color='#6b5b8a'; revalStatus.textContent='🎵 Şiirin ruh haline uygun enstrümantal müzik oluşturuluyor (Hugging Face MusicGen — sözsüz)...';
+      try{
+        await adminMuzikYenile(post);
+        refreshCard(post.id);
+        const newCard=document.querySelector('[data-pid="'+post.id+'"]');
+        const newStatus=newCard?newCard.querySelector('.reval-status'):null;
+        if(newStatus){newStatus.style.display='block';newStatus.textContent='✅ Müzik oluşturuldu!';newStatus.style.color='#34d399';}
+      }catch(err){
+        revalStatus.textContent='❌ Müzik hatası: '+err.message;
+        revalStatus.style.color='#f87171';
+      }
+      aiMusicBtn.disabled=false; aiMusicBtn.textContent=post.musicUrl?'🎵 Müziği Yeniden Oluştur':'🎵 Yapay Zeka ile Müzik Oluştur';
+    };
+    const actionRow=h('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'6px'}},[revalBtn2,aiImageBtn,aiAudioBtn,aiMusicBtn]);
     revalDiv.appendChild(modelSecici);
     revalDiv.appendChild(actionRow);
     revalDiv.appendChild(revalStatus);
@@ -4445,6 +4531,11 @@ function swipeCard(post,sonrakineGec){
     const sesOynatici=sesOynaticiOlustur(post.audioUrl);
     scroller.appendChild(sesOynatici.el);
     card._sesAudio=sesOynatici.audio;
+  }
+  // AI müzik (varsa) — manuel başlatılır, sesli okumayla otomatik çakışmaz.
+  if(post.musicUrl){
+    const muzikOynatici=sesOynaticiOlustur(post.musicUrl,{label:'🎵 Müzik',gradient:'linear-gradient(135deg,#4d7c0f,#84cc16)'});
+    scroller.appendChild(muzikOynatici.el);
   }
 
   const footer=h('div',{class:'swipe-footer'});
