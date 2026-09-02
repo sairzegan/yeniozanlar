@@ -624,6 +624,56 @@ async function igHikayeCanvasOlustur(post, author){
 // Kaydırma modundaki okuma hissini taklit eder: 9:16 canvas + şiir görseli
 // arka plan + şiir metni + ses. Video süresi doğrudan audioUrl'un süresidir.
 // Tarayıcıların yerleşik MediaRecorder'ı nedeniyle çıktı WebM'dir.
+
+async function ffmpegMp4Donustur(webmBlob, durum, progText){
+  if(!window.FFmpeg){
+    durum.textContent='⏳ MP4 dönüştürücü yükleniyor...';
+    await new Promise((resolve,reject)=>{
+      const sc=document.createElement('script');
+      sc.src='https://unpkg.com/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js';
+      sc.onload=resolve;
+      sc.onerror=()=>reject(new Error('MP4 dönüştürücü yüklenemedi. İnternet bağlantısını kontrol edin.'));
+      document.head.appendChild(sc);
+    });
+  }
+  if(!window.FFmpeg?.createFFmpeg) throw new Error('MP4 dönüştürücü başlatılamadı.');
+
+  const {createFFmpeg, fetchFile}=window.FFmpeg;
+  const ffmpeg=createFFmpeg({
+    log:false,
+    corePath:'https://unpkg.com/@ffmpeg/core@0.11.5/dist/ffmpeg-core.js'
+  });
+
+  durum.textContent='⏳ MP4 motoru hazırlanıyor...';
+  await ffmpeg.load();
+
+  durum.textContent='⏳ Video MP4 formatına dönüştürülüyor...';
+  progText.textContent='MP4 dönüştürme başladı...';
+
+  ffmpeg.FS('writeFile','input.webm',await fetchFile(webmBlob));
+  await ffmpeg.run(
+    '-i','input.webm',
+    '-c:v','libx264',
+    '-preset','veryfast',
+    '-crf','22',
+    '-pix_fmt','yuv420p',
+    '-c:a','aac',
+    '-b:a','192k',
+    '-movflags','+faststart',
+    'output.mp4'
+  );
+
+  const data=ffmpeg.FS('readFile','output.mp4');
+  const mp4Blob=new Blob([data.buffer],{type:'video/mp4'});
+
+  try{ffmpeg.FS('unlink','input.webm');}catch{}
+  try{ffmpeg.FS('unlink','output.mp4');}catch{}
+  try{ffmpeg.exit();}catch{}
+
+  if(!mp4Blob.size) throw new Error('MP4 dosyası boş oluştu.');
+  return mp4Blob;
+}
+
 async function siiriVideoOlarakKaydet(post){
   const audioUrl = post?.audioUrl || post?.musicUrl;
   if(!audioUrl){
@@ -643,7 +693,7 @@ async function siiriVideoOlarakKaydet(post){
   ]);
   modal.appendChild(baslik);
   const bilgi=h('p',{style:{color:'#a78bfa',fontSize:'.76rem',lineHeight:'1.45',marginBottom:'10px'}},
-    'Şiirin resmi arka plan olur; yazılar kaydırma modundaki gibi akar. Video, ses dosyasının tamamı kadar sürer.');
+    'Şiirin resmi arka plan olur; yazılar kaydırma modundaki gibi akar. Video, ses dosyasının tamamı kadar sürer ve MP4 olarak indirilir.');
   modal.appendChild(bilgi);
 
   const preview=h('canvas',{width:'540',height:'960',style:{width:'270px',height:'480px',display:'block',margin:'8px auto',borderRadius:'14px',background:'#0a0718',border:'1px solid #3d1f6e'}});
@@ -811,12 +861,21 @@ async function siiriVideoOlarakKaydet(post){
         ...dest.stream.getAudioTracks()
       ]);
 
-      const mimeCandidates=[
+      // Önce tarayıcının doğrudan MP4 kaydını dene. Desteklenmiyorsa
+      // WebM ara dosyası oluşturup hemen ardından FFmpeg ile MP4'e çeviriyoruz.
+      const mp4MimeCandidates=[
+        'video/mp4;codecs="avc1.42E01E,mp4a.40.2"',
+        'video/mp4;codecs="avc1.4D401F,mp4a.40.2"',
+        'video/mp4'
+      ];
+      const webmMimeCandidates=[
         'video/webm;codecs=vp9,opus',
         'video/webm;codecs=vp8,opus',
         'video/webm'
       ];
-      const mime=mimeCandidates.find(x=>window.MediaRecorder?.isTypeSupported?.(x))||'';
+      const directMp4Mime=mp4MimeCandidates.find(x=>window.MediaRecorder?.isTypeSupported?.(x))||'';
+      const webmMime=webmMimeCandidates.find(x=>window.MediaRecorder?.isTypeSupported?.(x))||'';
+      const mime=directMp4Mime||webmMime;
       if(!window.MediaRecorder || !mime) throw new Error('Bu tarayıcı video kaydını desteklemiyor.');
 
       chunks=[];
@@ -852,21 +911,30 @@ async function siiriVideoOlarakKaydet(post){
       running=false;
       stream.getTracks().forEach(t=>t.stop());
       audioSource.disconnect();
-      const blob=new Blob(chunks,{type:mime});
-      if(!blob.size) throw new Error('Boş video oluştu.');
+      const recordedBlob=new Blob(chunks,{type:mime});
+      if(!recordedBlob.size) throw new Error('Boş video oluştu.');
 
-      const url=URL.createObjectURL(blob);
+      // Çıktı her durumda MP4 olacak.
+      let mp4Blob=recordedBlob;
+      if(!directMp4Mime){
+        mp4Blob=await ffmpegMp4Donustur(recordedBlob,durum,progText);
+      }else{
+        // Tarayıcı doğrudan MP4 verdiyse dönüştürme gerekmez.
+        durum.textContent='⏳ MP4 dosyası hazırlanıyor...';
+      }
+
+      const url=URL.createObjectURL(mp4Blob);
       const a=document.createElement('a');
       a.href=url;
-      a.download=`siir-${post.id}.webm`;
+      a.download=`siir-${post.id}.mp4`;
       document.body.appendChild(a);a.click();a.remove();
       setTimeout(()=>URL.revokeObjectURL(url),10000);
 
       prog.firstChild.style.width='100%';
-      progText.textContent='%100 · Video hazır';
-      durum.textContent='✅ Video indirildi.';
+      progText.textContent='%100 · MP4 hazır';
+      durum.textContent='✅ MP4 video indirildi.';
       kaydetBtn.disabled=false; iptalBtn.disabled=false;
-      kaydetBtn.textContent='🔄 Videoyu Yeniden Oluştur';
+      kaydetBtn.textContent='🔄 MP4 Videoyu Yeniden Oluştur';
     };
   }catch(err){
     console.error('Şiir video oluşturma hatası:',err);
