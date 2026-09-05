@@ -3,7 +3,8 @@
 //
 // GÖREV:
 // Sadece Cloudflare Workers AI -> FLUX.1-schnell üzerinden
-// AI görseli üretir.
+// AI görseli üretir, ürettiği görseli Vercel Blob'a yükler ve
+// istemciye SADECE bir URL (JSON) döner.
 //
 // ÖNEMLİ:
 // Bu dosya GIPHY'ye FALLBACK YAPMAZ.
@@ -21,6 +22,34 @@
 //
 // Cloudflare burada başarısız olursa HTTP 502 döndürür.
 // Böylece index.html bir sonraki AI sağlayıcısına geçebilir.
+//
+// ────────────────────────────────────────────────────────────────
+// DÜZELTME #1 (Cloudflare'in çalışmamasının asıl nedeni):
+// Cloudflare'in flux-1-schnell modelinin prompt için ~2048 KARAKTER
+// sınırı var (dokümante edilmemiş ama gerçek bir sınır — sınırı aşan
+// promptlarda Cloudflare "400 Bad Request" ile hata dönüyor).
+// Eski buildPrompt(): sabit İngilizce talimatlar (~650 kr) + başlık
+// (250 kr'a kadar) + şiir (1800 kr'a kadar) + varyasyon etiketi
+// (~60 kr) = TOPLAMDA 2700+ karaktere kadar çıkabiliyordu — yani
+// normal uzunlukta bir şiirde bile sınırı rahatça aşıyordu. Bu yüzden
+// Cloudflare çoğu istekte "prompt too long" tarzı bir hata ile
+// başarısız oluyor, kod bunu yakalayıp otomatik olarak Hugging Face'e
+// (veya GIPHY'ye) düşüyordu — yani "Cloudflare hiç çalışmıyor" hissi
+// buradan geliyordu. Şimdi nihai prompt HER ZAMAN güvenli bir sınırın
+// (1900 karakter) altında kalacak şekilde kırpılıyor.
+//
+// DÜZELTME #2 (Firestore günlük kota sorunu):
+// Önceden bu fonksiyon ham görsel binary'sini dönüyordu, frontend
+// onu küçük bir JPEG'e sıkıştırıp base64 olarak DOĞRUDAN Firestore
+// dokümanına (post.image) yazıyordu. Bu, her paylaşımı ~150-200 KB
+// büyütüyor ve her okuma/yazmada bu veriyi taşıyor — günlük Firestore
+// kotasının (okunan/yazılan bayt) çok hızlı dolmasına yol açıyordu.
+// Artık görsel burada (sunucu tarafında) Vercel Blob'a yükleniyor ve
+// istemciye SADECE küçük bir URL string'i dönülüyor. Firestore'a da
+// artık base64 değil, bu URL yazılıyor.
+// ────────────────────────────────────────────────────────────────
+
+import { put } from '@vercel/blob';
 
 const MODEL = '@cf/black-forest-labs/flux-1-schnell';
 
@@ -29,30 +58,18 @@ const CLOUDFLARE_URL = (accountId) =>
 
 const TIMEOUT_MS = 65000;
 
+// Cloudflare'in dokümante etmediği ama gerçekte uyguladığı prompt
+// karakter sınırı ~2048. Güvenlik payı bırakmak için 1900 kullanıyoruz.
+const MAX_PROMPT_CHARS = 1900;
 
 // ============================================================
-// CLOUDINARY
+// VERCEL BLOB
 // ============================================================
-// Cloudinary tarafında oluşturduğumuz unsigned preset:
-//   cloud name: f2iuce5z
-//   upload preset: site_unsigned
-//
-// FLUX görseli Cloudinary'ye de yüklenir.
-// Cloudinary yüklemesi başarısız olsa bile FLUX görseli
-// mevcut frontend zincirini bozmamak için yine binary döndürülür.
+// Vercel projesine bir "Blob" store bağlandığında Vercel otomatik
+// olarak BLOB_READ_WRITE_TOKEN ortam değişkenini ekler; put() bunu
+// kendisi okur, elle geçmeye gerek yok.
 
-const CLOUDINARY_CLOUD_NAME = 'f2iuce5z';
-const CLOUDINARY_UPLOAD_PRESET = 'site_unsigned';
-
-const CLOUDINARY_UPLOAD_URL =
-  `https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/image/upload`;
-
-
-async function uploadToCloudinary(buffer, title = '') {
-
-  const form = new FormData();
-
-  // Aynı şiir tekrar üretildiğinde aynı dosya üzerine yazılmasın.
+async function uploadToVercelBlob(buffer, title = '') {
   const safeTitle =
     String(title || 'siir')
       .trim()
@@ -61,176 +78,91 @@ async function uploadToCloudinary(buffer, title = '') {
       .replace(/^-|-$/g, '')
       .slice(0, 80) || 'siir';
 
-  const publicId =
-    `yeniozanlar/${safeTitle}-${Date.now()}-${Math.random()
-      .toString(36)
-      .slice(2, 8)}`;
+  const pathname = `ai-gorseller/${safeTitle}-${Date.now()}-${Math.random()
+    .toString(36)
+    .slice(2, 8)}.jpg`;
 
-  form.append(
-    'file',
-    new Blob([buffer], { type: 'image/jpeg' }),
-    `${safeTitle}.jpg`
-  );
+  const result = await put(pathname, buffer, {
+    access: 'public',
+    contentType: 'image/jpeg',
+    addRandomSuffix: false
+  });
 
-  form.append(
-    'upload_preset',
-    CLOUDINARY_UPLOAD_PRESET
-  );
-
-  form.append(
-    'public_id',
-    publicId
-  );
-
-  const response =
-    await fetchWithTimeout(
-      CLOUDINARY_UPLOAD_URL,
-      {
-        method: 'POST',
-        body: form
-      },
-      30000
-    );
-
-  const raw = await response.text();
-
-  let data = null;
-
-  try {
-    data = JSON.parse(raw);
-  } catch (_) {
-    data = null;
+  if (!result?.url) {
+    throw new Error('Vercel Blob yükleme başarılı görünüyor ama url dönmedi.');
   }
 
-  if (!response.ok) {
-    throw new Error(
-      `Cloudinary yükleme hatası HTTP ${response.status}${
-        data?.error?.message
-          ? ` — ${data.error.message}`
-          : raw.slice(0, 500)
-      }`
-    );
-  }
-
-  if (!data?.secure_url) {
-    throw new Error(
-      'Cloudinary yükleme başarılı görünüyor ancak secure_url dönmedi.'
-    );
-  }
-
-  return data;
+  return result;
 }
-
 
 // ============================================================
 // PROMPT
 // ============================================================
 
 function buildPrompt(title, text) {
-  const poem = String(text || '').trim().slice(0, 1800);
-  const heading = String(title || '').trim().slice(0, 250);
+  const heading = String(title || '').trim().slice(0, 200);
 
-  // Her istekte farklı prompt oluştur.
-  // Aynı şiirde yeniden görsel oluşturulduğunda
-  // CDN/cache nedeniyle aynı görsel dönmesini azaltır.
-  const varyasyon =
-    `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-
-  return [
+  const instructions = [
     'Create one original cinematic image specifically inspired by the Turkish poem below.',
-
     'Use the actual meaning of the poem as the primary visual source.',
-
     'Show the setting, people, objects, actions, symbols, metaphors and emotions that are actually present in the poem.',
-
-    'Do not create a generic poetry image.',
-
-    'Do not invent an unrelated scene.',
-
+    'Do not create a generic poetry image. Do not invent an unrelated scene.',
     'The poem must determine the subject, atmosphere and visual story.',
-
     'Style: cinematic photography, realistic, artistic, atmospheric, detailed, natural lighting, elegant composition, 16:9 landscape.',
+    'IMPORTANT: absolutely NO text anywhere in the image. NO letters, NO words, NO captions, NO typography, NO subtitles, NO signs, NO logos, NO watermark.',
+    heading ? `Turkish poem title: ${heading}` : ''
+  ].filter(Boolean).join(' ');
 
-    'IMPORTANT: absolutely NO text anywhere in the image.',
+  // Önbellek kırıcı — her istekte farklı bir prompt üretir (aynı şiir
+  // yeniden görselleştirilse bile CDN/model önbelleği aynı sonucu
+  // dönmesin diye). Kısa tutuluyor ki toplam bütçeden fazla yer kaplamasın.
+  const varyasyon = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  const suffix = `\n\nInternal variation tag (ignore, do not depict, do not render as text): ${varyasyon}`;
 
-    'NO letters, NO words, NO captions, NO typography, NO subtitles, NO signs, NO logos, NO watermark.',
+  // Sabit kısımlar ayrıldıktan sonra şiire ayrılabilecek gerçek bütçeyi
+  // hesapla, böylece TOPLAM prompt her zaman MAX_PROMPT_CHARS altında kalır.
+  const fixedLen = instructions.length + suffix.length + '\n\nTurkish poem:\n'.length;
+  const poemBudget = Math.max(200, MAX_PROMPT_CHARS - fixedLen);
+  const poem = String(text || '').trim().slice(0, poemBudget);
 
-    heading
-      ? `Turkish poem title: ${heading}`
-      : '',
+  const finalPrompt = `${instructions}\n\nTurkish poem:\n${poem}${suffix}`;
 
-    `Turkish poem:\n${poem}`,
-
-    `Internal variation tag (ignore, do not depict, do not render as text): ${varyasyon}`
-  ]
-    .filter(Boolean)
-    .join('\n\n');
+  // Son bir güvenlik kesmesi (teorik olarak buraya hiç gelmemeli).
+  return finalPrompt.length > MAX_PROMPT_CHARS
+    ? finalPrompt.slice(0, MAX_PROMPT_CHARS)
+    : finalPrompt;
 }
-
 
 // ============================================================
 // TIMEOUT'LU FETCH
 // ============================================================
 
-async function fetchWithTimeout(
-  url,
-  options = {},
-  timeoutMs = TIMEOUT_MS
-) {
+async function fetchWithTimeout(url, options = {}, timeoutMs = TIMEOUT_MS) {
   const controller = new AbortController();
-
-  const timer = setTimeout(() => {
-    controller.abort();
-  }, timeoutMs);
-
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(url, {
-      ...options,
-      signal: controller.signal
-    });
+    return await fetch(url, { ...options, signal: controller.signal });
   } finally {
     clearTimeout(timer);
   }
 }
-
 
 // ============================================================
 // CLOUDFLARE CEVABINI BINARY GÖRSELE ÇEVİR
 // ============================================================
 
 async function readCloudflareImage(response) {
-
-  const contentType =
-    (
-      response.headers.get('content-type') ||
-      ''
-    )
-      .toLowerCase()
-      .split(';')[0]
-      .trim();
-
-
-  // ----------------------------------------------------------
-  // HTTP hata kodu
-  // ----------------------------------------------------------
+  const contentType = (response.headers.get('content-type') || '')
+    .toLowerCase()
+    .split(';')[0]
+    .trim();
 
   if (!response.ok) {
-
     let raw = '';
-
-    try {
-      raw = await response.text();
-    } catch (_) {
-      raw = '';
-    }
+    try { raw = await response.text(); } catch (_) { raw = ''; }
 
     let data = null;
-
-    try {
-      data = JSON.parse(raw);
-    } catch (_) {
-      data = null;
-    }
+    try { data = JSON.parse(raw); } catch (_) { data = null; }
 
     const detail =
       data?.errors?.[0]?.message ||
@@ -238,141 +170,51 @@ async function readCloudflareImage(response) {
       data?.message ||
       raw.slice(0, 800);
 
-
-    const error = new Error(
-      `Cloudflare FLUX HTTP ${response.status}${
-        detail
-          ? ` — ${detail}`
-          : ''
-      }`
-    );
-
+    const error = new Error(`Cloudflare FLUX HTTP ${response.status}${detail ? ` — ${detail}` : ''}`);
     error.status = response.status;
     error.isCloudflare = true;
-
     throw error;
   }
 
-
-  // ----------------------------------------------------------
-  // Cloudflare doğrudan image/* döndürdüyse
-  // ----------------------------------------------------------
-
+  // Cloudflare doğrudan image/* döndürdüyse (bazı hesap/model varyasyonlarında olur)
   if (contentType.startsWith('image/')) {
-
-    const arrayBuffer =
-      await response.arrayBuffer();
-
-    const buffer =
-      Buffer.from(arrayBuffer);
-
-    if (!buffer.length) {
-      throw new Error(
-        'Cloudflare FLUX boş görsel döndürdü.'
-      );
-    }
-
+    const arrayBuffer = await response.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    if (!buffer.length) throw new Error('Cloudflare FLUX boş görsel döndürdü.');
     return buffer;
   }
 
-
-  // ----------------------------------------------------------
-  // Cloudflare Workers AI genellikle JSON döndürür:
-  //
-  // {
-  //   "result": {
-  //      "image": "BASE64..."
-  //   },
-  //   "success": true
-  // }
-  // ----------------------------------------------------------
-
-  const raw =
-    await response.text();
-
+  // Normalde Cloudflare Workers AI REST API'si JSON döner:
+  // { "result": { "image": "BASE64..." }, "success": true }
+  const raw = await response.text();
   let data = null;
-
-  try {
-    data = JSON.parse(raw);
-  } catch (_) {
-    data = null;
-  }
-
+  try { data = JSON.parse(raw); } catch (_) { data = null; }
 
   if (!data) {
-    throw new Error(
-      `Cloudflare FLUX JSON olmayan bir cevap döndürdü: ${raw.slice(0, 500)}`
-    );
+    throw new Error(`Cloudflare FLUX JSON olmayan bir cevap döndürdü: ${raw.slice(0, 500)}`);
   }
 
+  const base64 = data?.result?.image || data?.image;
 
-  const base64 =
-    data?.result?.image ||
-    data?.image;
-
-
-  if (
-    base64 &&
-    typeof base64 === 'string'
-  ) {
-
-    let temizBase64 =
-      base64.trim();
-
-
-    // İhtimale karşı data:image/...;base64,... formatını da destekle.
-    if (
-      temizBase64.startsWith('data:image/')
-    ) {
-      const virgül =
-        temizBase64.indexOf(',');
-
-      if (virgül >= 0) {
-        temizBase64 =
-          temizBase64.slice(virgül + 1);
-      }
+  if (base64 && typeof base64 === 'string') {
+    let temizBase64 = base64.trim();
+    if (temizBase64.startsWith('data:image/')) {
+      const virgul = temizBase64.indexOf(',');
+      if (virgul >= 0) temizBase64 = temizBase64.slice(virgul + 1);
     }
-
-
-    const buffer =
-      Buffer.from(
-        temizBase64,
-        'base64'
-      );
-
-
-    if (!buffer.length) {
-      throw new Error(
-        'Cloudflare FLUX base64 görsel verisi boş.'
-      );
-    }
-
-
+    const buffer = Buffer.from(temizBase64, 'base64');
+    if (!buffer.length) throw new Error('Cloudflare FLUX base64 görsel verisi boş.');
     return buffer;
   }
 
-
-  // Cloudflare hata mesajını mümkün olduğunca açık göster.
   const detail =
     data?.errors?.[0]?.message ||
     data?.error ||
     data?.message ||
-    (
-      data?.result
-        ? JSON.stringify(data.result).slice(0, 500)
-        : ''
-    );
+    (data?.result ? JSON.stringify(data.result).slice(0, 500) : '');
 
-
-  throw new Error(
-    `Cloudflare FLUX geçerli bir görsel döndürmedi.${
-      detail
-        ? ` — ${detail}`
-        : ''
-    }`
-  );
+  throw new Error(`Cloudflare FLUX geçerli bir görsel döndürmedi.${detail ? ` — ${detail}` : ''}`);
 }
-
 
 // ============================================================
 // VERCEL
@@ -380,275 +222,89 @@ async function readCloudflareImage(response) {
 
 export const maxDuration = 75;
 
-
 // ============================================================
 // MAIN HANDLER
 // ============================================================
 
-export default async function handler(
-  req,
-  res
-) {
-
-  // ----------------------------------------------------------
-  // Sadece POST
-  // ----------------------------------------------------------
-
+export default async function handler(req, res) {
   if (req.method !== 'POST') {
-
-    res.setHeader(
-      'Allow',
-      'POST'
-    );
-
-    return res
-      .status(405)
-      .json({
-        error:
-          'Yalnızca POST destekleniyor.'
-      });
+    res.setHeader('Allow', 'POST');
+    return res.status(405).json({ error: 'Yalnızca POST destekleniyor.' });
   }
 
+  const title = req.body?.title || '';
+  const text = req.body?.text || '';
 
-  // ----------------------------------------------------------
-  // Gelen veriler
-  // ----------------------------------------------------------
-
-  const title =
-    req.body?.title || '';
-
-  const text =
-    req.body?.text || '';
-
-
-  // ----------------------------------------------------------
-  // Şiir kontrolü
-  // ----------------------------------------------------------
-
-  if (
-    !String(text).trim()
-  ) {
-
-    return res
-      .status(400)
-      .json({
-        error:
-          'Şiir metni gönderilemedi.'
-      });
+  if (!String(text).trim()) {
+    return res.status(400).json({ error: 'Şiir metni gönderilemedi.' });
   }
 
+  const accountId = String(process.env.CLOUDFLARE_ACCOUNT_ID || '').trim();
+  const token = String(process.env.CLOUDFLARE_API_TOKEN || '').trim();
 
-  // ----------------------------------------------------------
-  // Cloudflare Environment Variables
-  // ----------------------------------------------------------
-
-  const accountId =
-    String(
-      process.env.CLOUDFLARE_ACCOUNT_ID || ''
-    ).trim();
-
-
-  const token =
-    String(
-      process.env.CLOUDFLARE_API_TOKEN || ''
-    ).trim();
-
-
-  if (
-    !accountId ||
-    !token
-  ) {
-
-    return res
-      .status(500)
-      .json({
-        error:
-          'Cloudflare değişkenleri eksik: CLOUDFLARE_ACCOUNT_ID ve CLOUDFLARE_API_TOKEN gerekli.'
-      });
+  if (!accountId || !token) {
+    return res.status(500).json({
+      error: 'Cloudflare değişkenleri eksik: CLOUDFLARE_ACCOUNT_ID ve CLOUDFLARE_API_TOKEN gerekli.'
+    });
   }
 
-
-  // ----------------------------------------------------------
-  // PROMPT
-  // ----------------------------------------------------------
-
-  const prompt =
-    buildPrompt(
-      title,
-      text
-    );
-
-
-  // ----------------------------------------------------------
-  // CLOUDFLARE FLUX
-  // ----------------------------------------------------------
+  const prompt = buildPrompt(title, text);
 
   try {
-
-    const response =
-      await fetchWithTimeout(
-
-        CLOUDFLARE_URL(
-          accountId
-        ),
-
-        {
-          method: 'POST',
-
-          headers: {
-            Authorization:
-              `Bearer ${token}`,
-
-            'Content-Type':
-              'application/json',
-
-            Accept:
-              'application/json'
-          },
-
-          body:
-            JSON.stringify({
-              prompt,
-
-              // Seed göndermiyoruz.
-              // Cloudflare FLUX endpointinde
-              // geçersiz / desteklenmeyen seed parametresi
-              // nedeniyle hata oluşmasını engeller.
-              steps: 4
-            })
+    const response = await fetchWithTimeout(
+      CLOUDFLARE_URL(accountId),
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          Accept: 'application/json'
         },
+        body: JSON.stringify({
+          prompt,
+          // Seed göndermiyoruz: geçersiz/desteklenmeyen seed nedeniyle
+          // hata oluşmasını engeller.
+          steps: 4
+        })
+      },
+      TIMEOUT_MS
+    );
 
-        TIMEOUT_MS
-      );
-
-
-    const buffer =
-      await readCloudflareImage(
-        response
-      );
-
+    const buffer = await readCloudflareImage(response);
 
     // --------------------------------------------------------
-    // CLOUDINARY'YE YEDEKLE
+    // VERCEL BLOB'A YÜKLE — artık Firestore'a base64 yazılmıyor,
+    // sadece bu adımda üretilen küçük URL yazılacak.
     // --------------------------------------------------------
-    // Cloudinary yüklemesi FLUX cevabını bozmaz.
-    // Başarısız olursa yalnızca loglanır; frontend'e FLUX
-    // binary cevabı yine gönderilir.
-
+    let blobResult;
     try {
-
-      const cloudinaryResult =
-        await uploadToCloudinary(
-          buffer,
-          title
-        );
-
-      res.setHeader(
-        'X-Cloudinary-URL',
-        cloudinaryResult.secure_url
-      );
-
-      res.setHeader(
-        'X-Cloudinary-Public-ID',
-        cloudinaryResult.public_id || ''
-      );
-
-      console.log(
-        'Cloudinary upload başarılı:',
-        cloudinaryResult.secure_url
-      );
-
-    } catch (cloudinaryError) {
-
-      console.error(
-        'Cloudinary upload başarısız:',
-        cloudinaryError?.message || cloudinaryError
-      );
-
+      blobResult = await uploadToVercelBlob(buffer, title);
+    } catch (blobErr) {
+      console.error('Vercel Blob upload başarısız:', blobErr?.message || blobErr);
+      return res.status(502).json({
+        error: `Görsel üretildi ama depolamaya (Vercel Blob) yüklenemedi: ${blobErr?.message || blobErr}`,
+        provider: 'cloudflare'
+      });
     }
 
-
-    // --------------------------------------------------------
-    // BAŞARILI
-    // --------------------------------------------------------
-
-    res.setHeader(
-      'Content-Type',
-      'image/jpeg'
-    );
-
-    res.setHeader(
-      'Content-Length',
-      String(buffer.length)
-    );
-
-    // AI görseli her istekte yeniden oluşturulabilsin.
-    res.setHeader(
-      'Cache-Control',
-      'no-store, no-cache, must-revalidate'
-    );
-
-    res.setHeader(
-      'X-AI-Provider',
-      'cloudflare'
-    );
-
-    res.setHeader(
-      'X-AI-Model',
-      MODEL
-    );
-
-
-    return res
-      .status(200)
-      .send(buffer);
-
-
+    return res.status(200).json({
+      imageUrl: blobResult.url,
+      provider: 'cloudflare',
+      model: MODEL
+    });
   } catch (err) {
+    // BURADA GIPHY ÇAĞRILMIYOR — HTTP 502 dönüyoruz, index.html bir
+    // sonraki sağlayıcıya (Hugging Face) geçecek.
+    const mesaj = err?.name === 'AbortError'
+      ? 'Cloudflare FLUX isteği zaman aşımına uğradı.'
+      : (err?.message || 'Cloudflare FLUX başarısız oldu.');
 
-    // --------------------------------------------------------
-    // ÇOK ÖNEMLİ:
-    //
-    // BURADA GIPHY ÇAĞRILMIYOR.
-    //
-    // HTTP 502 dönüyoruz.
-    //
-    // index.html bunu yakalayıp:
-    //
-    // Cloudflare ❌
-    //       ↓
-    // Pollinations
-    //       ↓
-    // Hugging Face
-    //       ↓
-    // Gemini
-    //       ↓
-    // GIPHY
-    //
-    // şeklinde devam edecek.
-    // --------------------------------------------------------
+    console.error('Cloudflare FLUX error:', mesaj);
 
-    const mesaj =
-      err?.name === 'AbortError'
-        ? 'Cloudflare FLUX isteği zaman aşımına uğradı.'
-        : (
-            err?.message ||
-            'Cloudflare FLUX başarısız oldu.'
-          );
-
-
-    console.error(
-      'Cloudflare FLUX error:',
-      mesaj
-    );
-
-
-    return res
-      .status(502)
-      .json({
-        error: mesaj,
-        provider: 'cloudflare',
-        fallback: false
-      });
+    return res.status(502).json({
+      error: mesaj,
+      provider: 'cloudflare',
+      fallback: false
+    });
   }
 }

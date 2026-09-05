@@ -1,53 +1,76 @@
 // /api/huggingface-image.js
 // Hugging Face "Inference Providers" üzerinden FLUX.1-schnell ile görsel üretir.
-// Cloudflare FLUX (kota/rate-limit) ve Pollinations ikisi de başarısız olursa
-// üçüncü AI sağlayıcısı olarak devreye girer (bkz. index.html içinde
-// adminYapayZekaGorseliYenile / huggingfaceGorselDene).
+// Cloudflare FLUX başarısız olursa ikinci AI sağlayıcısı olarak devreye girer.
 //
-// ÖNEMLİ (düzeltme notu): Bu dosya daha önce doğrudan
-// "https://api-inference.huggingface.co/models/..." adresine POST atıyordu.
-// Hugging Face bu eski "serverless Inference API" adresini tamamen KALDIRDI
-// (artık 410/bağlantı hatası dönüyor: "no longer supported, use
-// router.huggingface.co instead"). Bu yüzden istekler "fetch failed" ile
-// başarısız oluyordu — bu bir kota sorunu DEĞİLDİ, kırılan bir endpoint'ti.
+// DÜZELTME (bkz. flux-image.js'teki aynı not): FLUX.1-schnell'in prompt için
+// dokümante edilmemiş ama gerçek bir ~2048 karakter sınırı var. Aynı güvenlik
+// payını (1900 kr) burada da uyguluyoruz, çünkü bu model HF üzerinde de aynı
+// (fal-ai / replicate) altyapıyı kullanabiliyor.
 //
-// Çözüm: resmi "@huggingface/inference" SDK'sı kullanılıyor. Bu SDK, isteği
-// otomatik olarak modelin o an hangi sağlayıcı (fal-ai, replicate, nebius vb.)
-// üzerinden servis edildiğini bulup doğru "router.huggingface.co" rotasına ve
-// doğru istek/cevap şemasına çevirir (provider:"auto" ile).
+// DÜZELTME (Firestore kotası): Artık ham binary döndürmek yerine görsel
+// burada Vercel Blob'a yükleniyor ve istemciye sadece küçük bir URL
+// (JSON: {imageUrl}) dönülüyor — böylece Firestore'a base64 yazılmıyor.
 //
-// Vercel Environment Variable:
+// Vercel Environment Variables:
 // HUGGINGFACE_API_TOKEN = hf_...
+// (Vercel Blob store bağlıysa BLOB_READ_WRITE_TOKEN otomatik eklenir)
 //
-// Vercel Environment (package.json) bağımlılığı:
-// "@huggingface/inference" (bkz. package.json)
-//
-// flux-image.js ile aynı üslupta: ham görsel binary'sini (image/*) doğrudan
-// döndürür, JSON sarmalamaz — böylece istemci tarafı tek bir blob-işleme
-// koduyla dört sağlayıcıyı da (Cloudflare, Pollinations, Hugging Face, Gemini)
-// aynı şekilde işleyebilir.
+// Vercel Environment (package.json) bağımlılıkları:
+// "@huggingface/inference", "@vercel/blob"
 
 import { InferenceClient } from '@huggingface/inference';
+import { put } from '@vercel/blob';
 
 const MODEL = 'black-forest-labs/FLUX.1-schnell';
 const TIMEOUT_MS = 60000;
+const MAX_PROMPT_CHARS = 1900;
 
 function buildPrompt(title, text) {
-  const poem = String(text || '').trim().slice(0, 1800);
-  const heading = String(title || '').trim().slice(0, 250);
-  // Önbellek kırıcı — bkz. flux-image.js'teki aynı isimli değişken.
-  const varyasyon = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  const heading = String(title || '').trim().slice(0, 200);
 
-  return [
+  const instructions = [
     'Create one original cinematic image directly inspired by the Turkish poem below.',
     'Use the actual meaning of the poem as the primary visual source: its setting, people, objects, actions, symbols, metaphors and emotions.',
     'Do not create a generic poetry image and do not invent an unrelated scene.',
     'Style: cinematic photography, realistic, artistic, atmospheric, detailed, natural lighting, elegant composition, 16:9 landscape.',
     'IMPORTANT: absolutely NO text anywhere in the image. No letters, no words, no captions, no typography, no signs, no logos, no watermark.',
-    heading ? `Turkish poem title: ${heading}` : '',
-    `Turkish poem:\n${poem}`,
-    `Internal variation tag (ignore, do not depict, do not render as text): ${varyasyon}`
-  ].filter(Boolean).join('\n\n');
+    heading ? `Turkish poem title: ${heading}` : ''
+  ].filter(Boolean).join(' ');
+
+  const varyasyon = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  const suffix = `\n\nInternal variation tag (ignore, do not depict, do not render as text): ${varyasyon}`;
+
+  const fixedLen = instructions.length + suffix.length + '\n\nTurkish poem:\n'.length;
+  const poemBudget = Math.max(200, MAX_PROMPT_CHARS - fixedLen);
+  const poem = String(text || '').trim().slice(0, poemBudget);
+
+  const finalPrompt = `${instructions}\n\nTurkish poem:\n${poem}${suffix}`;
+  return finalPrompt.length > MAX_PROMPT_CHARS ? finalPrompt.slice(0, MAX_PROMPT_CHARS) : finalPrompt;
+}
+
+async function uploadToVercelBlob(buffer, title = '', contentType = 'image/jpeg') {
+  const safeTitle =
+    String(title || 'siir')
+      .trim()
+      .replace(/[^a-zA-Z0-9ğüşöçıİĞÜŞÖÇ_-]+/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '')
+      .slice(0, 80) || 'siir';
+
+  const ext = contentType.includes('png') ? 'png' : 'jpg';
+  const pathname = `ai-gorseller/${safeTitle}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+
+  const result = await put(pathname, buffer, {
+    access: 'public',
+    contentType,
+    addRandomSuffix: false
+  });
+
+  if (!result?.url) {
+    throw new Error('Vercel Blob yükleme başarılı görünüyor ama url dönmedi.');
+  }
+
+  return result;
 }
 
 export const maxDuration = 60;
@@ -78,10 +101,6 @@ export default async function handler(req, res) {
   try {
     const client = new InferenceClient(token);
 
-    // provider:"auto" → HF, modeli o an hangi sağlayıcı (fal-ai, replicate,
-    // nebius, vb.) canlı sunuyorsa otomatik olarak onu seçer. Elle sabit bir
-    // sağlayıcı (örn. sadece "hf-inference") seçmiyoruz çünkü hf-inference artık
-    // ağırlıklı olarak küçük/CPU modelleri servis ediyor, FLUX gibi modelleri değil.
     const blob = await client.textToImage(
       {
         model: MODEL,
@@ -105,12 +124,22 @@ export default async function handler(req, res) {
 
     const contentType = blob.type && blob.type.startsWith('image/') ? blob.type : 'image/jpeg';
 
-    res.setHeader('Content-Type', contentType);
-    res.setHeader('Content-Length', String(buffer.length));
-    res.setHeader('Cache-Control', 'no-store');
-    res.setHeader('X-AI-Provider', 'huggingface');
-    res.setHeader('X-AI-Model', MODEL);
-    return res.status(200).send(buffer);
+    let blobResult;
+    try {
+      blobResult = await uploadToVercelBlob(buffer, title, contentType);
+    } catch (blobErr) {
+      console.error('Vercel Blob upload başarısız:', blobErr?.message || blobErr);
+      return res.status(502).json({
+        error: `Görsel üretildi ama depolamaya (Vercel Blob) yüklenemedi: ${blobErr?.message || blobErr}`,
+        provider: 'huggingface'
+      });
+    }
+
+    return res.status(200).json({
+      imageUrl: blobResult.url,
+      provider: 'huggingface',
+      model: MODEL
+    });
   } catch (err) {
     clearTimeout(timer);
     const msg =
