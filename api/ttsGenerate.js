@@ -160,6 +160,23 @@ async function edgeTtsIleUret({ text, title, voiceKey }) {
   }
 }
 
+// ACE-Step VE Edge TTS yedeği aynı anda başarısız olursa (çok nadir), ham
+// teknik hata yerine anlaşılır bir mesaj gösteriyoruz. Teknik detay yine de
+// console.error ile sunucu loglarına yazılıyor.
+function kullaniciDostuHataMesaji(e) {
+  const mesaj = String(e?.message || e || "");
+  const gecici = /aborted|timeout|zaman a[şs][iı]m[iı]|50[234]|ECONNRESET|ETIMEDOUT|ENOTFOUND|fetch failed|network/i.test(
+    mesaj
+  );
+  if (gecici) {
+    return (
+      "AI seslendirme servisi şu anda geçici olarak yanıt vermiyor ya da çok yoğun. " +
+      'Birkaç dakika sonra "Sesi Yeniden Oluştur" butonuna tekrar basmayı deneyin.'
+    );
+  }
+  return `Seslendirme oluşturulamadı: ${mesaj.slice(0, 250)}`;
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     res.setHeader("Allow", "POST");
@@ -217,6 +234,6 @@ export default async function handler(req, res) {
     return res.status(200).json({ audioUrl: blob.url, kaynak });
   } catch (e) {
     console.error("ttsGenerate HATASI:", e);
-    return res.status(500).json({ error: "Sunucu hatası.", detail: String(e?.message || e).slice(0, 300) });
+    return res.status(500).json({ error: kullaniciDostuHataMesaji(e), detail: String(e?.message || e).slice(0, 300) });
   }
 }

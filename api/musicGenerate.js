@@ -93,6 +93,25 @@ async function aceStepIleMuzikUret(musicPrompt) {
   return buffer;
 }
 
+// ACE-Step geçici olarak çökmüş/aşırı yavaşsa (timeout, 502/503/504, ağ
+// hatası vb.) kullanıcıya ham teknik hata yerine daha anlaşılır, ne yapması
+// gerektiğini söyleyen bir mesaj gösteriyoruz. Teknik detay yine de
+// console.error ile sunucu loglarına yazılıyor (bkz. handler içindeki catch).
+function kullaniciDostuHataMesaji(e) {
+  const mesaj = String(e?.message || e || "");
+  const gecici = /aborted|timeout|zaman a[şs][iı]m[iı]|50[234]|ECONNRESET|ETIMEDOUT|ENOTFOUND|fetch failed|network/i.test(
+    mesaj
+  );
+  if (gecici) {
+    return (
+      'AI müzik servisi (acemusic.ai) şu anda geçici olarak yanıt vermiyor ya da çok yoğun. ' +
+      'Bu genelde kısa süreli bir durumdur — birkaç dakika sonra "Yapay Zeka ile Müzik Oluştur" ' +
+      "butonuna tekrar basmayı deneyin."
+    );
+  }
+  return `Müzik oluşturulamadı: ${mesaj.slice(0, 250)}`;
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     res.setHeader("Allow", "POST");
@@ -124,6 +143,6 @@ export default async function handler(req, res) {
     return res.status(200).json({ musicUrl: blob.url, prompt: musicPrompt || "" });
   } catch (e) {
     console.error("musicGenerate HATASI:", e);
-    return res.status(502).json({ error: `Müzik oluşturulamadı: ${String(e?.message || e).slice(0, 300)}` });
+    return res.status(502).json({ error: kullaniciDostuHataMesaji(e) });
   }
 }
