@@ -3735,102 +3735,47 @@ async function adminGiphyFallbackUygula(post){
 // döner, başarısızsa Error fırlatır. Bu sayede adminYapayZekaGorseliYenile
 // hepsini TEK bir döngüyle deneyebilir. flux-image.js ve huggingface-image.js
 // ham görsel binary'si (image/*) döner.
+// NOT: flux-image.js ve huggingface-image.js artık ham görsel binary'si
+// DEĞİL, görseli sunucu tarafında Vercel Blob'a yükleyip küçük bir
+// {imageUrl} JSON'u döndürüyor. Böylece Firestore'a hiçbir zaman büyük
+// base64 veri yazılmıyor (bkz. adminYapayZekaGorseliYenile).
 async function fluxGorselDene(title, text, signal){
   const r=await fetch('/api/flux-image',{
     method:'POST', headers:{'Content-Type':'application/json'}, signal,
     body:JSON.stringify({title,text})
   });
-  const contentType=(r.headers.get('content-type')||'').split(';')[0].trim().toLowerCase();
+  let data=null;
+  try{ data=await r.json(); }catch(_){ data=null; }
   if(!r.ok){
-    let hata='';
-    try{ const data=await r.json(); hata=data?.error||data?.detail||data?.message||''; }
-    catch(_){ try{ hata=(await r.text()).slice(0,500); }catch(__){} }
+    const hata=data?.error||data?.detail||data?.message||'';
     throw new Error(`Cloudflare FLUX HTTP ${r.status}${hata?` — ${hata}`:''}`);
   }
-  if(!contentType.startsWith('image/')) throw new Error(`FLUX görsel yerine ${contentType||'bilinmeyen veri'} döndürdü.`);
-  const blob=await r.blob();
-  if(!blob || !blob.size) throw new Error('FLUX boş görsel döndürdü.');
-  return { blob, provider:'cloudflare', model:'@cf/black-forest-labs/flux-1-schnell' };
+  if(!data?.imageUrl) throw new Error('Cloudflare FLUX görsel linki dönmedi.');
+  return { imageUrl:data.imageUrl, provider:data.provider||'cloudflare', model:data.model||'@cf/black-forest-labs/flux-1-schnell' };
 }
 async function huggingfaceGorselDene(title, text, signal){
   const r=await fetch('/api/huggingface-image',{
     method:'POST', headers:{'Content-Type':'application/json'}, signal,
     body:JSON.stringify({title,text})
   });
-  const contentType=(r.headers.get('content-type')||'').split(';')[0].trim().toLowerCase();
+  let data=null;
+  try{ data=await r.json(); }catch(_){ data=null; }
   if(!r.ok){
-    let hata='';
-    try{ const data=await r.json(); hata=data?.error||''; }
-    catch(_){ try{ hata=(await r.text()).slice(0,300); }catch(__){} }
+    const hata=data?.error||'';
     throw new Error(`Hugging Face HTTP ${r.status}${hata?` — ${hata}`:''}`);
   }
-  if(!contentType.startsWith('image/')) throw new Error(`Hugging Face görsel yerine ${contentType||'bilinmeyen veri'} döndürdü.`);
-  const blob=await r.blob();
-  if(!blob || !blob.size) throw new Error('Hugging Face boş görsel döndürdü.');
-  return { blob, provider:'huggingface', model:'black-forest-labs/FLUX.1-schnell' };
+  if(!data?.imageUrl) throw new Error('Hugging Face görsel linki dönmedi.');
+  return { imageUrl:data.imageUrl, provider:data.provider||'huggingface', model:data.model||'black-forest-labs/FLUX.1-schnell' };
 }
-// Herhangi bir sağlayıcıdan gelen görsel blob'unu makul bir boyuta küçültüp
-// Firestore'a sığacak bir JPEG data URL'sine çevirir. Firebase Storage
-// KULLANILMAZ — üretilen görsel doğrudan Firestore alanına (post.image) yazılır,
-// bu yüzden hiçbir sağlayıcı Storage kotasını doldurmaz.
-//
-// DÜZELTME: Firestore'un TEK DOKÜMAN sınırı ~1.048.576 byte'tır ve bu sınıra
-// şiirin metni, yorumlar, botYorumlar, aiYorum gibi DİĞER alanlar da dahildir.
-// Önceki sürüm görseli ~1.000.000 karaktere kadar (neredeyse doküman sınırının
-// TAMAMI) sıkıştırıyordu — bu da gerçek (uzun/dolu) paylaşımlarda
-// db.collection('posts')...update() çağrısının "document exceeds maximum size"
-// benzeri bir hatayla BAŞARISIZ olmasına yol açıyordu. Bu hata, adminYapayZeka-
-// GorseliYenile'deki try/catch tarafından "sağlayıcı başarısız oldu" sanılıp
-// bir sonraki sağlayıcıya geçiliyordu — halbuki görsel ÜRETİMİ başarılıydı,
-// sorun sadece KAYDETME adımındaydı. Bu yüzden panelin "Test Et" butonları
-// (Firestore'a hiç yazmadığı için) başarılı görünürken, gerçek buton hep
-// GIPHY'ye düşüyordu. Artık görsel diğer alanlara yer bırakacak şekilde çok
-// daha küçük (~450 KB) tutuluyor.
-function blobToCompressedDataUrl(blob){
-  return new Promise((resolve,reject)=>{
-    const reader=new FileReader();
-    reader.onload=()=>{
-      const img=new Image();
-      img.onload=()=>{
-        const maxSide=640;
-        let w=img.naturalWidth||img.width||768;
-        let h=img.naturalHeight||img.height||768;
-        if(w>maxSide||h>maxSide){
-          if(w>=h){h=Math.round(h*maxSide/w);w=maxSide;}
-          else{w=Math.round(w*maxSide/h);h=maxSide;}
-        }
-        const canvas=document.createElement('canvas');
-        canvas.width=w;canvas.height=h;
-        const ctx=canvas.getContext('2d');
-        if(!ctx){reject(new Error('Görsel dönüştürücü başlatılamadı.'));return;}
-        ctx.drawImage(img,0,0,w,h);
-        const HEDEF_MAKS=180000; // ~180 KB — Firestore dokümanında diğer alanlara bolca yer bırakır
-        let data=canvas.toDataURL('image/jpeg',0.62);
-        if(data.length>HEDEF_MAKS)data=canvas.toDataURL('image/jpeg',0.42);
-        if(data.length>HEDEF_MAKS){
-          const small=document.createElement('canvas');
-          small.width=Math.round(w*0.65);small.height=Math.round(h*0.65);
-          const sctx=small.getContext('2d');
-          sctx.drawImage(canvas,0,0,small.width,small.height);
-          data=small.toDataURL('image/jpeg',0.40);
-        }
-        if(data.length>HEDEF_MAKS){
-          const tiny=document.createElement('canvas');
-          tiny.width=Math.round(w*0.5);tiny.height=Math.round(h*0.5);
-          const tctx=tiny.getContext('2d');
-          tctx.drawImage(canvas,0,0,tiny.width,tiny.height);
-          data=tiny.toDataURL('image/jpeg',0.45);
-        }
-        if(data.length>240000){reject(new Error(`Görsel yeterince küçültülemedi (${Math.round(data.length/1024)} KB) — Firestore için fazla büyük.`));return;}
-        resolve(data);
-      };
-      img.onerror=()=>reject(new Error('Görsel okunamadı.'));
-      img.src=reader.result;
-    };
-    reader.onerror=()=>reject(new Error('Görsel okunamadı.'));
-    reader.readAsDataURL(blob);
-  });
-}
+// DÜZELTME (Firestore günlük kota sorunu): flux-image.js ve
+// huggingface-image.js artık üretilen görseli SUNUCU tarafında Vercel
+// Blob'a yükleyip küçük bir URL döndürüyor (bkz. fluxGorselDene /
+// huggingfaceGorselDene). Bu yüzden istemci tarafında artık ham görseli
+// base64'e sıkıştırıp Firestore dokümanına gömen bir adıma gerek yok —
+// post.image alanına doğrudan bu URL yazılıyor. Bu hem doküman
+// boyutunu (ve dolayısıyla günlük okunan/yazılan Firestore bayt kotasını)
+// neredeyse hiç etkilemiyor hem de "document exceeds maximum size"
+// hatasını tamamen ortadan kaldırıyor.
 
 async function aiGorselPromptuGroqlaOlustur(post){
   const baslik=String(post?.title||'').trim().slice(0,250);
@@ -3950,9 +3895,9 @@ async function adminYapayZekaGorseliYenile(post){
     if(status) status.textContent=s.mesaj;
     const controller=new AbortController();
     const zamanlayici=setTimeout(()=>controller.abort(), s.sure);
-    let blob, provider, model;
+    let imageUrl, provider, model;
     try{
-      ({blob, provider, model}=await s.fn(post.title||'', gorselIcinMetin, controller.signal));
+      ({imageUrl, provider, model}=await s.fn(post.title||'', gorselIcinMetin, controller.signal));
       clearTimeout(zamanlayici);
     }catch(err){
       clearTimeout(zamanlayici);
@@ -3964,27 +3909,19 @@ async function adminYapayZekaGorseliYenile(post){
       continue; // sıradaki sağlayıcıyı dene
     }
 
-    // DÜZELTME: Görsel ÜRETİMİ (yukarıdaki s.fn çağrısı) başarılı oldu — buradan
-    // sonraki adım (sıkıştırma + Firestore'a yazma) artık sağlayıcıya özgü
-    // DEĞİL. Önceden bu adım da AYNI try/catch içindeydi ve hata alınca "bu
-    // sağlayıcı başarısız oldu" sanılıp bir sonraki sağlayıcı deneniyordu —
-    // oysa görsel gerçekten üretilmişti, sorun sadece kaydetmedeydi (örn.
-    // Firestore'un ~1MB doküman sınırı, şiirin mevcut yorum/puan verileriyle
-    // birleşince aşılıyordu). Bu yüzden panelin "Test Et" butonları (Firestore'a
-    // hiç yazmadıkları için) başarılı görünürken gerçek buton hep GIPHY'ye
-    // düşüyordu. Artık kaydetme hatası bir sonraki sağlayıcıyı denetmeden
-    // DOĞRUDAN ve NET şekilde kullanıcıya gösteriliyor (yeniden denemek bir işe
-    // yaramaz, aynı kaydetme sorunuyla tekrar karşılaşılır).
+    // Görsel zaten sunucu tarafında (flux-image.js / huggingface-image.js)
+    // Vercel Blob'a yüklendi ve bize hazır bir URL döndü — burada artık
+    // sıkıştırma/base64 dönüşümüne gerek yok, Firestore'a doğrudan bu
+    // küçük URL yazılıyor.
     try{
       if(status) status.textContent='💾 AI görseli kaydediliyor...';
-      const aiImageDataUrl=await blobToCompressedDataUrl(blob);
 
       const idx=S.posts.findIndex(p=>p.id===post.id);
       if(idx<0) throw new Error('Paylaşım bulunamadı.');
 
       const now=Date.now();
       const updates={
-        image:aiImageDataUrl, autoGif:false, gifCaption:null,
+        image:imageUrl, autoGif:false, gifCaption:null,
         aiImage:true, aiImageUpdatedAt:now,
         aiImageProvider:provider, aiImageModel:model
       };
