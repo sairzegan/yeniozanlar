@@ -41,11 +41,17 @@ import path from "path";
 // için artık hiç gönderilmiyor. Gerçek üretim genelde 5-15 saniye sürer.
 
 const ACE_ENDPOINT = "https://api.acemusic.ai/v1/chat/completions";
-const ACE_TIMEOUT_MS = 55000; // Vercel fonksiyon süresiyle (config.maxDuration) uyumlu
+const ACE_TIMEOUT_MS = 260000; // Vercel fonksiyon süresiyle (config.maxDuration) uyumlu
 
-// Vercel'de fonksiyon süresi varsayılan olarak kısadır (Hobby planında ~10sn).
-// ACE-Step'e istek + Blob'a yükleme için bunu artırıyoruz.
-export const config = { maxDuration: 60 };
+// 100sn'lik önceki denemede HÂLÂ "aborted due to timeout" alındığı için süre
+// iyice yükseltildi. Vercel'de (Fluid Compute varsayılan olarak açık) Hobby
+// planı bile 300sn'ye kadar fonksiyon süresine izin veriyor; burada 280sn'ye
+// kadar (Blob'a yükleme + olası Edge TTS yedeği için pay bırakılarak) izin
+// veriliyor. Bu süre aşılıyorsa sorun kodda değil, ACE-Step'in (ücretsiz
+// katmanda kuyruk/GPU yoğunluğu nedeniyle) o an gerçekten çok yavaş yanıt
+// vermesindedir — bu durumda acemusic.ai hesabınızdaki kota/durumu kontrol
+// etmeniz gerekir.
+export const config = { maxDuration: 280 };
 
 const EDGE_VOICE_MAP = {
   female: { voice: "tr-TR-EmelNeural", pitch: "-3%", rate: "-8%" },

@@ -27,13 +27,14 @@ import { put } from "@vercel/blob";
 // kullanılıyor (önceki `lyrics:"[inst]"` yöntemi yerine).
 
 const ACE_ENDPOINT = "https://api.acemusic.ai/v1/chat/completions";
-const ACE_TIMEOUT_MS = 55000; // Vercel fonksiyon süresiyle (config.maxDuration) uyumlu
+const ACE_TIMEOUT_MS = 260000; // Vercel fonksiyon süresiyle (config.maxDuration) uyumlu
 const VARSAYILAN_PROMPT =
   "calm ambient ballad, soft piano and warm strings, reflective and gentle atmosphere";
 const MUZIK_SURESI_SN = 45;
 
-// Vercel'de fonksiyon süresi varsayılan olarak kısadır. Bunu artırıyoruz.
-export const config = { maxDuration: 60 };
+// 100sn'lik önceki denemede HÂLÂ "aborted due to timeout" alındığı için süre
+// iyice yükseltildi (bkz. ttsGenerate.js'teki aynı notun ayrıntısı).
+export const config = { maxDuration: 280 };
 
 function base64SesVerisiniCoz(dataUrl) {
   if (!dataUrl || typeof dataUrl !== "string" || !dataUrl.startsWith("data:")) {
