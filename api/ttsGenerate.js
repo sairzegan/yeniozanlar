@@ -3,6 +3,7 @@ import { EdgeTTS } from "node-edge-tts";
 import fs from "fs/promises";
 import os from "os";
 import path from "path";
+import { aceStepHfSpaceIleUret } from "./_lib/aceStepHfSpace.js";
 
 // v2 — ACE-Step (acemusic.ai, ÜCRETSİZ API — bkz. https://acemusic.ai/playground/api-key)
 // ile GERÇEK yapay zeka seslendirmesi.
@@ -27,9 +28,13 @@ import path from "path";
 //   uzunluğundan kaba bir süre tahmini yapıyoruz (saniyeTahminEt). Çok uzun
 //   şiirlerde okuma metni süreye sığdırılamayabilir — bu ACE-Step'in kendi
 //   sınırıdır.
-// - ACE_MUSIC_API_KEY tanımlı değilse VEYA ACE-Step geçici olarak başarısız
-//   olursa (kota/timeout/ağ hatası), eskisi gibi Microsoft Edge TTS'e YEDEK
-//   olarak düşülür — böylece bir paylaşım hiçbir zaman sessiz kalmaz. Bu
+// - ACE_MUSIC_API_KEY tanımlı değilse VEYA acemusic.ai geçici olarak
+//   başarısız olursa (kota/timeout/ağ hatası), 2. YEDEK olarak Hugging
+//   Face'teki RESMİ ACE-Step v1.5 Space'i (huggingface.co/spaces/ACE-Step/
+//   Ace-Step-v1.5) @gradio/client ile denenir (bkz. _lib/aceStepHfSpace.js).
+//   O DA başarısız olursa (Space uyuyor/ücretsiz ZeroGPU kuyruğu doluysa
+//   vb.) eskisi gibi Microsoft Edge TTS'e SON YEDEK olarak düşülür —
+//   böylece bir paylaşım hiçbir zaman sessiz kalmaz. Edge TTS'e düşülen
 //   durumda üretilen ses sadece okuma içerir, fon müziği İÇERMEZ.
 //
 // NOT (v3): api.acemusic.ai SADECE senkron "OpenRouter uyumlu" modu destekler
@@ -41,16 +46,22 @@ import path from "path";
 // için artık hiç gönderilmiyor. Gerçek üretim genelde 5-15 saniye sürer.
 
 const ACE_ENDPOINT = "https://api.acemusic.ai/v1/chat/completions";
-const ACE_TIMEOUT_MS = 260000; // Vercel fonksiyon süresiyle (config.maxDuration) uyumlu
+// ÖNEMLİ: Artık acemusic.ai başarısız olursa/zaman aşımına uğrarsa HF Space
+// (bkz. ACESTEP_HF_TIMEOUT_MS) ve gerekirse Edge TTS de aynı fonksiyon
+// çağrısı içinde SIRAYLA denendiği için üç aşamanın toplamı Vercel'in
+// maxDuration'ını (aşağıda) AŞMAMALI. Bu yüzden acemusic.ai'ye tek başına
+// tüm süreyi vermek yerine makul bir pay ayrılıyor.
+const ACE_TIMEOUT_MS = 100000;
+// HF Space (ACE-Step v1.5) için ayrılan pay — ücretsiz ZeroGPU kuyruğu
+// nedeniyle acemusic.ai'den daha yavaş olabilir, bu yüzden biraz daha fazla
+// süre tanınıyor.
+const ACESTEP_HF_TIMEOUT_MS = 130000;
 
-// 100sn'lik önceki denemede HÂLÂ "aborted due to timeout" alındığı için süre
-// iyice yükseltildi. Vercel'de (Fluid Compute varsayılan olarak açık) Hobby
-// planı bile 300sn'ye kadar fonksiyon süresine izin veriyor; burada 280sn'ye
-// kadar (Blob'a yükleme + olası Edge TTS yedeği için pay bırakılarak) izin
-// veriliyor. Bu süre aşılıyorsa sorun kodda değil, ACE-Step'in (ücretsiz
-// katmanda kuyruk/GPU yoğunluğu nedeniyle) o an gerçekten çok yavaş yanıt
-// vermesindedir — bu durumda acemusic.ai hesabınızdaki kota/durumu kontrol
-// etmeniz gerekir.
+// Vercel'de (Fluid Compute varsayılan olarak açık) Hobby planı bile 300sn'ye
+// kadar fonksiyon süresine izin veriyor; burada 280sn'ye kadar (üç deneme +
+// Blob'a yükleme için pay bırakılarak) izin veriliyor. Üç deneme de
+// başarısız/yavaş olursa sorun kodda değil, servislerin (acemusic.ai / HF
+// ZeroGPU kuyruğu) o an gerçekten yavaş/dolu olmasındadır.
 export const config = { maxDuration: 280 };
 
 const EDGE_VOICE_MAP = {
@@ -170,8 +181,10 @@ function kullaniciDostuHataMesaji(e) {
   );
   if (gecici) {
     return (
-      "AI seslendirme servisi şu anda geçici olarak yanıt vermiyor ya da çok yoğun. " +
-      'Birkaç dakika sonra "Sesi Yeniden Oluştur" butonuna tekrar basmayı deneyin.'
+      "AI seslendirme servisleri (acemusic.ai, yedek Hugging Face ACE-Step v1.5 " +
+      "Space'i ve Edge TTS) şu anda geçici olarak yanıt vermiyor ya da çok " +
+      'yoğun. Birkaç dakika sonra "Sesi Yeniden Oluştur" butonuna tekrar ' +
+      "basmayı deneyin."
     );
   }
   return `Seslendirme oluşturulamadı: ${mesaj.slice(0, 250)}`;
@@ -214,13 +227,26 @@ export default async function handler(req, res) {
         duration,
       });
     } catch (aceErr) {
-      console.warn("ACE-Step seslendirme başarısız, Edge TTS'e (yedek) düşülüyor:", aceErr.message);
-      kaynak = "edge-tts-yedek";
-      buffer = await edgeTtsIleUret({
-        text: cleanText,
-        title,
-        voiceKey: gender === "male" ? "male" : "female",
-      });
+      console.warn("acemusic.ai seslendirme başarısız, HF Space (ACE-Step v1.5) deneniyor:", aceErr.message);
+      try {
+        buffer = await aceStepHfSpaceIleUret({
+          caption: finalCaption,
+          lyrics: `[Verse]\n${lyricsMetin}`,
+          durationSaniye: duration,
+          vocalLanguage,
+          instrumental: false,
+          timeoutMs: ACESTEP_HF_TIMEOUT_MS,
+        });
+        kaynak = "ace-step-hf-space";
+      } catch (hfErr) {
+        console.warn("HF Space (ACE-Step v1.5) de başarısız, Edge TTS'e (son yedek) düşülüyor:", hfErr.message);
+        kaynak = "edge-tts-yedek";
+        buffer = await edgeTtsIleUret({
+          text: cleanText,
+          title,
+          voiceKey: gender === "male" ? "male" : "female",
+        });
+      }
     }
 
     const blob = await put(`audio/${cleanPostId}.mp3`, buffer, {

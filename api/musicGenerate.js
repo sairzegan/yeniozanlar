@@ -1,4 +1,5 @@
 import { put } from "@vercel/blob";
+import { aceStepHfSpaceIleUret } from "./_lib/aceStepHfSpace.js";
 
 // /api/musicGenerate.js
 // v6 — ACE-Step (acemusic.ai, ÜCRETSİZ API — bkz. https://acemusic.ai/playground/api-key)
@@ -25,15 +26,32 @@ import { put } from "@vercel/blob";
 // bu alan opsiyonel olduğu için artık hiç gönderilmiyor. Enstrümantal (sözsüz)
 // üretim için resmi olarak belgelenen `audio_config.instrumental: true`
 // kullanılıyor (önceki `lyrics:"[inst]"` yöntemi yerine).
+//
+// NOT (v8): acemusic.ai başarısız/zaman aşımına uğrarsa artık 2. bir yedek
+// devreye giriyor: Hugging Face'teki RESMİ ACE-Step v1.5 Space'i
+// (huggingface.co/spaces/ACE-Step/Ace-Step-v1.5), @gradio/client ile
+// programatik olarak denenir (bkz. _lib/aceStepHfSpace.js). Bu Space'in
+// dokümante edilmiş bir REST API'si olmadığından (bkz. o dosyadaki notlar)
+// bu katman acemusic.ai kadar güvenilir değildir; sadece ek bir şanstır.
+// İkisi de başarısız olursa (musicGenerate.js'te Edge TTS gibi müziksiz bir
+// son çare olmadığından) istek 502 ile başarısız döner.
 
 const ACE_ENDPOINT = "https://api.acemusic.ai/v1/chat/completions";
-const ACE_TIMEOUT_MS = 260000; // Vercel fonksiyon süresiyle (config.maxDuration) uyumlu
+// ÖNEMLİ: acemusic.ai başarısız olursa HF Space aynı fonksiyon çağrısı
+// içinde SIRAYLA denendiği için iki aşamanın toplamı Vercel'in
+// maxDuration'ını (aşağıda) AŞMAMALI — bu yüzden tüm süre acemusic.ai'ye
+// ayrılmıyor.
+const ACE_TIMEOUT_MS = 100000;
+// HF Space (ACE-Step v1.5) için ayrılan pay — ücretsiz ZeroGPU kuyruğu
+// nedeniyle acemusic.ai'den daha yavaş olabilir.
+const ACESTEP_HF_TIMEOUT_MS = 150000;
 const VARSAYILAN_PROMPT =
   "calm ambient ballad, soft piano and warm strings, reflective and gentle atmosphere";
 const MUZIK_SURESI_SN = 45;
 
-// 100sn'lik önceki denemede HÂLÂ "aborted due to timeout" alındığı için süre
-// iyice yükseltildi (bkz. ttsGenerate.js'teki aynı notun ayrıntısı).
+// Vercel'de (Fluid Compute varsayılan olarak açık) Hobby planı bile 300sn'ye
+// kadar fonksiyon süresine izin veriyor; burada 280sn'ye kadar (iki deneme +
+// Blob'a yükleme için pay bırakılarak) izin veriliyor.
 export const config = { maxDuration: 280 };
 
 function base64SesVerisiniCoz(dataUrl) {
@@ -104,9 +122,10 @@ function kullaniciDostuHataMesaji(e) {
   );
   if (gecici) {
     return (
-      'AI müzik servisi (acemusic.ai) şu anda geçici olarak yanıt vermiyor ya da çok yoğun. ' +
-      'Bu genelde kısa süreli bir durumdur — birkaç dakika sonra "Yapay Zeka ile Müzik Oluştur" ' +
-      "butonuna tekrar basmayı deneyin."
+      "AI müzik servisleri (acemusic.ai ve yedek olarak denenen Hugging Face " +
+      "ACE-Step v1.5 Space'i) şu anda geçici olarak yanıt vermiyor ya da çok " +
+      'yoğun. Bu genelde kısa süreli bir durumdur — birkaç dakika sonra "Yapay ' +
+      'Zeka ile Müzik Oluştur" butonuna tekrar basmayı deneyin.'
     );
   }
   return `Müzik oluşturulamadı: ${mesaj.slice(0, 250)}`;
@@ -127,9 +146,28 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: "Geçersiz şiir ID." });
   }
 
+  let buffer;
+  let kaynak = "ace-step";
   try {
-    const buffer = await aceStepIleMuzikUret(musicPrompt);
+    buffer = await aceStepIleMuzikUret(musicPrompt);
+  } catch (aceErr) {
+    console.warn("acemusic.ai müzik üretimi başarısız, HF Space (ACE-Step v1.5) deneniyor:", aceErr.message);
+    try {
+      buffer = await aceStepHfSpaceIleUret({
+        caption: String(musicPrompt || "").trim() || VARSAYILAN_PROMPT,
+        lyrics: "",
+        durationSaniye: MUZIK_SURESI_SN,
+        instrumental: true,
+        timeoutMs: ACESTEP_HF_TIMEOUT_MS,
+      });
+      kaynak = "ace-step-hf-space";
+    } catch (hfErr) {
+      console.error("musicGenerate HATASI (acemusic.ai + HF Space ikisi de başarısız):", hfErr);
+      return res.status(502).json({ error: kullaniciDostuHataMesaji(hfErr) });
+    }
+  }
 
+  try {
     // NOT: dosya adı ttsGenerate.js'nin ürettiği `audio/${postId}.mp3` (seslendirme)
     // ile ÇAKIŞMASIN diye "-music" son eki kullanılıyor.
     const blob = await put(`audio/${cleanPostId}-music.mp3`, buffer, {
@@ -140,9 +178,9 @@ export default async function handler(req, res) {
       cacheControlMaxAge: 31536000,
     });
 
-    return res.status(200).json({ musicUrl: blob.url, prompt: musicPrompt || "" });
+    return res.status(200).json({ musicUrl: blob.url, prompt: musicPrompt || "", kaynak });
   } catch (e) {
-    console.error("musicGenerate HATASI:", e);
+    console.error("musicGenerate HATASI (Blob yükleme):", e);
     return res.status(502).json({ error: kullaniciDostuHataMesaji(e) });
   }
 }
