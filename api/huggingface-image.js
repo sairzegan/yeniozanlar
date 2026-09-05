@@ -28,23 +28,25 @@ const MAX_PROMPT_CHARS = 1900;
 function buildPrompt(title, text) {
   const heading = String(title || '').trim().slice(0, 200);
 
+  const noText = 'No text, no letters, no words, no writing, no typography, no captions, no signs, no logos, no watermark, no books, no handwritten pages anywhere in the image.';
+
   const instructions = [
-    'Create one original cinematic image directly inspired by the Turkish poem below.',
-    'Use the actual meaning of the poem as the primary visual source: its setting, people, objects, actions, symbols, metaphors and emotions.',
-    'Do not create a generic poetry image and do not invent an unrelated scene.',
+    noText,
+    'Create one original cinematic image inspired by the scene described below.',
+    'Show the setting, people, objects, actions and atmosphere described — nothing else.',
+    'Do not create a generic abstract image. Do not invent unrelated elements.',
     'Style: cinematic photography, realistic, artistic, atmospheric, detailed, natural lighting, elegant composition, 16:9 landscape.',
-    'IMPORTANT: absolutely NO text anywhere in the image. No letters, no words, no captions, no typography, no signs, no logos, no watermark.',
-    heading ? `Turkish poem title: ${heading}` : ''
+    heading ? `Theme: ${heading}` : ''
   ].filter(Boolean).join(' ');
 
   const varyasyon = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-  const suffix = `\n\nInternal variation tag (ignore, do not depict, do not render as text): ${varyasyon}`;
+  const suffix = ` ${noText} (Internal variation tag, ignore: ${varyasyon})`;
 
-  const fixedLen = instructions.length + suffix.length + '\n\nTurkish poem:\n'.length;
+  const fixedLen = instructions.length + suffix.length + '\n\nScene:\n'.length;
   const poemBudget = Math.max(200, MAX_PROMPT_CHARS - fixedLen);
-  const poem = String(text || '').trim().slice(0, poemBudget);
+  const scene = String(text || '').trim().slice(0, poemBudget);
 
-  const finalPrompt = `${instructions}\n\nTurkish poem:\n${poem}${suffix}`;
+  const finalPrompt = `${instructions}\n\nScene:\n${scene}${suffix}`;
   return finalPrompt.length > MAX_PROMPT_CHARS ? finalPrompt.slice(0, MAX_PROMPT_CHARS) : finalPrompt;
 }
 

@@ -102,35 +102,35 @@ async function uploadToVercelBlob(buffer, title = '') {
 function buildPrompt(title, text) {
   const heading = String(title || '').trim().slice(0, 200);
 
+  // DÜZELTME (görselde yazı/harf çıkması sorunu): FLUX.1-schnell "guidance
+  // distilled" bir modeldir, yani "no text" gibi olumsuz talimatları normal
+  // modeller kadar güvenilir uygulayamaz. Elimizden gelen: (1) yasak
+  // talimatını hem PROMPTUN EN BAŞINA hem EN SONUNA koymak (distilled
+  // modellerde başta/sonda olan talimatlar ortadakilerden daha çok dikkate
+  // alınıyor), (2) "poem/title" gibi metni çağrıştıran kelimeleri en aza
+  // indirmek — bu yüzden gerçek şiir metni artık normalde hiç buraya
+  // gelmiyor (bkz. index.html: gorselIcinMetin artık sadece Groq'un ürettiği
+  // sahne tarifini kullanıyor, ham şiiri değil).
+  const noText = 'No text, no letters, no words, no writing, no typography, no captions, no signs, no logos, no watermark, no books, no handwritten pages anywhere in the image.';
+
   const instructions = [
-    'Create one original cinematic image specifically inspired by the Turkish poem below.',
-    'Use the actual meaning of the poem as the primary visual source.',
-    'Show the setting, people, objects, actions, symbols, metaphors and emotions that are actually present in the poem.',
-    'Do not create a generic poetry image. Do not invent an unrelated scene.',
-    'The poem must determine the subject, atmosphere and visual story.',
+    noText,
+    'Create one original cinematic image inspired by the scene described below.',
+    'Show the setting, people, objects, actions and atmosphere described — nothing else.',
+    'Do not create a generic abstract image. Do not invent unrelated elements.',
     'Style: cinematic photography, realistic, artistic, atmospheric, detailed, natural lighting, elegant composition, 16:9 landscape.',
-    'IMPORTANT: absolutely NO text anywhere in the image. NO letters, NO words, NO captions, NO typography, NO subtitles, NO signs, NO logos, NO watermark.',
-    heading ? `Turkish poem title: ${heading}` : ''
+    heading ? `Theme: ${heading}` : ''
   ].filter(Boolean).join(' ');
 
-  // Önbellek kırıcı — her istekte farklı bir prompt üretir (aynı şiir
-  // yeniden görselleştirilse bile CDN/model önbelleği aynı sonucu
-  // dönmesin diye). Kısa tutuluyor ki toplam bütçeden fazla yer kaplamasın.
   const varyasyon = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-  const suffix = `\n\nInternal variation tag (ignore, do not depict, do not render as text): ${varyasyon}`;
+  const suffix = ` ${noText} (Internal variation tag, ignore: ${varyasyon})`;
 
-  // Sabit kısımlar ayrıldıktan sonra şiire ayrılabilecek gerçek bütçeyi
-  // hesapla, böylece TOPLAM prompt her zaman MAX_PROMPT_CHARS altında kalır.
-  const fixedLen = instructions.length + suffix.length + '\n\nTurkish poem:\n'.length;
+  const fixedLen = instructions.length + suffix.length + '\n\nScene:\n'.length;
   const poemBudget = Math.max(200, MAX_PROMPT_CHARS - fixedLen);
-  const poem = String(text || '').trim().slice(0, poemBudget);
+  const scene = String(text || '').trim().slice(0, poemBudget);
 
-  const finalPrompt = `${instructions}\n\nTurkish poem:\n${poem}${suffix}`;
-
-  // Son bir güvenlik kesmesi (teorik olarak buraya hiç gelmemeli).
-  return finalPrompt.length > MAX_PROMPT_CHARS
-    ? finalPrompt.slice(0, MAX_PROMPT_CHARS)
-    : finalPrompt;
+  const finalPrompt = `${instructions}\n\nScene:\n${scene}${suffix}`;
+  return finalPrompt.length > MAX_PROMPT_CHARS ? finalPrompt.slice(0, MAX_PROMPT_CHARS) : finalPrompt;
 }
 
 // ============================================================
