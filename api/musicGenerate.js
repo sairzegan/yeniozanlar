@@ -1,91 +1,81 @@
+import { put } from "@vercel/blob";
+
 // /api/musicGenerate.js
-// v5 — HİÇBİR dış AI servisi ÇAĞIRMAZ. Bunun yerine, sizin Colab'da bir kez
-// ürettiğiniz ve Vercel Blob'a yüklediğiniz sabit bir müzik KÜTÜPHANESİNDEN,
-// şiirin ruh haline (Groq'un ürettiği musicPrompt'taki anahtar kelimelere)
-// göre en uygun parçayı seçer. Böylece:
-//   - Asla dış servis hatası / 404 / kota / ücret sorunu olmaz (%100 ücretsiz).
-//   - Her şiire aynı müzik gitmez (8 farklı ruh hali + eşleştirme + rastgelelik).
-//   - Frontend'de HİÇBİR DEĞİŞİKLİK gerekmez; eski "🎵 Yapay Zeka ile Müzik
-//     Oluştur" butonu ve adminMuzikYenile() fonksiyonu aynen çalışmaya devam
-//     eder, çünkü aynı { musicUrl, prompt } sözleşmesini döndürüyoruz.
+// v6 — ACE-Step (acemusic.ai, ÜCRETSİZ API — bkz. https://acemusic.ai/playground/api-key)
+// ile GERÇEK yapay zeka enstrümantal fon müziği üretir.
 //
-// KURULUM:
-// 1) musicgen_kutuphane.ipynb notebook'unu Colab'da çalıştırıp 8 mp3 üretin.
-// 2) Hepsini Vercel Blob'a yükleyin (Storage > Blob store > Yüklemek).
-// 3) Her birinin public URL'sini kopyalayıp aşağıdaki TRACKS listesindeki
-//    ilgili "url" alanına yapıştırın (şu an hepsi "REPLACE_ME" yazıyor).
-// ═══════════════════════════════════════════════════════════════════════
+// Önceki sürüm (v5) sabit, önceden Colab'da üretilmiş 8 parçalık bir
+// kütüphaneden şiirin ruh haline en yakın hazır parçayı seçiyordu. Artık HER
+// şiir için GERÇEKTEN benzersiz, o şiire özel bir parça üretiliyor.
+//
+// Şiirin türüne/duygusuna uygun İngilizce prompt'u Groq (kota dolarsa Gemini)
+// hazırlıyor (bkz. index.html → aiMuzikPromptuGroqlaOlustur); burada SADECE
+// ACE-Step'e üretim isteği + Blob'a yükleme var.
+//
+// `lyrics` alanı bilerek sabit "[inst]" (enstrümantal) olarak gönderilir —
+// bu buton/uç nokta SÖZLÜ bir şey ÜRETMEZ, sadece arka plan müziği üretir.
+// Şiirin GERÇEKTEN seslendirildiği (sözlü okuma + otomatik fon müziği) akış
+// için bkz. ttsGenerate.js / post.audioUrl.
 
-// Notebook'taki dosya adları ve etiketlerle BİREBİR eşleşiyor.
-// url alanlarını Blob'a yükledikten sonra kendi linklerinizle değiştirin.
-const TRACKS = [
-  {
-    file: "melankolik_piano",
-    url: "https://se7mxjrrxj6hacua.public.blob.vercel-storage.com/audio/melankolik_piano.mp3",
-    tags: ["melancholic", "sad", "piano", "hüzün", "kayıp", "yalnızlık", "gözyaşı", "acı"]
-  },
-  {
-    file: "umutlu_gitar",
-    url: "https://se7mxjrrxj6hacua.public.blob.vercel-storage.com/audio/umutlu_gitar.mp3",
-    tags: ["hopeful", "warm", "guitar", "umut", "sevinç", "aşk", "mutluluk"]
-  },
-  {
-    file: "sakin_ambient",
-    url: "https://se7mxjrrxj6hacua.public.blob.vercel-storage.com/audio/sakin_ambient.mp3",
-    tags: ["calm", "ambient", "peaceful", "sakin", "huzur", "doğa", "dinginlik"]
-  },
-  {
-    file: "hazin_keman",
-    url: "https://se7mxjrrxj6hacua.public.blob.vercel-storage.com/audio/hazin_keman.mp3",
-    tags: ["mournful", "violin", "emotional", "hüzün", "ayrılık", "gözyaşı", "veda"]
-  },
-  {
-    file: "epik_orkestra",
-    url: "https://se7mxjrrxj6hacua.public.blob.vercel-storage.com/audio/epik_orkestra.mp3",
-    tags: ["epic", "orchestral", "powerful", "güçlü", "savaş", "kahramanlık", "mücadele"]
-  },
-  {
-    file: "romantik_yayli",
-    url: "https://se7mxjrrxj6hacua.public.blob.vercel-storage.com/audio/romantik_yayli.mp3",
-    tags: ["romantic", "strings", "tender", "aşk", "romantik", "özlem", "sevgili"]
-  },
-  {
-    file: "gizemli_karanlik",
-    url: "https://se7mxjrrxj6hacua.public.blob.vercel-storage.com/audio/gizemli_karanlik.mp3",
-    tags: ["mysterious", "dark", "tense", "gizem", "karanlık", "korku", "endişe"]
-  },
-  {
-    file: "nostaljik_lofi",
-    url: "https://se7mxjrrxj6hacua.public.blob.vercel-storage.com/audio/nostaljik_lofi.mp3",
-    tags: ["nostalgic", "lofi", "soft", "nostalji", "anı", "geçmiş", "hatıra"]
+const ACE_ENDPOINT = "https://api.acemusic.ai/v1/chat/completions";
+const ACE_MODEL = "acestep/ACE-Step-v1.5";
+const ACE_TIMEOUT_MS = 90000;
+const VARSAYILAN_PROMPT =
+  "calm ambient ballad, soft piano and warm strings, reflective and gentle atmosphere";
+const MUZIK_SURESI_SN = 75;
+
+function base64SesVerisiniCoz(dataUrl) {
+  if (!dataUrl || typeof dataUrl !== "string" || !dataUrl.startsWith("data:")) {
+    return null;
   }
-];
+  const virgulIdx = dataUrl.indexOf(",");
+  if (virgulIdx < 0) return null;
+  const buffer = Buffer.from(dataUrl.slice(virgulIdx + 1), "base64");
+  return buffer.length ? buffer : null;
+}
 
-function enUygunParcayiSec(musicPrompt, title) {
-  const metin = `${musicPrompt || ""} ${title || ""}`.toLowerCase();
+async function aceStepIleMuzikUret(musicPrompt) {
+  if (!process.env.ACE_MUSIC_API_KEY) {
+    throw new Error(
+      "ACE_MUSIC_API_KEY tanımlı değil (acemusic.ai/playground/api-key üzerinden ücretsiz alınabilir)."
+    );
+  }
+  const caption = String(musicPrompt || "").trim() || VARSAYILAN_PROMPT;
+  const govde = {
+    model: ACE_MODEL,
+    messages: [
+      { role: "user", content: `<prompt>${caption}</prompt><lyrics>[inst]</lyrics>` },
+    ],
+    stream: false,
+    thinking: true,
+    use_format: false,
+    audio_config: { duration: MUZIK_SURESI_SN, format: "mp3" },
+  };
 
-  let enIyi = null;
-  let enIyiPuan = -1;
-  const adaylar = []; // en yuksek puana esit birden fazla parca olursa rastgele sec
+  const res = await fetch(ACE_ENDPOINT, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${process.env.ACE_MUSIC_API_KEY}`,
+    },
+    body: JSON.stringify(govde),
+    signal: AbortSignal.timeout(ACE_TIMEOUT_MS),
+  });
 
-  for (const parca of TRACKS) {
-    let puan = 0;
-    for (const etiket of parca.tags) {
-      if (metin.includes(etiket.toLowerCase())) puan++;
-    }
-    if (puan > enIyiPuan) {
-      enIyiPuan = puan;
-      adaylar.length = 0;
-      adaylar.push(parca);
-    } else if (puan === enIyiPuan) {
-      adaylar.push(parca);
-    }
+  if (!res.ok) {
+    let detay = "";
+    try {
+      const j = await res.json();
+      detay = j?.error?.message || j?.detail || "";
+    } catch (_) {}
+    throw new Error(`ACE-Step HTTP ${res.status}${detay ? ": " + detay : ""}`);
   }
 
-  // Hicbir eslesme yoksa (puan 0), tamamen rastgele sec (adaylar = hepsi olur zaten)
-  const secilenler = enIyiPuan > 0 ? adaylar : TRACKS;
-  enIyi = secilenler[Math.floor(Math.random() * secilenler.length)];
-  return enIyi;
+  const data = await res.json();
+  const audioDataUrl = data?.choices?.[0]?.message?.audio?.[0]?.audio_url?.url;
+  const buffer = base64SesVerisiniCoz(audioDataUrl);
+  if (!buffer) throw new Error("ACE-Step geçerli bir ses verisi döndürmedi.");
+  return buffer;
 }
 
 export default async function handler(req, res) {
@@ -93,26 +83,32 @@ export default async function handler(req, res) {
     res.setHeader("Allow", "POST");
     return res.status(405).json({ error: "Sadece POST." });
   }
-
-  const eksikUrl = TRACKS.find(t => !t.url || t.url.startsWith("REPLACE_ME"));
-  if (eksikUrl) {
-    return res.status(500).json({
-      error: `Müzik kütüphanesi henüz kurulmamış: "${eksikUrl.file}" için gerçek bir Blob URL'si girilmemiş. ` +
-             `musicGenerate.js dosyasındaki TRACKS listesini Vercel Blob'a yüklediğiniz gerçek linklerle güncelleyin.`
-    });
+  if (!process.env.BLOB_STORE_ID) {
+    return res.status(500).json({ error: "BLOB_STORE_ID tanımlı değil (Blob deposu projeye bağlı mı?)." });
   }
 
-  const { title, postId, musicPrompt } = req.body || {};
+  const { postId, musicPrompt } = req.body || {};
   const cleanPostId = String(postId || "").trim();
   if (!/^[A-Za-z0-9]+$/.test(cleanPostId)) {
     return res.status(400).json({ error: "Geçersiz şiir ID." });
   }
 
   try {
-    const secilen = enUygunParcayiSec(musicPrompt, title);
-    return res.status(200).json({ musicUrl: secilen.url, prompt: musicPrompt || "" });
+    const buffer = await aceStepIleMuzikUret(musicPrompt);
+
+    // NOT: dosya adı ttsGenerate.js'nin ürettiği `audio/${postId}.mp3` (seslendirme)
+    // ile ÇAKIŞMASIN diye "-music" son eki kullanılıyor.
+    const blob = await put(`audio/${cleanPostId}-music.mp3`, buffer, {
+      access: "public",
+      contentType: "audio/mpeg",
+      addRandomSuffix: false,
+      allowOverwrite: true,
+      cacheControlMaxAge: 31536000,
+    });
+
+    return res.status(200).json({ musicUrl: blob.url, prompt: musicPrompt || "" });
   } catch (e) {
     console.error("musicGenerate HATASI:", e);
-    return res.status(502).json({ error: `Müzik seçilemedi: ${String(e?.message || e).slice(0, 250)}` });
+    return res.status(502).json({ error: `Müzik oluşturulamadı: ${String(e?.message || e).slice(0, 300)}` });
   }
 }

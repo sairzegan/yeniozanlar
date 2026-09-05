@@ -4,23 +4,142 @@ import fs from "fs/promises";
 import os from "os";
 import path from "path";
 
-// ElevenLabs'ten Microsoft Edge'in ücretsiz TTS motoruna geçildi: Edge/Windows
-// "Sesli Oku" özelliğinin arkasındaki, API anahtarı GEREKTİRMEYEN, tamamen
-// bedava serviste sadece 2 resmi Türkçe nöral ses var: Emel (kadın) ve
-// Ahmet (erkek). ElevenLabs'teki 5 farklı sesi birebir taklit edemesek de,
-// Groq'un seçtiği 5 "karakter"i bu iki sese, farklı konuşma hızı (rate) ve
-// perde (pitch) ayarlarıyla eşleyip biraz tonlama farkı yaratıyoruz.
-// ÖNEMLİ: Bu servis Microsoft tarafından resmi/belgeli bir API değil —
-// Edge tarayıcısının kullandığı servisi taklit ediyor. Yıllardır stabil
-// çalışıyor ama garanti yok; karşılığında ücretsiz ve kotasız.
-const VOICE_MAP = {
-  huzunlu:  { voice: "tr-TR-EmelNeural",  pitch: "-8%", rate: "-12%" }, // hüzünlü, yavaş, kısık kadın sesi
-  romantik: { voice: "tr-TR-EmelNeural",  pitch: "+0%", rate: "-5%"  }, // yumuşak, sıcak kadın sesi
-  dramatik: { voice: "tr-TR-AhmetNeural", pitch: "-5%", rate: "-8%"  }, // güçlü, ağır erkek sesi
-  sakin:    { voice: "tr-TR-EmelNeural",  pitch: "-3%", rate: "-10%" }, // sakin, dingin kadın sesi
-  tutkulu:  { voice: "tr-TR-AhmetNeural", pitch: "+3%", rate: "+2%"  }, // canlı, kararlı erkek sesi
+// v2 — ACE-Step (acemusic.ai, ÜCRETSİZ API — bkz. https://acemusic.ai/playground/api-key)
+// ile GERÇEK yapay zeka seslendirmesi.
+//
+// ACE-Step şiiri "söyleyerek/okuyarak" seslendiren VE arkasına kendisinin
+// ürettiği enstrümantal fon müziğini otomatik ekleyen bir müzik/şarkı üretim
+// modelidir — yani TEK bir istekte hem "seslendirme" hem "fon müziği" birlikte
+// üretilir (post.audioUrl). Bu, eski Microsoft Edge TTS (sentetik, müziksiz
+// okuma) akışının yerini alır.
+//
+// Groq (kota dolarsa Gemini) sadece HANGİ ses tonu / cinsiyet / enstrüman
+// kullanılacağına karar verir (bkz. index.html → aiSesYonlendirmesiGroqlaOlustur);
+// bu fonksiyon o kararın sonucunda gelen { caption, vocalLanguage } alanlarını
+// kullanarak ACE-Step'e tek bir üretim isteği gönderir.
+//
+// ÖNEMLİ NOTLAR:
+// - ACE-Step Türkçe vokali destekler (50+ dil), ancak en iyi performansı
+//   İngilizce/Çince/Japonca/Korece gibi "üst düzey destekli" dillerde verir;
+//   Türkçe'de sonuç kalitesi şiirden şiire değişebilir.
+// - ACE-Step SABİT bir süre için müzik üretir (adaptif bir TTS motoru gibi
+//   şiirin uzunluğuna göre otomatik uzayıp kısalmaz); bu yüzden şiir
+//   uzunluğundan kaba bir süre tahmini yapıyoruz (saniyeTahminEt). Çok uzun
+//   şiirlerde okuma metni süreye sığdırılamayabilir — bu ACE-Step'in kendi
+//   sınırıdır.
+// - ACE_MUSIC_API_KEY tanımlı değilse VEYA ACE-Step geçici olarak başarısız
+//   olursa (kota/timeout/ağ hatası), eskisi gibi Microsoft Edge TTS'e YEDEK
+//   olarak düşülür — böylece bir paylaşım hiçbir zaman sessiz kalmaz. Bu
+//   durumda üretilen ses sadece okuma içerir, fon müziği İÇERMEZ.
+
+const ACE_ENDPOINT = "https://api.acemusic.ai/v1/chat/completions";
+const ACE_MODEL = "acestep/ACE-Step-v1.5";
+const ACE_TIMEOUT_MS = 90000;
+
+const EDGE_VOICE_MAP = {
+  female: { voice: "tr-TR-EmelNeural", pitch: "-3%", rate: "-8%" },
+  male: { voice: "tr-TR-AhmetNeural", pitch: "+0%", rate: "-5%" },
 };
-const VARSAYILAN_SES = "sakin";
+
+const VARSAYILAN_CAPTION =
+  "melancholic and tender spoken-word poetry reading, female vocal, soft solo piano, gentle expressive delivery, intimate and clear diction";
+
+// Türkçe okuma hızı için kaba bir tahmin (~13 karakter/sn). ACE-Step sabit
+// süreli müzik ürettiği için (gerçek adaptif TTS'in aksine) buradan makul
+// bir başlangıç noktası üretiyoruz; 25-240 sn aralığında sınırlandırıyoruz.
+function saniyeTahminEt(metin) {
+  const sn = Math.round((metin?.length || 0) / 13);
+  return Math.min(240, Math.max(25, sn || 25));
+}
+
+function base64SesVerisiniCoz(dataUrl) {
+  if (!dataUrl || typeof dataUrl !== "string" || !dataUrl.startsWith("data:")) {
+    return null;
+  }
+  const virgulIdx = dataUrl.indexOf(",");
+  if (virgulIdx < 0) return null;
+  const base64 = dataUrl.slice(virgulIdx + 1);
+  const buffer = Buffer.from(base64, "base64");
+  return buffer.length ? buffer : null;
+}
+
+async function aceStepIleUret({ caption, lyrics, vocalLanguage, duration }) {
+  if (!process.env.ACE_MUSIC_API_KEY) {
+    throw new Error(
+      "ACE_MUSIC_API_KEY tanımlı değil (acemusic.ai/playground/api-key üzerinden ücretsiz alınabilir)."
+    );
+  }
+  const govde = {
+    model: ACE_MODEL,
+    messages: [
+      {
+        role: "user",
+        content: `<prompt>${caption}</prompt><lyrics>${lyrics}</lyrics>`,
+      },
+    ],
+    stream: false,
+    thinking: true,
+    use_format: false,
+    audio_config: {
+      duration,
+      format: "mp3",
+      vocal_language: vocalLanguage || "tr",
+    },
+  };
+
+  const res = await fetch(ACE_ENDPOINT, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${process.env.ACE_MUSIC_API_KEY}`,
+    },
+    body: JSON.stringify(govde),
+    signal: AbortSignal.timeout(ACE_TIMEOUT_MS),
+  });
+
+  if (!res.ok) {
+    let detay = "";
+    try {
+      const j = await res.json();
+      detay = j?.error?.message || j?.detail || "";
+    } catch (_) {}
+    throw new Error(`ACE-Step HTTP ${res.status}${detay ? ": " + detay : ""}`);
+  }
+
+  const data = await res.json();
+  const audioDataUrl = data?.choices?.[0]?.message?.audio?.[0]?.audio_url?.url;
+  const buffer = base64SesVerisiniCoz(audioDataUrl);
+  if (!buffer) throw new Error("ACE-Step geçerli bir ses verisi döndürmedi.");
+  return buffer;
+}
+
+// Yalnızca ACE-Step tamamen başarısız olursa (key yok, kota, timeout vb.)
+// devreye giren, MÜZİKSİZ, saf okuma yedeği.
+async function edgeTtsIleUret({ text, title, voiceKey }) {
+  const secim = EDGE_VOICE_MAP[voiceKey] || EDGE_VOICE_MAP.female;
+  const spoken = (title ? `${title}. ` : "") + text;
+  const trimmed = spoken.length > 4500 ? spoken.slice(0, 4500) : spoken;
+
+  const tts = new EdgeTTS({
+    voice: secim.voice,
+    lang: "tr-TR",
+    outputFormat: "audio-24khz-96kbitrate-mono-mp3",
+    pitch: secim.pitch,
+    rate: secim.rate,
+    volume: "default",
+    timeout: 20000,
+  });
+
+  const tmpPath = path.join(os.tmpdir(), `edge-yedek-${Date.now()}.mp3`);
+  try {
+    await tts.ttsPromise(trimmed, tmpPath);
+    const buffer = await fs.readFile(tmpPath);
+    if (!buffer.length) throw new Error("Edge TTS boş ses verisi döndürdü.");
+    return buffer;
+  } finally {
+    fs.unlink(tmpPath).catch(() => {});
+  }
+}
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
@@ -28,9 +147,8 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: "Sadece POST." });
   }
 
-  let tmpPath = null;
   try {
-    const { text, title, postId, voiceKey } = req.body || {};
+    const { text, title, postId, caption, vocalLanguage, gender } = req.body || {};
     const cleanText = String(text || "").trim();
     const cleanPostId = String(postId || "").trim();
 
@@ -44,37 +162,32 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: "BLOB_STORE_ID tanımlı değil (Blob deposu projeye bağlı mı?)." });
     }
 
-    const secilenAnahtar = Object.prototype.hasOwnProperty.call(VOICE_MAP, voiceKey) ? voiceKey : VARSAYILAN_SES;
-    const secim = VOICE_MAP[secilenAnahtar];
+    const finalCaption = String(caption || "").trim() || VARSAYILAN_CAPTION;
+    // ACE-Step'e gönderilecek metin: başlık + şiir (aşırı uzun şiirlerde
+    // model zaman aşımına uğramasın / süreye sığmasın diye üst sınır).
+    const lyricsMetin = ((title ? `${title}\n` : "") + cleanText).slice(0, 2600);
+    const duration = saniyeTahminEt(lyricsMetin);
 
-    const spoken = (title ? `${title}. ` : "") + cleanText;
-    // Edge TTS servisi çok uzun metinlerde zaman aşımına uğrayabiliyor,
-    // ElevenLabs'teki gibi güvenli bir üst sınır koruyoruz.
-    const trimmed = spoken.length > 4500 ? spoken.slice(0, 4500) : spoken;
-
-    const tts = new EdgeTTS({
-      voice: secim.voice,
-      lang: "tr-TR",
-      outputFormat: "audio-24khz-96kbitrate-mono-mp3",
-      pitch: secim.pitch,
-      rate: secim.rate,
-      volume: "default",
-      timeout: 20000,
-    });
-
-    // Vercel serverless ortamında dosya sistemi salt-okunur, sadece /tmp
-    // yazılabilir — bu yüzden Edge TTS'in dosyaya yazma API'sini /tmp'ye
-    // yazdırıp sonra buffer olarak geri okuyoruz.
-    tmpPath = path.join(os.tmpdir(), `${cleanPostId}-${Date.now()}.mp3`);
-    await tts.ttsPromise(trimmed, tmpPath);
-
-    const audioBuffer = await fs.readFile(tmpPath);
-    if (!audioBuffer.length) {
-      return res.status(502).json({ error: "Boş ses verisi döndü." });
+    let buffer;
+    let kaynak = "ace-step";
+    try {
+      buffer = await aceStepIleUret({
+        caption: finalCaption,
+        lyrics: `[Verse]\n${lyricsMetin}`,
+        vocalLanguage,
+        duration,
+      });
+    } catch (aceErr) {
+      console.warn("ACE-Step seslendirme başarısız, Edge TTS'e (yedek) düşülüyor:", aceErr.message);
+      kaynak = "edge-tts-yedek";
+      buffer = await edgeTtsIleUret({
+        text: cleanText,
+        title,
+        voiceKey: gender === "male" ? "male" : "female",
+      });
     }
 
-    // Vercel Blob'a yükle — access:'public' ile link doğrudan çalınabilir olur.
-    const blob = await put(`audio/${cleanPostId}.mp3`, audioBuffer, {
+    const blob = await put(`audio/${cleanPostId}.mp3`, buffer, {
       access: "public",
       contentType: "audio/mpeg",
       addRandomSuffix: false,
@@ -82,13 +195,9 @@ export default async function handler(req, res) {
       cacheControlMaxAge: 31536000,
     });
 
-    return res.status(200).json({ audioUrl: blob.url, voiceKey: secilenAnahtar });
+    return res.status(200).json({ audioUrl: blob.url, kaynak });
   } catch (e) {
     console.error("ttsGenerate HATASI:", e);
     return res.status(500).json({ error: "Sunucu hatası.", detail: String(e?.message || e).slice(0, 300) });
-  } finally {
-    if (tmpPath) {
-      fs.unlink(tmpPath).catch(() => {});
-    }
   }
 }
