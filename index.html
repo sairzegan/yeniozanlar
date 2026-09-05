@@ -3797,8 +3797,11 @@ Kurallar:
 - Şiirde olmayan belirgin olay veya nesneleri uydurma.
 - Sinematik, gerçekçi, estetik ve ayrıntılı bir sahne tarif et.
 - 16:9 yatay kompozisyon belirt.
+- Açık kitap, el yazması, mektup, gazete, defter, daktilo kağıdı gibi ÜZERİNDE YAZI GÖRÜNEN nesneleri sahneye KOYMA — görsel üretim modeli bu tür nesnelerin üzerine gerçek harfler/yazı çizme eğilimindedir.
+- Şiirin duygusunu/konusunu SOMUT fiziksel unsurlarla (mekân, ışık, doğa, insan, nesne, renk) anlat; "şiir", "dize", "kelime", "sayfa" gibi soyut/edebi kavramları görsel olarak betimlemeye ÇALIŞMA.
 - Görselde kesinlikle yazı OLMASIN.
-- No text, no letters, no words, no captions, no typography, no subtitles, no signs, no logos, no watermark.
+- No text, no letters, no words, no captions, no typography, no subtitles, no signs, no logos, no watermark, no books, no handwriting, no open pages with visible writing.
+- Bu kuralı hem promptun EN BAŞINA hem de EN SONUNA kısaca tekrar yaz.
 
 JSON: {"prompt":"..."}`
     );
@@ -3874,11 +3877,20 @@ async function adminYapayZekaGorseliYenile(post){
     throw new Error('Bu işlem yalnızca admin içindir.');
   }
 
-  // Önce Groq şiirin konusuna göre özel bir görsel promptu hazırlar.
-  // Groq çalışmazsa sağlayıcılar mevcut şiir metnini kullanmaya devam eder.
+  // DÜZELTME (görselde istenmeyen yazı/harf çıkması sorunu):
+  // Önceden burada Groq'un ürettiği İngilizce sahne tarifine EK OLARAK
+  // şiirin HAM METNİ de (post.text) prompta ekleniyordu. FLUX.1-schnell gibi
+  // "guidance-distilled" modeller "no text" gibi OLUMSUZ talimatları güvenilir
+  // şekilde uygulayamaz (CFG/negative-prompt desteklemezler) — ayrıca
+  // prompt'un içine gerçek bir şiir metni (cümleler, dizeler) gömülünce model
+  // bunu genellikle "görsele yazı olarak eklenecek bir metin" gibi algılayıp
+  // harf/kelime benzeri şekiller üretiyordu. Artık Groq başarılı olduğunda
+  // SADECE onun ürettiği kısa İngilizce sahne tarifi kullanılıyor — şiirin
+  // orijinal metni prompta hiç girmiyor. Groq başarısız olursa (nadir durum)
+  // yine de bir görsel üretilebilsin diye ham şiir metnine geri dönülüyor.
   const groqGorselPromptu=await aiGorselPromptuGroqlaOlustur(post);
   const gorselIcinMetin=groqGorselPromptu
-    ? `${post.text||''}\n\nVISUAL DIRECTION FROM GROQ (follow this direction):\n${groqGorselPromptu}`
+    ? groqGorselPromptu
     : (post.text||'');
 
   // Sırasıyla denenecek AI sağlayıcıları: Cloudflare FLUX → Hugging Face.
