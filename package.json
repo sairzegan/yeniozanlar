@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
+    "@gradio/client": "^2.5.1",
     "@huggingface/inference": "^4.13.28",
     "@vercel/blob": "^2.8.0",
     "firebase-admin": "^13.5.0",
