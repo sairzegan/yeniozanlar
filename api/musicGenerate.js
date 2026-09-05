@@ -16,22 +16,93 @@ import { put } from "@vercel/blob";
 // bu buton/uç nokta SÖZLÜ bir şey ÜRETMEZ, sadece arka plan müziği üretir.
 // Şiirin GERÇEKTEN seslendirildiği (sözlü okuma + otomatik fon müziği) akış
 // için bkz. ttsGenerate.js / post.audioUrl.
+//
+// NOT (v6 → v7 değişikliği): İlk sürümde ACE-Step'in SENKRON "completion"
+// modu (/v1/chat/completions) kullanılıyordu; ancak acemusic.ai'nin kendi ağ
+// geçidi (gateway) uzun üretimlerde cevabı beklerken zaman aşımına uğrayıp
+// HTTP 504 döndürüyordu. Bu yüzden ASENKRON "native" moda geçildi: önce
+// /release_task ile bir görev oluşturulur, sonra /query_result ile kısa
+// aralıklarla (polling) sonuç sorulur — her tekil istek kısa sürdüğü için
+// gateway zaman aşımı sorunu ortadan kalkar.
 
-const ACE_ENDPOINT = "https://api.acemusic.ai/v1/chat/completions";
-const ACE_MODEL = "acestep/ACE-Step-v1.5";
-const ACE_TIMEOUT_MS = 90000;
+const ACE_BASE = "https://api.acemusic.ai";
+const ACE_TIMEOUT_MS = 20000; // tekil istek zaman aşımı
+const ACE_POLL_INTERVAL_MS = 3000;
+const ACE_MAX_WAIT_MS = 50000; // aşağıdaki config.maxDuration ile uyumlu olmalı
 const VARSAYILAN_PROMPT =
   "calm ambient ballad, soft piano and warm strings, reflective and gentle atmosphere";
-const MUZIK_SURESI_SN = 75;
+const MUZIK_SURESI_SN = 45; // 50sn'lik bekleme penceresine daha güvenli sığması için kısaltıldı
 
-function base64SesVerisiniCoz(dataUrl) {
-  if (!dataUrl || typeof dataUrl !== "string" || !dataUrl.startsWith("data:")) {
-    return null;
+// Vercel'de fonksiyon süresi varsayılan olarak kısadır. Polling'in
+// tamamlanabilmesi için artırıyoruz. Pro/Enterprise planındaysanız bu değeri
+// (ve yukarıdaki ACE_MAX_WAIT_MS'i) 120-300 sn'ye çıkarabilirsiniz.
+export const config = { maxDuration: 60 };
+
+function aceHeaders() {
+  return {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${process.env.ACE_MUSIC_API_KEY}`,
+  };
+}
+
+async function aceGorevOlustur(paramObj) {
+  const res = await fetch(`${ACE_BASE}/release_task`, {
+    method: "POST",
+    headers: aceHeaders(),
+    body: JSON.stringify({ ...paramObj, param_obj: paramObj }),
+    signal: AbortSignal.timeout(ACE_TIMEOUT_MS),
+  });
+  const data = await res.json().catch(() => null);
+  if (!res.ok || data?.error) {
+    throw new Error(`ACE-Step görev oluşturulamadı (HTTP ${res.status})${data?.error ? ": " + data.error : ""}`);
   }
-  const virgulIdx = dataUrl.indexOf(",");
-  if (virgulIdx < 0) return null;
-  const buffer = Buffer.from(dataUrl.slice(virgulIdx + 1), "base64");
-  return buffer.length ? buffer : null;
+  const taskId = data?.data?.task_id || data?.task_id || data?.data?.taskId;
+  if (!taskId) throw new Error("ACE-Step task_id döndürmedi.");
+  return taskId;
+}
+
+async function aceSonucuBekle(taskId) {
+  const baslangic = Date.now();
+  while (Date.now() - baslangic < ACE_MAX_WAIT_MS) {
+    await new Promise((r) => setTimeout(r, ACE_POLL_INTERVAL_MS));
+    const res = await fetch(`${ACE_BASE}/query_result`, {
+      method: "POST",
+      headers: aceHeaders(),
+      body: JSON.stringify({ task_id_list: [taskId] }),
+      signal: AbortSignal.timeout(ACE_TIMEOUT_MS),
+    });
+    const data = await res.json().catch(() => null);
+    const item = data?.data?.[0];
+    if (!item) continue;
+    if (item.status === 1 || item.status === "succeeded") {
+      let sonuclar;
+      try {
+        sonuclar = typeof item.result === "string" ? JSON.parse(item.result) : item.result;
+      } catch (e) {
+        throw new Error("ACE-Step sonucu ayrıştırılamadı.");
+      }
+      const ilk = Array.isArray(sonuclar) ? sonuclar[0] : sonuclar;
+      const dosyaYolu = ilk?.file || ilk?.first_audio_path || ilk?.audio_paths?.[0];
+      if (!dosyaYolu) throw new Error("ACE-Step ses dosya yolu döndürmedi.");
+      return dosyaYolu;
+    }
+    if (item.status === 2 || item.status === "failed") {
+      throw new Error("ACE-Step üretimi başarısız: " + (item.error || item.message || "bilinmeyen hata"));
+    }
+  }
+  throw new Error("ACE-Step zaman aşımına uğradı (üretim bekleneni aşan sürede tamamlanamadı).");
+}
+
+async function aceDosyaIndir(dosyaYolu) {
+  const url = dosyaYolu.startsWith("http") ? dosyaYolu : `${ACE_BASE}${dosyaYolu}`;
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${process.env.ACE_MUSIC_API_KEY}` },
+    signal: AbortSignal.timeout(ACE_TIMEOUT_MS),
+  });
+  if (!res.ok) throw new Error(`ACE-Step ses dosyası indirilemedi (HTTP ${res.status}).`);
+  const buffer = Buffer.from(await res.arrayBuffer());
+  if (!buffer.length) throw new Error("ACE-Step boş ses dosyası döndürdü.");
+  return buffer;
 }
 
 async function aceStepIleMuzikUret(musicPrompt) {
@@ -41,41 +112,16 @@ async function aceStepIleMuzikUret(musicPrompt) {
     );
   }
   const caption = String(musicPrompt || "").trim() || VARSAYILAN_PROMPT;
-  const govde = {
-    model: ACE_MODEL,
-    messages: [
-      { role: "user", content: `<prompt>${caption}</prompt><lyrics>[inst]</lyrics>` },
-    ],
-    stream: false,
+  const taskId = await aceGorevOlustur({
+    prompt: caption,
+    lyrics: "[inst]",
     thinking: true,
-    use_format: false,
-    audio_config: { duration: MUZIK_SURESI_SN, format: "mp3" },
-  };
-
-  const res = await fetch(ACE_ENDPOINT, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${process.env.ACE_MUSIC_API_KEY}`,
-    },
-    body: JSON.stringify(govde),
-    signal: AbortSignal.timeout(ACE_TIMEOUT_MS),
+    audio_duration: MUZIK_SURESI_SN,
+    duration: MUZIK_SURESI_SN,
+    audio_format: "mp3",
   });
-
-  if (!res.ok) {
-    let detay = "";
-    try {
-      const j = await res.json();
-      detay = j?.error?.message || j?.detail || "";
-    } catch (_) {}
-    throw new Error(`ACE-Step HTTP ${res.status}${detay ? ": " + detay : ""}`);
-  }
-
-  const data = await res.json();
-  const audioDataUrl = data?.choices?.[0]?.message?.audio?.[0]?.audio_url?.url;
-  const buffer = base64SesVerisiniCoz(audioDataUrl);
-  if (!buffer) throw new Error("ACE-Step geçerli bir ses verisi döndürmedi.");
-  return buffer;
+  const dosyaYolu = await aceSonucuBekle(taskId);
+  return await aceDosyaIndir(dosyaYolu);
 }
 
 export default async function handler(req, res) {
