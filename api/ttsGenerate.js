@@ -3,7 +3,12 @@ import { EdgeTTS } from "node-edge-tts";
 import fs from "fs/promises";
 import os from "os";
 import path from "path";
-import { aceStepHfSpaceIleUret } from "./_lib/aceStepHfSpace.js";
+// NOT: aceStepHfSpaceIleUret ARTIK en üstte statik değil, aşağıda
+// (aceStepHfSpaceKatmaniniDene içinde) DİNAMİK olarak import ediliyor —
+// nedeni musicGenerate.js'teki aynı notla birebir aynıdır: @gradio/client
+// paketi bir sebepten yüklenemezse, üst düzey bir `import` bunu
+// YAKALANAMAZ bir çökmeye (boş gövdeli "500") çevirip TÜM fonksiyonu
+// (acemusic.ai VE Edge TTS denemeleri dahil) devre dışı bırakır.
 
 // v2 — ACE-Step (acemusic.ai, ÜCRETSİZ API — bkz. https://acemusic.ai/playground/api-key)
 // ile GERÇEK yapay zeka seslendirmesi.
@@ -190,6 +195,22 @@ function kullaniciDostuHataMesaji(e) {
   return `Seslendirme oluşturulamadı: ${mesaj.slice(0, 250)}`;
 }
 
+// HF Space yedek katmanını GÜVENLİ şekilde dener: modülün import edilmesi
+// bile (ör. @gradio/client kurulu değilse/yüklenemiyorsa) başarısız olabilir;
+// bu durumu da normal bir üretim hatası gibi ele alıp anlaşılır bir hata
+// fırlatıyoruz — üst düzey bir çökmeye asla izin vermiyoruz.
+async function aceStepHfSpaceKatmaniniDene(params) {
+  let aceStepHfSpaceIleUret;
+  try {
+    ({ aceStepHfSpaceIleUret } = await import("./_lib/aceStepHfSpace.js"));
+  } catch (yuklemeHatasi) {
+    throw new Error(
+      `HF Space yedek modülü yüklenemedi (@gradio/client paketi kurulu/uyumlu mu kontrol edin): ${yuklemeHatasi.message}`
+    );
+  }
+  return aceStepHfSpaceIleUret(params);
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     res.setHeader("Allow", "POST");
@@ -229,7 +250,7 @@ export default async function handler(req, res) {
     } catch (aceErr) {
       console.warn("acemusic.ai seslendirme başarısız, HF Space (ACE-Step v1.5) deneniyor:", aceErr.message);
       try {
-        buffer = await aceStepHfSpaceIleUret({
+        buffer = await aceStepHfSpaceKatmaniniDene({
           caption: finalCaption,
           lyrics: `[Verse]\n${lyricsMetin}`,
           durationSaniye: duration,

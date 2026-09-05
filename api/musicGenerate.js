@@ -1,5 +1,15 @@
 import { put } from "@vercel/blob";
-import { aceStepHfSpaceIleUret } from "./_lib/aceStepHfSpace.js";
+// NOT: aceStepHfSpaceIleUret ARTIK en üstte statik olarak değil, aşağıda
+// (aceStepHfSpaceKatmaniniDene içinde) DİNAMİK olarak import ediliyor.
+// Sebep: @gradio/client paketi bir nedenle (eksik kurulum, Vercel'in Node
+// çalışma zamanıyla uyumsuzluk, bir alt bağımlılığın tarayıcıya özel bir
+// API'ye — ör. WebSocket/EventSource — ihtiyaç duyması vb.) YÜKLENEMEZSE,
+// üst düzey bir `import` bunu YAKALANAMAZ bir çökmeye çevirir ve TÜM
+// fonksiyonu (acemusic.ai denemesi dahil) devre dışı bırakır — tam olarak
+// yaşanan "boş gövdeli 500" budur. Dinamik import ise try/catch içinde
+// yakalanabildiği için, bu paket yüklenemese BİLE sadece bu yedek katman
+// devre dışı kalır, acemusic.ai denemesi ve fonksiyonun geri kalanı normal
+// çalışmaya devam eder.
 
 // /api/musicGenerate.js
 // v6 — ACE-Step (acemusic.ai, ÜCRETSİZ API — bkz. https://acemusic.ai/playground/api-key)
@@ -131,6 +141,22 @@ function kullaniciDostuHataMesaji(e) {
   return `Müzik oluşturulamadı: ${mesaj.slice(0, 250)}`;
 }
 
+// HF Space yedek katmanını GÜVENLİ şekilde dener: modülün import edilmesi
+// bile (ör. @gradio/client kurulu değilse/yüklenemiyorsa) başarısız olabilir;
+// bu durumu da normal bir üretim hatası gibi ele alıp anlaşılır bir hata
+// fırlatıyoruz — üst düzey bir çökmeye asla izin vermiyoruz.
+async function aceStepHfSpaceKatmaniniDene(params) {
+  let aceStepHfSpaceIleUret;
+  try {
+    ({ aceStepHfSpaceIleUret } = await import("./_lib/aceStepHfSpace.js"));
+  } catch (yuklemeHatasi) {
+    throw new Error(
+      `HF Space yedek modülü yüklenemedi (@gradio/client paketi kurulu/uyumlu mu kontrol edin): ${yuklemeHatasi.message}`
+    );
+  }
+  return aceStepHfSpaceIleUret(params);
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     res.setHeader("Allow", "POST");
@@ -153,7 +179,7 @@ export default async function handler(req, res) {
   } catch (aceErr) {
     console.warn("acemusic.ai müzik üretimi başarısız, HF Space (ACE-Step v1.5) deneniyor:", aceErr.message);
     try {
-      buffer = await aceStepHfSpaceIleUret({
+      buffer = await aceStepHfSpaceKatmaniniDene({
         caption: String(musicPrompt || "").trim() || VARSAYILAN_PROMPT,
         lyrics: "",
         durationSaniye: MUZIK_SURESI_SN,
