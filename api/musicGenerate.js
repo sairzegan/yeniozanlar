@@ -204,7 +204,16 @@ export default async function handler(req, res) {
       cacheControlMaxAge: 31536000,
     });
 
-    return res.status(200).json({ musicUrl: blob.url, prompt: musicPrompt || "", kaynak });
+    // ÖNEMLİ: Dosya adı (audio/${postId}-music.mp3) her üretimde AYNI
+    // kaldığı için (allowOverwrite:true) ve cacheControlMaxAge 1 yıl olduğu
+    // için, aynı URL tarayıcı/CDN tarafından uzun süre önbelleğe alınır.
+    // Blob'u silseniz bile önbellek eski müziği döndürmeye devam edebilir.
+    // Bunu önlemek için URL'nin sonuna HER üretimde değişen bir sürüm
+    // parametresi ekliyoruz — böylece her yeni üretim, önbellek için
+    // "farklı" bir URL olur.
+    const versiyonluUrl = `${blob.url}?v=${Date.now()}`;
+
+    return res.status(200).json({ musicUrl: versiyonluUrl, prompt: musicPrompt || "", kaynak });
   } catch (e) {
     console.error("musicGenerate HATASI (Blob yükleme):", e);
     return res.status(502).json({ error: kullaniciDostuHataMesaji(e) });

@@ -278,7 +278,15 @@ export default async function handler(req, res) {
       cacheControlMaxAge: 31536000,
     });
 
-    return res.status(200).json({ audioUrl: blob.url, kaynak });
+    // ÖNEMLİ: Dosya adı (audio/${postId}.mp3) her üretimde AYNI kaldığı için
+    // (allowOverwrite:true) ve cacheControlMaxAge 1 yıl olduğu için, aynı URL
+    // tarayıcı/CDN tarafından uzun süre önbelleğe alınır. Blob'u silseniz
+    // bile önbellek eski sesi döndürmeye devam edebilir. Bunu önlemek için
+    // URL'nin sonuna HER üretimde değişen bir sürüm parametresi ekliyoruz —
+    // böylece her yeni üretim, önbellek için "farklı" bir URL olur.
+    const versiyonluUrl = `${blob.url}?v=${Date.now()}`;
+
+    return res.status(200).json({ audioUrl: versiyonluUrl, kaynak });
   } catch (e) {
     console.error("ttsGenerate HATASI:", e);
     return res.status(500).json({ error: kullaniciDostuHataMesaji(e), detail: String(e?.message || e).slice(0, 300) });

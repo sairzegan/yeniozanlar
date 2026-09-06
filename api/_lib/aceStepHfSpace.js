@@ -55,14 +55,28 @@ function baglantiAl() {
   return clientPromiseCache;
 }
 
-// Bir metni tek satırda küçük harfe indirger (eşleştirme için).
-function normalize(...parcalar) {
-  return parcalar.filter(Boolean).join(" ").toLowerCase();
+// Bir parametrenin bizim bildiğimiz alanlardan (caption/lyrics/duration/dil/
+// enstrümantal) birine anlamlı şekilde eşleşip eşleşmediğini söyler.
+function biliniyorMu(metin) {
+  return (
+    /caption|description|desc|prompt|tag/.test(metin) ||
+    /lyric|söz|sarki[_ ]?soz/.test(metin) ||
+    /instrumental|enstrü/.test(metin) ||
+    /duration|süre|sure/.test(metin) ||
+    /language|dil/.test(metin)
+  );
 }
 
 // view_api() çıktısından, "metin açıklaması ver → müzik/ses üret" işini
-// yapan en olası uç noktayı puanlayarak seçer.
-function enUygunUcNoktayiSec(apiInfo) {
+// yapan en olası uç noktayı seçer. ÖNEMLİ: bu Space onlarca ileri ayarı
+// (adım sayısı, seed, batch size, model seçimi, LM ayarları vb.) olan çok
+// sekmeli/karmaşık bir arayüze sahip; bu yüzden bir uç noktanın VARSAYILANI
+// OLMAYAN ve bizim bilinen alanlarımızdan (caption/lyrics/duration/dil/
+// enstrümantal) HİÇBİRİYLE eşleşmeyen tek bir zorunlu parametresi bile
+// olsa, o uç nokta TAMAMEN ELENİR — aksi halde Gradio "No value provided
+// for required parameter" hatasıyla reddeder. Sadece TAM olarak
+// doldurabildiğimiz uç noktalar aday olur.
+function enUygunUcNoktayiSec(apiInfo, baglam) {
   const named = apiInfo?.named_endpoints || {};
   const adaylar = [];
   for (const [apiName, info] of Object.entries(named)) {
@@ -76,17 +90,30 @@ function enUygunUcNoktayiSec(apiInfo) {
       ...donenler.map((r) => normalize(r?.label, r?.component, r?.python_type?.type))
     );
 
+    // Eğitim/ön yükleme/oturum başlatma gibi işlerle karışmasın diye bunlara
+    // benzeyen uç noktaları en baştan eliyoruz.
+    if (/train|lora|init|load|session|preprocess/.test(apiName.toLowerCase())) continue;
+
+    const girdi = girdiOlustur(params, baglam);
+    const eksikZorunlu = params.some((p) => {
+      const ad = p?.parameter_name;
+      if (!ad) return false; // adı bile olmayan parametreyi elemeye çalışmıyoruz, göz ardı ediyoruz
+      if (Object.prototype.hasOwnProperty.call(girdi, ad)) return false; // biz doldurduk
+      if (p?.parameter_has_default) return false; // Space zaten varsayılan kullanacak
+      return true; // ne biz doldurabildik ne de bir varsayılanı var → bu uç nokta OLMAZ
+    });
+    if (eksikZorunlu) continue;
+
     let puan = 0;
     if (/caption|description|desc|prompt|tag/.test(paramMetni)) puan += 3;
     if (/lyric|söz|sarki[_ ]?soz/.test(paramMetni)) puan += 2;
     if (/duration|süre|sure/.test(paramMetni)) puan += 1;
     if (/generat|text2music|simple|music/.test(apiName.toLowerCase())) puan += 2;
     if (/audio|ses/.test(donenMetni)) puan += 2;
-    // Eğitim/ön yükleme/oturum başlatma gibi işlerle karışmasın diye
-    // bunlara benzeyen uç noktaları cezalandırıyoruz.
-    if (/train|lora|init|load|session|preprocess/.test(apiName.toLowerCase())) puan -= 5;
+    // Daha az parametreli (daha "basit mod") uç noktaları hafifçe kayırıyoruz.
+    puan -= params.length * 0.05;
 
-    if (puan > 0) adaylar.push({ apiName, puan, params });
+    adaylar.push({ apiName, puan, params, girdi });
   }
   adaylar.sort((a, b) => b.puan - a.puan);
   return adaylar[0] || null;
@@ -94,14 +121,18 @@ function enUygunUcNoktayiSec(apiInfo) {
 
 // Seçilen uç noktanın parametrelerini, anlamlarına göre isim bazlı eşleştirip
 // bir girdi (payload) nesnesi oluşturur. Eşleşmeyen ama varsayılanı olan
-// parametreler varsayılanıyla, varsayılanı da olmayanlar boş bırakılır
-// (Gradio genelde component'in kendi varsayılanını kullanır).
+// parametreler varsayılanıyla, ne eşleşen ne varsayılanı olan parametreler
+// BOŞ BIRAKILIR (bu durumda enUygunUcNoktayiSec o uç noktayı zaten eler).
 function girdiOlustur(params, { caption, lyrics, durationSaniye, vocalLanguage, instrumental }) {
   const girdi = {};
   for (const p of params) {
     const ad = p?.parameter_name;
     if (!ad) continue;
     const metin = normalize(p?.label, ad);
+    if (!biliniyorMu(metin)) {
+      if (p?.parameter_has_default) girdi[ad] = p.parameter_default;
+      continue;
+    }
     if (/caption|description|desc|prompt|tag/.test(metin)) {
       girdi[ad] = caption;
     } else if (/lyric|söz|sarki[_ ]?soz/.test(metin)) {
@@ -112,8 +143,6 @@ function girdiOlustur(params, { caption, lyrics, durationSaniye, vocalLanguage, 
       girdi[ad] = durationSaniye;
     } else if (/language|dil/.test(metin)) {
       girdi[ad] = vocalLanguage || "tr";
-    } else if (p?.parameter_has_default) {
-      girdi[ad] = p.parameter_default;
     }
   }
   return girdi;
