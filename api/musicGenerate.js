@@ -189,7 +189,13 @@ export default async function handler(req, res) {
       kaynak = "ace-step-hf-space";
     } catch (hfErr) {
       console.error("musicGenerate HATASI (acemusic.ai + HF Space ikisi de başarısız):", hfErr);
-      return res.status(502).json({ error: kullaniciDostuHataMesaji(hfErr) });
+      return res.status(502).json({
+        error: kullaniciDostuHataMesaji(hfErr),
+        // Admin panelinde Vercel loglarına bakmaya gerek kalmadan asıl
+        // sebebi görebilmek için: her iki servisin de kendi ham hata
+        // mesajı ayrı ayrı ekleniyor.
+        detail: `acemusic.ai: ${String(aceErr?.message || aceErr).slice(0, 200)} | HF Space: ${String(hfErr?.message || hfErr).slice(0, 200)}`,
+      });
     }
   }
 
