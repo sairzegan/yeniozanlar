@@ -1,4 +1,5 @@
 import { put, del } from "@vercel/blob";
+import { EdgeTTS } from "node-edge-tts";
 import fs from "fs/promises";
 import os from "os";
 import path from "path";
