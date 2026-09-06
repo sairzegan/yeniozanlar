@@ -55,6 +55,11 @@ function baglantiAl() {
   return clientPromiseCache;
 }
 
+// Bir metni tek satırda küçük harfe indirger (eşleştirme için).
+function normalize(...parcalar) {
+  return parcalar.filter(Boolean).join(" ").toLowerCase();
+}
+
 // Bir parametrenin bizim bildiğimiz alanlardan (caption/lyrics/duration/dil/
 // enstrümantal) birine anlamlı şekilde eşleşip eşleşmediğini söyler.
 function biliniyorMu(metin) {
