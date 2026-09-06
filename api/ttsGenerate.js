@@ -1,5 +1,4 @@
-import { put } from "@vercel/blob";
-import { EdgeTTS } from "node-edge-tts";
+import { put, del } from "@vercel/blob";
 import fs from "fs/promises";
 import os from "os";
 import path from "path";
@@ -269,6 +268,15 @@ export default async function handler(req, res) {
         });
       }
     }
+
+    // Yeni sesi yüklemeden ÖNCE, aynı şiire ait ESKİ ses dosyasını Blob'dan
+    // açıkça siliyoruz. "allowOverwrite: true" zaten aynı isimdeki dosyanın
+    // İÇERİĞİNİ değiştirir (ayrı bir "eski dosya" birikmez), ama kullanıcı
+    // hiçbir eski verinin Blob'da kalmadığından emin olmak istediği ve bu
+    // silme CDN'in en güncel içeriği vermesini de garantiye aldığı için
+    // burada ekstra bir adım olarak bunu yapıyoruz. Dosya zaten yoksa
+    // (ilk üretimse) del() sessizce görmezden gelinir, hata fırlatmaz.
+    await del(`audio/${cleanPostId}.mp3`).catch(() => {});
 
     const blob = await put(`audio/${cleanPostId}.mp3`, buffer, {
       access: "public",

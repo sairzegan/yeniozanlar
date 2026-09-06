@@ -1,4 +1,4 @@
-import { put } from "@vercel/blob";
+import { put, del } from "@vercel/blob";
 // NOT: aceStepHfSpaceIleUret ARTIK en üstte statik olarak değil, aşağıda
 // (aceStepHfSpaceKatmaniniDene içinde) DİNAMİK olarak import ediliyor.
 // Sebep: @gradio/client paketi bir nedenle (eksik kurulum, Vercel'in Node
@@ -196,6 +196,12 @@ export default async function handler(req, res) {
   try {
     // NOT: dosya adı ttsGenerate.js'nin ürettiği `audio/${postId}.mp3` (seslendirme)
     // ile ÇAKIŞMASIN diye "-music" son eki kullanılıyor.
+    //
+    // Yeni müziği yüklemeden ÖNCE, aynı şiire ait ESKİ müzik dosyasını
+    // Blob'dan açıkça siliyoruz (bkz. ttsGenerate.js'teki aynı notun
+    // ayrıntısı — hiçbir eski verinin Blob'da kalmamasını garantiye alır).
+    await del(`audio/${cleanPostId}-music.mp3`).catch(() => {});
+
     const blob = await put(`audio/${cleanPostId}-music.mp3`, buffer, {
       access: "public",
       contentType: "audio/mpeg",
