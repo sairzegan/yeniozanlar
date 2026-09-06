@@ -202,30 +202,33 @@ export async function aceStepHfSpaceIleUret({
     const client = await baglantiAl();
     const apiInfo = await client.view_api();
 
+    const baglam = { caption, lyrics, durationSaniye, vocalLanguage, instrumental };
+
     let secim = null;
     if (FORCED_API_NAME) {
       const info = apiInfo?.named_endpoints?.[FORCED_API_NAME];
-      if (info) secim = { apiName: FORCED_API_NAME, params: info.parameters || [] };
-      else {
+      if (info) {
+        secim = {
+          apiName: FORCED_API_NAME,
+          params: info.parameters || [],
+          girdi: girdiOlustur(info.parameters || [], baglam),
+        };
+      } else {
         console.warn(
           `ACESTEP_HF_API_NAME="${FORCED_API_NAME}" Space'in mevcut uç noktaları arasında bulunamadı, otomatik seçime dönülüyor.`
         );
       }
     }
-    if (!secim) secim = enUygunUcNoktayiSec(apiInfo);
+    if (!secim) secim = enUygunUcNoktayiSec(apiInfo, baglam);
     if (!secim) {
       throw new Error(
         "HF Space üzerinde uygun bir müzik/ses üretim uç noktası bulunamadı (view_api uyumsuz döndü ya da Space arayüzü değişmiş olabilir; ACESTEP_HF_API_NAME ile elle belirtmeyi deneyin)."
       );
     }
 
-    const girdi = girdiOlustur(secim.params, {
-      caption,
-      lyrics,
-      durationSaniye,
-      vocalLanguage,
-      instrumental,
-    });
+    // enUygunUcNoktayiSec zaten girdi'yi hesaplayıp adayın içine koyduğu için
+    // burada TEKRAR hesaplamıyoruz (aynı işi iki kez yapmamak için).
+    const girdi = secim.girdi;
 
     const sonuc = await client.predict(secim.apiName, girdi);
     const dosya = sesDosyasiBul(sonuc?.data);
