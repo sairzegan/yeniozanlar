@@ -77,14 +77,28 @@ const EDGE_VOICE_MAP = {
 const VARSAYILAN_CAPTION =
   "melancholic and tender spoken-word poetry reading, female vocal, soft solo piano, gentle expressive delivery, intimate and clear diction";
 
-// Türkçe okuma hızı için kaba bir tahmin (~13 karakter/sn). ACE-Step sabit
-// süreli müzik ürettiği için (gerçek adaptif TTS'in aksine) buradan makul
-// bir başlangıç noktası üretiyoruz; 25-240 sn aralığında sınırlandırıyoruz.
+// Türkçe, "yumuşak/duygulu, ağır tempolu" bir şiir okuması için kaba bir
+// okuma hızı tahmini. ACE-Step sabit süreli müzik ürettiği için (gerçek
+// adaptif TTS'in aksine) süre tahmini gerçek okuma süresinden KISA çıkarsa,
+// şiir sesin sonunda YARIDA KESİLİR. Bu yüzden:
+// - Karakter/sn oranı ESKİDEN 13'tü (çok hızlı bir okumaya karşılık gelir,
+//   bu da şiirin çoğu zaman yarıda kesilmesine sebep oluyordu); 9'a
+//   düşürüldü — daha yavaş/duygulu bir okumaya daha yakın, ve güvenlik payı
+//   bırakıyor (yani sesin fazladan sürmesi, eksik kalmasından iyidir).
+const OKUMA_HIZI_KARAKTER_SN = 9;
+// Üretilebilecek en uzun ses (saniye). ACE-Step'in kendi üretim süresi de
+// bu değerle birlikte uzadığı için (bkz. ACE_TIMEOUT_MS), makul bir tavan
+// belirleniyor.
+const MAKS_SURE_SN = 220;
+const MIN_SURE_SN = 25;
+// ÖNEMLİ: lyricsMetin'in kırpılacağı üst karakter sınırı (aşağıda
+// kullanılıyor), MAKS_SURE_SN ile TUTARLI olmalı — aksi halde metin sınıra
+// kadar gönderilse bile süre yetmediği için yine yarıda kesilebilir.
+const MAKS_METIN_KARAKTER = MAKS_SURE_SN * OKUMA_HIZI_KARAKTER_SN;
+
 function saniyeTahminEt(metin) {
-  const sn = Math.round((metin?.length || 0) / 13);
-  // Üst sınır 180'e çekildi: daha uzun ses hedefleri genelde daha uzun
-  // üretim süresi gerektirir, bu da ACE_MAX_WAIT_MS penceresini zorlayabilir.
-  return Math.min(180, Math.max(25, sn || 25));
+  const sn = Math.round((metin?.length || 0) / OKUMA_HIZI_KARAKTER_SN);
+  return Math.min(MAKS_SURE_SN, Math.max(MIN_SURE_SN, sn || MIN_SURE_SN));
 }
 
 function base64SesVerisiniCoz(dataUrl) {
@@ -233,13 +247,35 @@ export default async function handler(req, res) {
     }
 
     const finalCaption = String(caption || "").trim() || VARSAYILAN_CAPTION;
-    // ACE-Step'e gönderilecek metin: başlık + şiir (aşırı uzun şiirlerde
-    // model zaman aşımına uğramasın / süreye sığmasın diye üst sınır).
-    const lyricsMetin = ((title ? `${title}\n` : "") + cleanText).slice(0, 2600);
+    const tamOkunacakMetin = (title ? `${title}\n` : "") + cleanText;
+    // ACE-Step'e gönderilecek metin: başlık + şiir. Üst sınır artık
+    // MAKS_METIN_KARAKTER (MAKS_SURE_SN ile tutarlı) — böylece gönderilen
+    // metnin tamamı, hesaplanan sürede gerçekten okunabilir; aksi halde
+    // metin sınıra kadar gönderilse bile süre yetmeyip yarıda kesilirdi.
+    const lyricsMetin = tamOkunacakMetin.slice(0, MAKS_METIN_KARAKTER);
     const duration = saniyeTahminEt(lyricsMetin);
+    // ÖNEMLİ: Şiir MAKS_METIN_KARAKTER'i aşıyorsa, ACE-Step (acemusic.ai
+    // VEYA HF Space) — sabit süreli üretim yaptığı için — şiiri HER
+    // KOŞULDA bir yerde yarıda kesecektir. Bu durumda hiç denemeden
+    // doğrudan Edge TTS'e geçiyoruz: arka plan müziğinden feragat edilse
+    // de şiirin TAMAMI her zaman okunmuş olur (Edge TTS'in kendi sınırı
+    // çok daha yüksek: 4500 karakter, ve okuma süresi metne göre otomatik
+    // uzar/kısalır).
+    const cokUzunSiir = tamOkunacakMetin.length > MAKS_METIN_KARAKTER;
 
     let buffer;
     let kaynak = "ace-step";
+    if (cokUzunSiir) {
+      console.warn(
+        `Şiir çok uzun (${tamOkunacakMetin.length} karakter > ${MAKS_METIN_KARAKTER}), ACE-Step yarıda keseceği için doğrudan Edge TTS'e geçiliyor.`
+      );
+      kaynak = "edge-tts-uzun-siir";
+      buffer = await edgeTtsIleUret({
+        text: cleanText,
+        title,
+        voiceKey: gender === "male" ? "male" : "female",
+      });
+    } else {
     try {
       buffer = await aceStepIleUret({
         caption: finalCaption,
@@ -269,6 +305,7 @@ export default async function handler(req, res) {
         });
       }
     }
+    } // else (cokUzunSiir değilse ACE-Step denemesi) bloğunun kapanışı
 
     // Yeni sesi yüklemeden ÖNCE, aynı şiire ait ESKİ ses dosyasını Blob'dan
     // açıkça siliyoruz. "allowOverwrite: true" zaten aynı isimdeki dosyanın
