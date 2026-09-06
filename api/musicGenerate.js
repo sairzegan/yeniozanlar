@@ -166,7 +166,7 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: "BLOB_STORE_ID tanımlı değil (Blob deposu projeye bağlı mı?)." });
   }
 
-  const { postId, musicPrompt } = req.body || {};
+  const { postId, musicPrompt, oldMusicUrl } = req.body || {};
   const cleanPostId = String(postId || "").trim();
   if (!/^[A-Za-z0-9]+$/.test(cleanPostId)) {
     return res.status(400).json({ error: "Geçersiz şiir ID." });
@@ -200,32 +200,33 @@ export default async function handler(req, res) {
   }
 
   try {
-    // NOT: dosya adı ttsGenerate.js'nin ürettiği `audio/${postId}.mp3` (seslendirme)
-    // ile ÇAKIŞMASIN diye "-music" son eki kullanılıyor.
+    // NOT: dosya adı ttsGenerate.js'nin ürettiği `audio/${postId}-....mp3`
+    // (seslendirme) ile ÇAKIŞMASIN diye "-music" son eki kullanılıyor.
     //
-    // Yeni müziği yüklemeden ÖNCE, aynı şiire ait ESKİ müzik dosyasını
-    // Blob'dan açıkça siliyoruz (bkz. ttsGenerate.js'teki aynı notun
-    // ayrıntısı — hiçbir eski verinin Blob'da kalmamasını garantiye alır).
+    // ÖNEMLİ (kök çözüm): Daha önce dosya yolu HER ZAMAN aynıydı ve sadece
+    // "?v=..." sorgu parametresiyle önbelleği atlatmaya çalışıyorduk; ama
+    // bazı CDN'ler önbellek anahtarını sorguyu YOK SAYARAK sadece dosya
+    // YOLUNA göre tutar. Şimdi her üretimde GERÇEKTEN farklı bir dosya yolu
+    // (sonunda zaman damgası) kullanıyoruz — CDN'in eskiyle karıştırma
+    // ihtimalini teknik olarak sıfırlıyor. Eski dosyayı (varsa, istemciden
+    // gelen tam URL'den, yoksa eski sabit isimden) Blob'dan siliyoruz ki
+    // eski veri birikmesin.
+    if (oldMusicUrl) {
+      await del(String(oldMusicUrl)).catch(() => {});
+    }
     await del(`audio/${cleanPostId}-music.mp3`).catch(() => {});
 
-    const blob = await put(`audio/${cleanPostId}-music.mp3`, buffer, {
+    const benzersizDosyaAdi = `audio/${cleanPostId}-music-${Date.now()}.mp3`;
+    const blob = await put(benzersizDosyaAdi, buffer, {
       access: "public",
       contentType: "audio/mpeg",
       addRandomSuffix: false,
-      allowOverwrite: true,
       cacheControlMaxAge: 31536000,
     });
 
-    // ÖNEMLİ: Dosya adı (audio/${postId}-music.mp3) her üretimde AYNI
-    // kaldığı için (allowOverwrite:true) ve cacheControlMaxAge 1 yıl olduğu
-    // için, aynı URL tarayıcı/CDN tarafından uzun süre önbelleğe alınır.
-    // Blob'u silseniz bile önbellek eski müziği döndürmeye devam edebilir.
-    // Bunu önlemek için URL'nin sonuna HER üretimde değişen bir sürüm
-    // parametresi ekliyoruz — böylece her yeni üretim, önbellek için
-    // "farklı" bir URL olur.
-    const versiyonluUrl = `${blob.url}?v=${Date.now()}`;
-
-    return res.status(200).json({ musicUrl: versiyonluUrl, prompt: musicPrompt || "", kaynak });
+    // NOT: Dosya yolu artık zaten benzersiz (zaman damgalı) olduğu için
+    // ayrıca bir "?v=" sürüm parametresi eklemeye gerek yok.
+    return res.status(200).json({ musicUrl: blob.url, prompt: musicPrompt || "", kaynak });
   } catch (e) {
     console.error("musicGenerate HATASI (Blob yükleme):", e);
     return res.status(502).json({ error: kullaniciDostuHataMesaji(e) });

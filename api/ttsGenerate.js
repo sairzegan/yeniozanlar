@@ -232,7 +232,7 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { text, title, postId, caption, vocalLanguage, gender } = req.body || {};
+    const { text, title, postId, caption, vocalLanguage, gender, oldAudioUrl } = req.body || {};
     const cleanText = String(text || "").trim();
     const cleanPostId = String(postId || "").trim();
 
@@ -307,32 +307,35 @@ export default async function handler(req, res) {
     }
     } // else (cokUzunSiir değilse ACE-Step denemesi) bloğunun kapanışı
 
-    // Yeni sesi yüklemeden ÖNCE, aynı şiire ait ESKİ ses dosyasını Blob'dan
-    // açıkça siliyoruz. "allowOverwrite: true" zaten aynı isimdeki dosyanın
-    // İÇERİĞİNİ değiştirir (ayrı bir "eski dosya" birikmez), ama kullanıcı
-    // hiçbir eski verinin Blob'da kalmadığından emin olmak istediği ve bu
-    // silme CDN'in en güncel içeriği vermesini de garantiye aldığı için
-    // burada ekstra bir adım olarak bunu yapıyoruz. Dosya zaten yoksa
-    // (ilk üretimse) del() sessizce görmezden gelinir, hata fırlatmaz.
+    // ÖNEMLİ (kök çözüm): Daha önce dosya yolu HER ZAMAN aynıydı
+    // (audio/${postId}.mp3) ve sadece URL sonuna "?v=..." ekleyerek önbelleği
+    // atlatmaya çalışıyorduk. Ama bazı CDN'ler önbellek anahtarını sorgu
+    // parametresini YOK SAYARAK sadece dosya YOLUNA göre tutar — bu yüzden
+    // o yöntem güvenilir değildi. Şimdi her üretimde GERÇEKTEN farklı bir
+    // dosya yolu (sonunda zaman damgası olan) kullanıyoruz; bu şekilde CDN
+    // düzeyinde "eskiyle karıştırma" ihtimali teknik olarak sıfırlanıyor.
+    //
+    // Eski dosyayı (varsa, istemciden gelen tam URL'den) Blob'dan siliyoruz
+    // ki eski veri birikmesin. Gelmemişse (ilk üretim/eski kayıt) veya
+    // silme başarısız olursa sessizce görmezden geçilir.
+    if (oldAudioUrl) {
+      await del(String(oldAudioUrl)).catch(() => {});
+    }
+    // Geriye dönük uyumluluk: ESKİ sabit isimli dosyayı da (varsa) siliyoruz.
     await del(`audio/${cleanPostId}.mp3`).catch(() => {});
 
-    const blob = await put(`audio/${cleanPostId}.mp3`, buffer, {
+    const benzersizDosyaAdi = `audio/${cleanPostId}-${Date.now()}.mp3`;
+    const blob = await put(benzersizDosyaAdi, buffer, {
       access: "public",
       contentType: "audio/mpeg",
       addRandomSuffix: false,
-      allowOverwrite: true,
       cacheControlMaxAge: 31536000,
     });
 
     // ÖNEMLİ: Dosya adı (audio/${postId}.mp3) her üretimde AYNI kaldığı için
-    // (allowOverwrite:true) ve cacheControlMaxAge 1 yıl olduğu için, aynı URL
-    // tarayıcı/CDN tarafından uzun süre önbelleğe alınır. Blob'u silseniz
-    // bile önbellek eski sesi döndürmeye devam edebilir. Bunu önlemek için
-    // URL'nin sonuna HER üretimde değişen bir sürüm parametresi ekliyoruz —
-    // böylece her yeni üretim, önbellek için "farklı" bir URL olur.
-    const versiyonluUrl = `${blob.url}?v=${Date.now()}`;
-
-    return res.status(200).json({ audioUrl: versiyonluUrl, kaynak });
+    // NOT: Dosya yolu artık zaten benzersiz (zaman damgalı) olduğu için
+    // ayrıca bir "?v=" sürüm parametresi eklemeye gerek yok.
+    return res.status(200).json({ audioUrl: blob.url, kaynak });
   } catch (e) {
     console.error("ttsGenerate HATASI:", e);
     return res.status(500).json({ error: kullaniciDostuHataMesaji(e), detail: String(e?.message || e).slice(0, 300) });
