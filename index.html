@@ -2718,7 +2718,7 @@ async function adminSesiYenile(post){
   const res = await fetch('/api/ttsGenerate', {
     method:'POST',
     headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ title: post.title, text: post.text, postId: post.id, ...yon })
+    body: JSON.stringify({ title: post.title, text: post.text, postId: post.id, oldAudioUrl: post.audioUrl || '', ...yon })
   });
   if(!res.ok){
     let detay='';
@@ -3903,7 +3903,7 @@ async function adminMuzikYenile(post){
   const prompt=await aiMuzikPromptuGroqlaOlustur(post);
   const res=await fetch('/api/musicGenerate', {
     method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ title: post.title||'', postId: post.id, musicPrompt: prompt })
+    body: JSON.stringify({ title: post.title||'', postId: post.id, musicPrompt: prompt, oldMusicUrl: post.musicUrl || '' })
   });
   let data=null;
   try{ data=await res.json(); }catch(_){}
