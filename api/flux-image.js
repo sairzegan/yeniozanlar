@@ -49,7 +49,10 @@
 // artık base64 değil, bu URL yazılıyor.
 // ────────────────────────────────────────────────────────────────
 
-import { put } from '@vercel/blob';
+// DEĞİŞİKLİK: Vercel Blob yerine Cloudflare R2 kullanılıyor.
+// put()'un imzası/dönüş değeri birebir aynı olduğu için aşağıdaki
+// uploadToVercelBlob() fonksiyonunda BAŞKA HİÇBİR ŞEY değişmedi.
+import { put } from './_lib/r2.js';
 
 const MODEL = '@cf/black-forest-labs/flux-1-schnell';
 

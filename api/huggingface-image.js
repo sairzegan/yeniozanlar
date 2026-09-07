@@ -13,13 +13,17 @@
 //
 // Vercel Environment Variables:
 // HUGGINGFACE_API_TOKEN = hf_...
-// (Vercel Blob store bağlıysa BLOB_READ_WRITE_TOKEN otomatik eklenir)
+// R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME,
+// R2_PUBLIC_URL (bkz. _lib/r2.js başındaki açıklama)
 //
 // Vercel Environment (package.json) bağımlılıkları:
-// "@huggingface/inference", "@vercel/blob"
+// "@huggingface/inference", "@aws-sdk/client-s3"
 
 import { InferenceClient } from '@huggingface/inference';
-import { put } from '@vercel/blob';
+// DEĞİŞİKLİK: Vercel Blob yerine Cloudflare R2 kullanılıyor.
+// put()'un imzası/dönüş değeri birebir aynı olduğu için aşağıdaki
+// uploadToVercelBlob() fonksiyonunda BAŞKA HİÇBİR ŞEY değişmedi.
+import { put } from './_lib/r2.js';
 
 const MODEL = 'black-forest-labs/FLUX.1-schnell';
 const TIMEOUT_MS = 60000;
