@@ -1,4 +1,7 @@
-import { put, del } from "@vercel/blob";
+// DEĞİŞİKLİK: Vercel Blob yerine Cloudinary (kart gerektirmeyen ücretsiz
+// depolama) kullanılıyor. put()/del()'in imzası/dönüş değeri birebir aynı
+// olduğu için aşağıdaki kodda BAŞKA HİÇBİR ŞEY değişmedi.
+import { put, del } from "./_lib/storage.js";
 import { EdgeTTS } from "node-edge-tts";
 import fs from "fs/promises";
 import os from "os";
@@ -242,8 +245,8 @@ export default async function handler(req, res) {
     if (!/^[A-Za-z0-9]+$/.test(cleanPostId)) {
       return res.status(400).json({ error: "Geçersiz şiir ID." });
     }
-    if (!process.env.BLOB_STORE_ID) {
-      return res.status(500).json({ error: "BLOB_STORE_ID tanımlı değil (Blob deposu projeye bağlı mı?)." });
+    if (!process.env.CLOUDINARY_CLOUD_NAME || !process.env.CLOUDINARY_API_KEY || !process.env.CLOUDINARY_API_SECRET) {
+      return res.status(500).json({ error: "Cloudinary ortam değişkenleri eksik (CLOUDINARY_CLOUD_NAME / CLOUDINARY_API_KEY / CLOUDINARY_API_SECRET tanımlı mı?)." });
     }
 
     const finalCaption = String(caption || "").trim() || VARSAYILAN_CAPTION;
