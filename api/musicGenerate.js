@@ -1,8 +1,8 @@
-// DEĞİŞİKLİK: Vercel Blob yerine Cloudflare R2 kullanılıyor.
-// put()/del()'in imzası/dönüş değeri birebir aynı olduğu için aşağıdaki
-// kodda (eski dosyayı silme, yeni dosyayı yükleme) BAŞKA HİÇBİR ŞEY
-// değişmedi.
-import { put, del } from "./_lib/r2.js";
+// DEĞİŞİKLİK: Vercel Blob yerine Cloudinary (kart gerektirmeyen ücretsiz
+// depolama) kullanılıyor. put()/del()'in imzası/dönüş değeri birebir aynı
+// olduğu için aşağıdaki kodda (eski dosyayı silme, yeni dosyayı yükleme)
+// BAŞKA HİÇBİR ŞEY değişmedi.
+import { put, del } from "./_lib/storage.js";
 // NOT: aceStepHfSpaceIleUret ARTIK en üstte statik olarak değil, aşağıda
 // (aceStepHfSpaceKatmaniniDene içinde) DİNAMİK olarak import ediliyor.
 // Sebep: @gradio/client paketi bir nedenle (eksik kurulum, Vercel'in Node
@@ -166,8 +166,8 @@ export default async function handler(req, res) {
     res.setHeader("Allow", "POST");
     return res.status(405).json({ error: "Sadece POST." });
   }
-  if (!process.env.R2_ACCOUNT_ID || !process.env.R2_BUCKET_NAME || !process.env.R2_PUBLIC_URL) {
-    return res.status(500).json({ error: "R2 ortam değişkenleri eksik (R2_ACCOUNT_ID / R2_BUCKET_NAME / R2_PUBLIC_URL tanımlı mı?)." });
+  if (!process.env.CLOUDINARY_CLOUD_NAME || !process.env.CLOUDINARY_API_KEY || !process.env.CLOUDINARY_API_SECRET) {
+    return res.status(500).json({ error: "Cloudinary ortam değişkenleri eksik (CLOUDINARY_CLOUD_NAME / CLOUDINARY_API_KEY / CLOUDINARY_API_SECRET tanımlı mı?)." });
   }
 
   const { postId, musicPrompt, oldMusicUrl } = req.body || {};
