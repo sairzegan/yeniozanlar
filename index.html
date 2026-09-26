@@ -2714,7 +2714,7 @@ function otomatikSesUygulaGerekirse(postId, title, text){
     fetch('/api/ttsGenerate', {
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ title, text, postId, ...yon })
+      body: JSON.stringify({ text, postId, ...yon })
     }).then(async res=>{
       if(!res.ok){ console.warn('Otomatik ses oluşturulamadı:', res.status); return; }
       const data = await res.json();
@@ -2739,7 +2739,7 @@ async function adminSesiYenile(post){
   const res = await fetch('/api/ttsGenerate', {
     method:'POST',
     headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ title: post.title, text: post.text, postId: post.id, ...yon })
+    body: JSON.stringify({ text: post.text, postId: post.id, ...yon })
   });
   if(!res.ok){
     let detay='';
@@ -2851,25 +2851,51 @@ function sesOynaticiOlustur(audioUrl,opts={}){
   audio.volume=0.9;
   const etiketMetni=opts.label||'🎙️ Dinle';
   const gradyan=opts.gradient||'linear-gradient(135deg,#7c3aed,#34d399)';
-  const wrap=h('div',{style:{display:'flex',alignItems:'center',gap:'10px',background:'#0f0a1a',border:'1px solid #2d1b52',borderRadius:'14px',padding:'8px 12px',marginBottom:'14px'},onclick:(e)=>e.stopPropagation()});
-  const label=h('span',{style:{fontSize:'.72rem',color:'#a78bfa',flexShrink:'0',whiteSpace:'nowrap'}},etiketMetni);
+  const wrap=h('div',{style:{display:'flex',alignItems:'center',flexWrap:'wrap',gap:'8px',background:'#0f0a1a',border:'1px solid #2d1b52',borderRadius:'14px',padding:'8px 12px',marginBottom:'14px'},onclick:(e)=>e.stopPropagation()});
+  const label=h('span',{style:{fontSize:'.72rem',color:'#a78bfa',flexShrink:'0',whiteSpace:'nowrap',width:'100%'}},etiketMetni);
   const playBtn=h('button',{class:'btn',style:{background:gradyan,border:'none',borderRadius:'50%',width:'34px',height:'34px',display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:'.95rem',flexShrink:'0',padding:'0',lineHeight:'1'},
     onclick:(e)=>{e.stopPropagation(); if(audio.paused) audio.play().catch(()=>{}); else audio.pause();}
   },'▶️');
   const stopBtn=h('button',{class:'btn',style:{background:'#1a0f2e',border:'1px solid #3d1f6e',borderRadius:'50%',width:'28px',height:'28px',display:'flex',alignItems:'center',justifyContent:'center',color:'#a78bfa',fontSize:'.75rem',flexShrink:'0',padding:'0',lineHeight:'1'},
     onclick:(e)=>{e.stopPropagation(); audio.pause(); audio.currentTime=0;}
   },'⏹️');
-  const volIcon=h('span',{style:{fontSize:'.8rem',flexShrink:'0'}},'🔊');
-  const volSlider=h('input',{type:'range',min:'0',max:'1',step:'0.05',value:String(audio.volume),style:{flex:'1',minWidth:'40px',accentColor:'#34d399',cursor:'pointer'},
+  const suretMetniFormatla=(s)=>{ if(!Number.isFinite(s)||s<0) return '0:00'; const m=Math.floor(s/60); const sn=Math.floor(s%60); return m+':'+String(sn).padStart(2,'0'); };
+  const gecenSure=h('span',{style:{fontSize:'.66rem',color:'#a78bfa',flexShrink:'0',minWidth:'30px',textAlign:'right'}},'0:00');
+  let siruklemedeMi=false;
+  const seekSlider=h('input',{type:'range',min:'0',max:'0',step:'0.1',value:'0',style:{flex:'1',minWidth:'60px',accentColor:'#7c3aed',cursor:'pointer'},
+    onpointerdown:(e)=>{e.stopPropagation(); siruklemedeMi=true;},
+    onpointerup:(e)=>{e.stopPropagation(); siruklemedeMi=false;},
+    oninput:(e)=>{e.stopPropagation(); const v=parseFloat(e.target.value); audio.currentTime=v; gecenSure.textContent=suretMetniFormatla(v);},
+    onclick:(e)=>e.stopPropagation()
+  });
+  const toplamSure=h('span',{style:{fontSize:'.66rem',color:'#6b5b8a',flexShrink:'0',minWidth:'30px'}},'0:00');
+  const volIcon=h('span',{style:{fontSize:'.75rem',flexShrink:'0'}},'🔊');
+  const volSlider=h('input',{type:'range',min:'0',max:'1',step:'0.05',value:String(audio.volume),style:{width:'42px',flexShrink:'0',accentColor:'#34d399',cursor:'pointer'},
     oninput:(e)=>{e.stopPropagation(); audio.volume=parseFloat(e.target.value); volIcon.textContent=audio.volume===0?'🔇':(audio.volume<0.5?'🔉':'🔊');},
     onclick:(e)=>e.stopPropagation()
   });
+  const sureBilgisiGuncelle=()=>{
+    if(Number.isFinite(audio.duration) && audio.duration>0){
+      seekSlider.max=String(audio.duration);
+      toplamSure.textContent=suretMetniFormatla(audio.duration);
+    }
+  };
+  audio.addEventListener('loadedmetadata',sureBilgisiGuncelle);
+  audio.addEventListener('durationchange',sureBilgisiGuncelle);
+  audio.addEventListener('timeupdate',()=>{
+    if(siruklemedeMi) return;
+    seekSlider.value=String(audio.currentTime);
+    gecenSure.textContent=suretMetniFormatla(audio.currentTime);
+  });
   audio.addEventListener('play',()=>{playBtn.textContent='⏸️';});
   audio.addEventListener('pause',()=>{playBtn.textContent='▶️';});
-  audio.addEventListener('ended',()=>{playBtn.textContent='▶️';});
+  audio.addEventListener('ended',()=>{playBtn.textContent='▶️'; seekSlider.value='0'; gecenSure.textContent='0:00';});
   wrap.appendChild(label);
   wrap.appendChild(playBtn);
   wrap.appendChild(stopBtn);
+  wrap.appendChild(gecenSure);
+  wrap.appendChild(seekSlider);
+  wrap.appendChild(toplamSure);
   wrap.appendChild(volIcon);
   wrap.appendChild(volSlider);
   // opts.onDelete verilirse (yetki varsa) sona bir 🗑️ kaldırma tuşu eklenir.
