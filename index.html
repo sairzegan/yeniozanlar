@@ -1467,17 +1467,61 @@ const AI_SISTEM_PROMPTU = 'Sen deneyimli bir Türk edebiyat eleştirmenisin. Şi
 
 function aiKullaniciPromptuOlustur(text){
   const heceBilgisi = siirHeceOzetiOlustur(text);
-  return `Aşağıdaki şiiri analiz et:\n\n"""\n${text}\n"""\n${heceBilgisi}\n\nDikkat et:\n- Aynı kelimenin tekrarını kafiye sayma\n- Kısa ve tekrarlı şiirlere düşük puan ver\n- Doğrudan söylenmese bile ima edilen duyguyu, temayı, anlatıyı kavra\n- Şiirden gerçek dize alıntısı yap\n- Hece ölçüsü hakkında konuşurken YUKARIDA VERİLEN sayıları kullan, kendi başına sayma\n- Günlük konuşma dili ve klişelere eksi puan ver\n\nSADECE şu JSON ile yanıtla, başka hiçbir şey yazma:\n{\n  "score": <2.0-9.8 arası gerçekçi puan>,\n  "yorum": "<5-7 cümle: şiirden ne anlaşıldığı, tema, imge, dil kalitesi, ses uyumu>",\n  "gucluYonler": "<tek cümle, şiirden somut örnek>",\n  "gelistirmeOnerisi": "<tek cümle, somut ve uygulanabilir>"\n}`;
+  return `Aşağıdaki şiiri analiz et:\n\n"""\n${text}\n"""\n${heceBilgisi}\n\nDikkat et:\n- Aynı kelimenin tekrarını kafiye sayma\n- Kısa ve tekrarlı şiirlere düşük puan ver\n- Doğrudan söylenmese bile ima edilen duyguyu, temayı, anlatıyı kavra\n- Şiirden gerçek dize alıntısı yap\n- Hece ölçüsü hakkında konuşurken YUKARIDA VERİLEN sayıları kullan, kendi başına sayma\n- Günlük konuşma dili ve klişelere eksi puan ver\n\nBu şiiri DÖRT AYRI eleştirmen gibi, dört farklı açıdan değerlendir (genel/duyu/ses/imge). SADECE şu JSON ile yanıtla, başka hiçbir şey yazma:\n{\n  "score": <2.0-9.8 arası genel puan>,\n  "yorum": "<5-7 cümle: şiirden ne anlaşıldığı, tema, imge, dil kalitesi, ses uyumu>",\n  "gucluYonler": "<tek cümle, şiirden somut örnek>",\n  "gelistirmeOnerisi": "<tek cümle, somut ve uygulanabilir>",\n  "duyuPuan": <2.0-9.5 arası, YALNIZCA duygusallık/duygu yoğunluğu açısından puan>,\n  "duyuYorum": "<'duyu-yorum' imzalı bir eleştirmenin SADECE duyguya odaklanan 2-3 cümlelik yorumu>",\n  "katliPuan": <2.0-9.5 arası, YALNIZCA ses uyumu/kafiye/hece/ritim açısından puan>,\n  "katliYorum": "<'katlı-yorum' imzalı bir eleştirmenin SADECE ses/kafiye/ritme odaklanan 2-3 cümlelik yorumu>",\n  "ariPuan": <2.0-9.5 arası, YALNIZCA imge/metafor/özgünlük açısından puan>,\n  "ariYorum": "<'arı-yorum' imzalı bir eleştirmenin SADECE imge/metafor/özgünlüğe odaklanan 2-3 cümlelik yorumu>"\n}`;
 }
 
-// Ham model çıktısından (olası ```json çitleri, olası ekstra metinle birlikte) JSON'u ayıklar ve doğrular
+// Ham model çıktısından (olası ```json çitleri, olası ekstra metinle birlikte) JSON'u ayıklar ve doğrular.
+// DÜZELTME: Önceden ana puan (score) ile 3 bot yorumu (duyu/katlı/arı) AYRI AYRI
+// istekler olarak gönderiliyordu — bu hem kotayı 4 katına çıkarıyor hem de her
+// istek farklı bir modele/sağlayıcıya düşüp (biri Gemini'de kota/rate-limit'e
+// takılırken diğeri Groq'a düşerek) TUTARSIZ sonuçlara yol açıyordu. Artık TEK
+// istekte hem ana değerlendirme hem 3 bot yorumu birlikte isteniyor (yukarıdaki
+// aiKullaniciPromptuOlustur), bu fonksiyon da hepsini TEK YERDE ayıklayıp
+// doğruluyor — böylece 4 sonuç HER ZAMAN aynı tek API çağrısından gelir.
 function jsonAyikla(raw){
   const clean = raw.replace(/```json|```/g,'').trim();
   const jsonStr = clean.slice(clean.indexOf('{'), clean.lastIndexOf('}')+1);
   const result = JSON.parse(jsonStr);
   result.score = Math.min(9.8, Math.max(2.0, parseFloat(result.score)));
   result.score = Math.round(result.score * 10) / 10;
+  const botPuanTemizle = (v) => {
+    const n = parseFloat(v);
+    const guvenli = Number.isFinite(n) ? n : 5.5;
+    return Math.round(Math.min(9.5, Math.max(2.0, guvenli)) * 10) / 10;
+  };
+  result.duyuPuan = botPuanTemizle(result.duyuPuan);
+  result.katliPuan = botPuanTemizle(result.katliPuan);
+  result.ariPuan = botPuanTemizle(result.ariPuan);
+  if(!result.duyuYorum || !String(result.duyuYorum).trim())   result.duyuYorum  = result.yorum;
+  if(!result.katliYorum || !String(result.katliYorum).trim()) result.katliYorum = result.yorum;
+  if(!result.ariYorum || !String(result.ariYorum).trim())     result.ariYorum   = result.yorum;
   return result;
+}
+
+// Birleşik AI sonucundan (jsonAyikla çıktısı) 3 bot yorumunu, mevcut
+// userRatings/botYorumlar şemasıyla (kullanici, ad alanları) uyumlu objelere çevirir.
+function botlariBirlesikSonuctanCikar(result){
+  if(!result) return { b1:null, b2:null, b3:null };
+  return {
+    b1: { puan: result.duyuPuan,  yorum: result.duyuYorum,  kullanici:'bot_duyu_yorum',  ad:'duyu-yorum' },
+    b2: { puan: result.katliPuan, yorum: result.katliYorum, kullanici:'bot_katli_yorum', ad:'katlı-yorum' },
+    b3: { puan: result.ariPuan,   yorum: result.ariYorum,   kullanici:'bot_ari_yorum',   ad:'arı-yorum' }
+  };
+}
+
+// Ana AI ve 3 bot TAMAMEN başarısız olduğunda (tüm sağlayıcılar tükendiğinde)
+// kullanılan tam yerel yedek: scorePoemYerel + 3 yerel bot fonksiyonunu birleştirir.
+function scorePoemYerelBirlesik(text){
+  const ana = scorePoemYerel(text);
+  const duyu = botDuyuPuanYerel(text);
+  const katli = botKatliPuanYerel(text);
+  const ari = botAriPuanYerel(text);
+  return {
+    ...ana,
+    duyuPuan: duyu.puan, duyuYorum: duyu.yorum,
+    katliPuan: katli.puan, katliYorum: katli.yorum,
+    ariPuan: ari.puan, ariYorum: ari.yorum
+  };
 }
 
 async function scorePoemTekModel(text, model){
@@ -1488,7 +1532,7 @@ async function scorePoemTekModel(text, model){
   // Groq'un resmi JSON modu — sözdizimsel olarak geçerli JSON garantisi verir.
   const govde = {
     model: model,
-    max_tokens: 1024,
+    max_tokens: 1536, // Tek istekte ana puan + 3 bot yorumu birlikte istendiği için artırıldı
     temperature: 0.7,
     response_format: { type: 'json_object' },
     messages: [
@@ -1551,7 +1595,7 @@ async function scorePoemGeminiCore(text){
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model: 'gemini-3.5-flash',
-      max_tokens: 2048,
+      max_tokens: 2560, // Tek istekte ana puan + 3 bot yorumu birlikte istendiği için artırıldı
       temperature: 0.7,
       reasoning_effort: 'low',
       response_format: { type: 'json_object' },
@@ -1583,7 +1627,7 @@ async function scorePoemGeminiIle(text){
   } catch(e){
     console.warn('Gemini hatası, yerel algoritma kullanılıyor:', e.message);
     groqKota.sonKaynak='yerel'; groqKota.sonHata='Gemini: '+e.message;
-    return scorePoemYerel(text);
+    return scorePoemYerelBirlesik(text);
   }
 }
 
@@ -1597,7 +1641,7 @@ async function scorePoemClaudeIle(text){
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: 'claude-sonnet-5',
-        max_tokens: 1024,
+        max_tokens: 1536, // Tek istekte ana puan + 3 bot yorumu birlikte istendiği için artırıldı
         system: AI_SISTEM_PROMPTU,
         messages: [
           { role: 'user', content: aiKullaniciPromptuOlustur(text) }
@@ -1620,7 +1664,7 @@ async function scorePoemClaudeIle(text){
   } catch(e){
     console.warn('Claude hatası, yerel algoritma kullanılıyor:', e.message);
     groqKota.sonKaynak='yerel'; groqKota.sonHata='Claude: '+e.message;
-    return scorePoemYerel(text);
+    return scorePoemYerelBirlesik(text);
   }
 }
 
@@ -1650,7 +1694,7 @@ async function scorePoem(text, saglayici='auto'){
         groqKota.sonKaynak = 'yerel';
         groqKota.sonModel = null;
         groqKota.sonHata = `Groq: ${e.message} | Gemini: ${ge.message}`;
-        return scorePoemYerel(text);
+        return scorePoemYerelBirlesik(text);
       }
     }
   }
@@ -1682,7 +1726,7 @@ async function scorePoem(text, saglayici='auto'){
     groqKota.sonKaynak = 'yerel';
     groqKota.sonModel = null;
     groqKota.sonHata = `Gemini: ${ge.message} | Groq: ${sonHataMesaji}`;
-    return scorePoemYerel(text);
+    return scorePoemYerelBirlesik(text);
   }
 }
 
@@ -2870,25 +2914,17 @@ A.addPost = async function(pd){
     save();render();
 
     if(hasText){
-      // DÜZELTME: Önceden 3 bot (duyu-yorum/katlı-yorum/arı-yorum) ana AI'dan ÖNCE
-      // ve kendi başına 'auto' modunda çalıştırılıyordu — bu mod Gemini'yi hiç
-      // denemiyor, yalnızca Groq kademesini dener; Groq (Llama modelleri) kota
-      // dolu/çalışmıyorsa botlar sessizce yerel algoritmaya düşüyordu. Ardından ana
-      // AI'ı botların kullandığı modele "zorlama" denemesi de yanlış formatta
-      // ('groq:' öneki eksik) olduğu için hiç işe yaramıyordu.
-      //
-      // Çözüm: Tıpkı admin panelindeki "Yeniden Değerlendir" akışında olduğu gibi,
-      // önce ana AI'ı ('auto' kademesiyle: Gemini → Groq → yerel) çalıştırıp GERÇEKTE
-      // hangi sağlayıcının başarılı olduğunu öğreniyoruz, sonra 3 botu da AYNI
-      // sağlayıcıya zorluyoruz. Böylece 4 değerlendirme (ana AI + 3 bot) her zaman
-      // aynı yapay zekadan gelir; hiçbiri sessizce farklı bir modele veya yerel
-      // algoritmaya düşüp tutarsızlık yaratmaz.
+      // DÜZELTME: Önceden ana puan ve 3 bot yorumu (duyu/katlı/arı) 4 AYRI istek
+      // olarak gönderiliyordu — bu hem günlük kotayı 4 katına çıkarıyor hem de her
+      // istek ayrı ayrı başarısız/başarılı olabildiği için (ör. Gemini ana isteği
+      // geçse bile ardından atılan 2-3 bot isteği rate-limit'e takılabiliyordu)
+      // TUTARSIZ sonuçlara yol açıyordu: ana yorum geliyor ama duyu/arı-yorum
+      // gelmiyordu. Artık TEK istekte hem ana puan hem 3 bot yorumu birlikte
+      // isteniyor (bkz. aiKullaniciPromptuOlustur) — 4 sonuç da HER ZAMAN aynı
+      // tek API çağrısından, aynı modelden gelir; kota kullanımı da 4'te 1'e iner.
       const r = await scorePoem(pd.text, 'auto');
       const kullanilanModel = groqKota.sonKaynak==='yerel' ? 'yerel' : (groqKota.sonModel||groqKota.sonKaynak);
-      const botSaglayici = sonBasariliSaglayiciyiBul();
-
-      const b1 = await botDuyuPuan(pd.text, botSaglayici);
-      const [b2,b3] = await Promise.all([botKatliPuan(pd.text, botSaglayici), botAriPuan(pd.text, botSaglayici)]);
+      const {b1,b2,b3} = botlariBirlesikSonuctanCikar(r);
 
       const idx=S.posts.findIndex(p=>p.id===np.id);
       if(idx>-1){
@@ -4199,21 +4235,14 @@ function postCard(post, forceExpand=false, autoOpenComments=false, hedefYorumId=
       revalStatus.textContent='Ana AI çalışıyor...';
       revalStatus.style.color='#6b5b8a';
       try{
+        // DÜZELTME: Ana puan ve 3 bot yorumu artık TEK istekte birlikte geliyor
+        // (aiKullaniciPromptuOlustur), ayrı bot istekleri atılmıyor — hem kota
+        // kullanımı 4'te 1'e iniyor hem de 4 sonuç HER ZAMAN aynı modelden geldiği
+        // için admin hangi sağlayıcıyı seçerse seçsin tutarlı çıkıyor.
         const r=await scorePoem(post.text, adminSecilenSaglayici);
         const kullanilanModel1 = groqKota.sonKaynak==='yerel' ? 'yerel' : (groqKota.sonModel||groqKota.sonKaynak);
-        // DÜZELTME: Botları artık admin Groq seçtiyse (ve ana AI Groq'ta kaldıysa)
-        // değil, ana AI'ın GERÇEKTE kullandığı sağlayıcıya (Groq/Gemini/Claude/yerel
-        // fark etmeksizin) zorluyoruz — böylece admin "Gemini" veya "Claude" seçse
-        // bile 3 bot artık Groq'a düşüp ana değerlendirmeden farklı yorum vermez.
-        const botSaglayici = sonBasariliSaglayiciyiBul();
-        revalStatus.textContent='duyu-yorum analiz ediyor...';
-        const b1=await botDuyuPuan(post.text, botSaglayici);
-        await new Promise(res=>setTimeout(res,600));
-        revalStatus.textContent='katlı-yorum analiz ediyor...';
-        const b2=await botKatliPuan(post.text, botSaglayici);
-        await new Promise(res=>setTimeout(res,600));
-        revalStatus.textContent='arı-yorum analiz ediyor...';
-        const b3=await botAriPuan(post.text, botSaglayici);
+        revalStatus.textContent='duyu/katlı/arı-yorum hazırlanıyor...';
+        const {b1,b2,b3} = botlariBirlesikSonuctanCikar(r);
         const idx=S.posts.findIndex(p=>p.id===post.id);
         if(idx>-1){
           const yeniRatings={...(S.posts[idx].userRatings||{})};
@@ -5317,18 +5346,13 @@ function Profile(){
           // Her şiir arasında 2.5 sn bekle — Groq rate limit (30 istek/dk) için
           if(sayac>0) await new Promise(res=>setTimeout(res,2500));
           durumEl.textContent=`⏳ ${sayac+1}/${tumPostlar.length} değerlendiriliyor...`;
+          // DÜZELTME: bkz. tekil değerlendirme — ana puan ve 3 bot yorumu artık TEK
+          // istekte birlikte geliyor, ayrı bot istekleri atılmıyor. Bu hem kotayı
+          // 4'te 1'e indiriyor hem de toplu değerlendirmede her şiir için 4 yerine
+          // 1 istek gittiğinden rate-limit riskini de büyük ölçüde azaltıyor.
           const r=await scorePoem(post.text, adminSecilenSaglayici);
           const kullanilanModelToplu = groqKota.sonKaynak==='yerel' ? 'yerel' : (groqKota.sonModel||groqKota.sonKaynak);
-          // DÜZELTME: bkz. tekil değerlendirme — botlar artık ana AI'ın GERÇEKTE
-          // kullandığı sağlayıcıya zorlanıyor (Groq/Gemini/Claude/yerel), sadece
-          // Groq seçiliyken değil.
-          const botSaglayiciToplu = sonBasariliSaglayiciyiBul();
-          await new Promise(res=>setTimeout(res,800));
-          const b1=await botDuyuPuan(post.text, botSaglayiciToplu);
-          await new Promise(res=>setTimeout(res,800));
-          const b2=await botKatliPuan(post.text, botSaglayiciToplu);
-          await new Promise(res=>setTimeout(res,800));
-          const b3=await botAriPuan(post.text, botSaglayiciToplu);
+          const {b1,b2,b3} = botlariBirlesikSonuctanCikar(r);
           const yeniRatings={...(post.userRatings||{})};
           if(b1)yeniRatings[b1.kullanici]=b1.puan;
           if(b2)yeniRatings[b2.kullanici]=b2.puan;
