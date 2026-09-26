@@ -1586,8 +1586,8 @@ async function scorePoemTekModel(text, model){
 
 // ── Gemini çekirdek çağrısı ─────────────────────────────────────────────────
 // Başarısız olursa yerel algoritmaya DÜŞMEZ, hatayı olduğu gibi fırlatır.
-// Böylece hem admin'in doğrudan "gemini" seçimi hem de Groq cascade'inin
-// yedek (fallback) katmanı aynı çekirdeği kullanabilir.
+// Böylece hem admin'in doğrudan "gemini" seçimi hem de genel AI kademesinin
+// (scorePoemKademeCalistir) bir adımı aynı çekirdeği kullanabilir.
 async function scorePoemGeminiCore(text){
   // Groq'a özel groqKotaGuncelle() burada işe yaramaz (Gemini farklı header'lar döner),
   // ama panelin "Henüz API isteği yapılmadı" yazmaması için bu iki alanı elle güncelliyoruz.
@@ -1619,118 +1619,125 @@ async function scorePoemGeminiCore(text){
   let result;
   try{ result = jsonAyikla(raw); }
   catch(parseErr){ throw new Error('JSON_HATASI: Gemini geçersiz format döndürdü → "'+raw.slice(0,150)+(raw.length>150?'...':'')+'"'); }
-  groqKota.sonKaynak='gemini'; groqKota.sonModel='gemini-3.5-flash'; groqKota.sonHata=null; groqKota.kotaDolduMu=false;
   return result;
 }
 
-// ── Gemini ile puanlama (admin panelinden doğrudan seçildiğinde kullanılır) ─
-async function scorePoemGeminiIle(text){
-  try{
-    return await scorePoemGeminiCore(text);
-  } catch(e){
-    console.warn('Gemini hatası, yerel algoritma kullanılıyor:', e.message);
-    groqKota.sonKaynak='yerel'; groqKota.sonHata='Gemini: '+e.message;
-    return scorePoemYerelBirlesik(text);
-  }
-}
-
-// ── Claude ile puanlama (admin tarafından seçildiğinde kullanılır) ─────────
-async function scorePoemClaudeIle(text){
+// ── Claude çekirdek çağrısı ─────────────────────────────────────────────────
+// Gemini çekirdeği gibi: başarısız olursa yerel algoritmaya DÜŞMEZ, hatayı
+// olduğu gibi fırlatır; karar üst seviyede (scorePoemKademeCalistir) verilir.
+async function scorePoemClaudeCore(text){
   groqKota.sonGuncelleme = new Date().toLocaleTimeString('tr-TR');
   groqKota.toplamIstek++;
-  try{
-    const res = await fetch('/api/claude', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'claude-sonnet-5',
-        max_tokens: 1536, // Tek istekte ana puan + 3 bot yorumu birlikte istendiği için artırıldı
-        system: AI_SISTEM_PROMPTU,
-        messages: [
-          { role: 'user', content: aiKullaniciPromptuOlustur(text) }
-        ]
-      })
-    });
-    if(!res.ok){
-      let mesaj = '';
-      try{ const errBody = await res.json(); mesaj = errBody?.error?.message || ''; }catch(_){}
-      throw new Error(res.status+': '+(mesaj || 'Claude hatası'));
-    }
-    const data = await res.json();
-    const raw = data.content?.[0]?.text?.trim();
-    if(!raw) throw new Error('BOS_YANIT: Claude içerik döndürmedi');
-    let result;
-    try{ result = jsonAyikla(raw); }
-    catch(parseErr){ throw new Error('JSON_HATASI: Claude geçersiz format döndürdü → "'+raw.slice(0,150)+(raw.length>150?'...':'')+'"'); }
-    groqKota.sonKaynak='claude'; groqKota.sonModel='claude-sonnet-5'; groqKota.sonHata=null; groqKota.kotaDolduMu=false;
-    return result;
-  } catch(e){
-    console.warn('Claude hatası, yerel algoritma kullanılıyor:', e.message);
-    groqKota.sonKaynak='yerel'; groqKota.sonHata='Claude: '+e.message;
-    return scorePoemYerelBirlesik(text);
+  const res = await fetch('/api/claude', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'claude-sonnet-5',
+      max_tokens: 1536, // Tek istekte ana puan + 3 bot yorumu birlikte istendiği için artırıldı
+      system: AI_SISTEM_PROMPTU,
+      messages: [
+        { role: 'user', content: aiKullaniciPromptuOlustur(text) }
+      ]
+    })
+  });
+  if(!res.ok){
+    let mesaj = '';
+    try{ const errBody = await res.json(); mesaj = errBody?.error?.message || ''; }catch(_){}
+    throw new Error(res.status+': '+(mesaj || 'Claude hatası'));
   }
+  const data = await res.json();
+  const raw = data.content?.[0]?.text?.trim();
+  if(!raw) throw new Error('BOS_YANIT: Claude içerik döndürmedi');
+  let result;
+  try{ result = jsonAyikla(raw); }
+  catch(parseErr){ throw new Error('JSON_HATASI: Claude geçersiz format döndürdü → "'+raw.slice(0,150)+(raw.length>150?'...':'')+'"'); }
+  return result;
+}
+
+// ── Genel AI kademesi (cascade) ─────────────────────────────────────────────
+// DÜZELTME: Eskiden 'auto' modunda ÖNCE Gemini denenirdi, Gemini bir hata
+// verdiğinde/kotaya takıldığında Groq kademesine geçilirdi — yani Gemini,
+// Groq modelleriyle AYNI sırada/listede değildi, ayrıcalıklı ("öncelikli")
+// bir ilk deneme basamağıydı. Gemini zaman zaman kararsız davrandığı için
+// (bazen çalışıyor, bazen çalışmıyor) bu ona haksız bir öncelik veriyordu.
+// Ayrıca admin doğrudan 'gemini', 'claude' ya da belirli bir 'groq:model'
+// seçtiğinde, o seçim başarısız olduğunda DOĞRUDAN yerel algoritmaya
+// düşülüyordu; kademedeki diğer AI'lar hiç denenmiyordu.
+//
+// Yeni davranış: TÜM sağlayıcılar (3 Groq modeli + Gemini) TEK bir sıralı
+// kademe içinde yer alır ve Gemini bu kademede EN SONDA, yani ÖNCELİKSİZ
+// konumda bulunur — mutlaka bir kez denenir, ama ilk seçenek değildir.
+// Admin belirli bir sağlayıcıyı zorlarsa (gemini/claude/groq:model), önce O
+// denenir; başarısız olursa DOĞRUDAN yerele düşmek yerine kademedeki KALAN
+// adımlar sırayla denenir. Yerel algoritmaya SADECE hepsi başarısız olursa
+// (en son çare olarak) düşülür.
+const TAM_AI_KADEMESI = [
+  {tur:'groq', model:'openai/gpt-oss-120b'},   // ~200.000 token/gün — kaliteli, iyi bir denge
+  {tur:'groq', model:'qwen/qwen3.6-27b'},      // Groq'un llama-3.3-70b-versatile YERİNE önerdiği model
+  {tur:'groq', model:'openai/gpt-oss-20b'},    // en yüksek kotalı/en hızlı Groq modeli
+  {tur:'gemini'}                               // kasıtlı olarak SON sırada: öncelikli değil ama devre dışı da değil
+];
+
+function adimEtiketi(adim){ return adim.tur==='groq' ? adim.model : adim.tur; }
+
+async function scorePoemAdimCalistir(text, adim){
+  if(adim.tur==='groq') return await scorePoemTekModel(text, adim.model);
+  if(adim.tur==='gemini') return await scorePoemGeminiCore(text);
+  if(adim.tur==='claude') return await scorePoemClaudeCore(text);
+  throw new Error('Bilinmeyen AI adımı: '+adim.tur);
+}
+
+// baslangicAdimi verilirse (admin'in doğrudan seçimi) önce O denenir; başarısız
+// olursa TAM_AI_KADEMESI'ndeki KALAN adımlar (baslangicAdimi hariç, kendi
+// sırasıyla) denenir. baslangicAdimi verilmezse 'auto' modu: doğrudan
+// TAM_AI_KADEMESI baştan sona denenir (Gemini en sonda). Hiçbir adım
+// çalışmazsa EN SON yerel algoritmaya düşülür.
+async function scorePoemKademeCalistir(text, baslangicAdimi=null){
+  const denenecekler = baslangicAdimi
+    ? [baslangicAdimi, ...TAM_AI_KADEMESI.filter(a=>adimEtiketi(a)!==adimEtiketi(baslangicAdimi))]
+    : TAM_AI_KADEMESI;
+  const hatalar=[];
+  for(const adim of denenecekler){
+    try{
+      const result = await scorePoemAdimCalistir(text, adim);
+      if(adim.tur==='groq'){
+        groqKota.sonKaynak='groq'; groqKota.sonModel=adim.model;
+        groqGunlukArttir(true);
+      } else {
+        groqKota.sonKaynak=adim.tur;
+        groqKota.sonModel = adim.tur==='gemini' ? 'gemini-3.5-flash' : 'claude-sonnet-5';
+      }
+      groqKota.sonHata=null; groqKota.kotaDolduMu=false;
+      return result;
+    } catch(e){
+      hatalar.push(`${adimEtiketi(adim)}: ${e.message}`);
+      if(adim.tur==='groq') groqGunlukArttir(false);
+      console.warn(`${adimEtiketi(adim)} başarısız, sıradaki AI deneniyor:`, e.message);
+      // sıradaki AI'ya geç
+    }
+  }
+  console.warn('Tüm AI sağlayıcıları başarısız oldu, yerel algoritma kullanılıyor:', hatalar.join(' | '));
+  groqKota.sonKaynak = 'yerel';
+  groqKota.sonModel = null;
+  groqKota.sonHata = hatalar.join(' | ');
+  return scorePoemYerelBirlesik(text);
 }
 
 async function scorePoem(text, saglayici='auto'){
   if(!text||text.trim().length<3)return null;
-  if(saglayici==='gemini') return await scorePoemGeminiIle(text);
-  if(saglayici==='claude') return await scorePoemClaudeIle(text);
-  // 'groq:model-adi' formatı: admin, Groq kademesindeki belirli bir modeli zorlar
-  // (kademe/cascade devreye girmez, sadece o tek model denenir).
+  if(saglayici==='gemini') return await scorePoemKademeCalistir(text, {tur:'gemini'});
+  if(saglayici==='claude') return await scorePoemKademeCalistir(text, {tur:'claude'});
+  // 'groq:model-adi' formatı: admin, Groq kademesindeki belirli bir modeli önce
+  // dener; başarısız olursa kademedeki diğer AI'lar (diğer Groq modelleri ve
+  // Gemini) sırayla denenir.
   if(saglayici && saglayici.startsWith('groq:')){
     const secilenModel = saglayici.slice(5);
-    try{
-      const result = await scorePoemTekModel(text, secilenModel);
-      groqKota.sonKaynak = 'groq';
-      groqKota.sonModel = secilenModel;
-      groqKota.sonHata = null;
-      groqGunlukArttir(true);
-      return result;
-    } catch(e){
-      console.warn(`Groq (${secilenModel}) başarısız, Gemini yedek olarak deneniyor:`, e.message);
-      groqGunlukArttir(false);
-      try{
-        const geminiSonuc = await scorePoemGeminiCore(text);
-        return geminiSonuc;
-      } catch(ge){
-        console.warn('Gemini de başarısız, yerel algoritma kullanılıyor:', ge.message);
-        groqKota.sonKaynak = 'yerel';
-        groqKota.sonModel = null;
-        groqKota.sonHata = `Groq: ${e.message} | Gemini: ${ge.message}`;
-        return scorePoemYerelBirlesik(text);
-      }
-    }
+    return await scorePoemKademeCalistir(text, {tur:'groq', model:secilenModel});
   }
-  // 'auto': önce Gemini denenir; Gemini kota dolar/hata verirse Groq kademesine
-  // geçilir (openai/gpt-oss-120b → qwen/qwen3.6-27b → openai/gpt-oss-20b);
-  // o da tamamen başarısız olursa en son yerel algoritmaya düşülür.
-  try{
-    const geminiSonuc = await scorePoemGeminiCore(text);
-    return geminiSonuc;
-  } catch(ge){
-    console.warn('Gemini başarısız, Groq kademesi deneniyor:', ge.message);
-    let sonHataMesaji = null;
-    for(const model of GROQ_MODEL_KADEMESI){
-      try{
-        const result = await scorePoemTekModel(text, model);
-        groqKota.sonKaynak = 'groq';
-        groqKota.sonModel = model;
-        groqKota.sonHata = null;
-        groqGunlukArttir(true);
-        return result;
-      } catch(e){
-        sonHataMesaji = e.message;
-        console.warn(`Groq (${model}) başarısız, sıradaki modele geçiliyor:`, e.message);
-        // sıradaki modele geç
-      }
-    }
-    console.warn('Gemini ve tüm Groq modelleri başarısız oldu, yerel algoritma kullanılıyor:', sonHataMesaji);
-    groqGunlukArttir(false);
-    groqKota.sonKaynak = 'yerel';
-    groqKota.sonModel = null;
-    groqKota.sonHata = `Gemini: ${ge.message} | Groq: ${sonHataMesaji}`;
-    return scorePoemYerelBirlesik(text);
-  }
+  // 'auto': TAM_AI_KADEMESI baştan sona denenir (openai/gpt-oss-120b →
+  // qwen/qwen3.6-27b → openai/gpt-oss-20b → gemini); hiçbiri çalışmazsa en son
+  // yerel algoritmaya düşülür.
+  return await scorePoemKademeCalistir(text, null);
 }
 
 function scorePoemYerel(text){
@@ -2350,90 +2357,98 @@ function jsonAyiklaBasit(raw){
 // Groq kademesini (auto) çalıştırıyordu. Bu da ana AI ile 3 bot'un TAMAMEN
 // FARKLI modellerden gelip birbirini tutmayan puan/yorum vermesine yol açıyordu.
 //
-// Çözüm: botAICagir artık "saglayici" parametresini (adminSecilenSaglayici ile
-// AYNI değer kümesi: 'auto' | 'groq:model-adi' | 'gemini' | 'claude' | 'yerel')
-// kabul edip isteği doğru sağlayıcıya yönlendirir. Böylece ana AI hangi
-// sağlayıcıyı kullandıysa botlar da AYNI sağlayıcıyı kullanır.
+// AYRICA DÜZELTİLDİ: Gemini/Claude/belirli-bir-groq-modeli seçimi başarısız
+// olduğunda botlar doğrudan null dönüp (dolayısıyla yerel algoritmaya) düşerdi;
+// diğer AI'lar hiç denenmezdi. Artık botAICagir de ana AI ile AYNI TAM_AI_KADEMESI
+// üzerinden çalışır: seçilen sağlayıcı başarısız olursa kademedeki KALAN AI'lar
+// sırayla denenir, Gemini kademede en sonda (öncelikli değil) yer alır ve
+// TÜMÜ başarısız olduğunda null döner (yerel yedek çağıran fonksiyonda devreye girer).
+async function botAdimCalistir(systemPrompt, userPrompt, adim){
+  if(adim.tur==='groq') return await groqBotCallTekModel(systemPrompt, userPrompt, adim.model);
+  groqKota.sonGuncelleme = new Date().toLocaleTimeString('tr-TR');
+  groqKota.toplamIstek++;
+  if(adim.tur==='gemini'){
+    const res = await fetch('/api/gemini', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gemini-3.5-flash',
+        max_tokens: 400,
+        temperature: 0.8,
+        reasoning_effort: 'low',
+        response_format: { type: 'json_object' },
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt }
+        ]
+      })
+    });
+    if(!res.ok){
+      let mesaj = '';
+      try{ const errBody = await res.json(); mesaj = errBody?.error?.message || ''; }catch(_){}
+      throw new Error(res.status+': '+(mesaj || 'Gemini hatası'));
+    }
+    const data = await res.json();
+    const raw = data.choices?.[0]?.message?.content?.trim();
+    if(!raw) throw new Error('BOS_YANIT: Gemini içerik döndürmedi');
+    return jsonAyiklaBasit(raw);
+  }
+  if(adim.tur==='claude'){
+    const res = await fetch('/api/claude', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-5',
+        max_tokens: 400,
+        system: systemPrompt,
+        messages: [ { role: 'user', content: userPrompt } ]
+      })
+    });
+    if(!res.ok){
+      let mesaj = '';
+      try{ const errBody = await res.json(); mesaj = errBody?.error?.message || ''; }catch(_){}
+      throw new Error(res.status+': '+(mesaj || 'Claude hatası'));
+    }
+    const data = await res.json();
+    const raw = data.content?.[0]?.text?.trim();
+    if(!raw) throw new Error('BOS_YANIT: Claude içerik döndürmedi');
+    return jsonAyiklaBasit(raw);
+  }
+  throw new Error('Bilinmeyen AI adımı: '+adim.tur);
+}
+
 async function botAICagir(systemPrompt, userPrompt, saglayici='auto'){
   if(saglayici==='yerel'){
     // Ana AI zaten tamamen başarısız olup yerel algoritmaya düşmüşse, botları da
     // gereksiz yere ağa çıkarmadan doğrudan yerel yedeğe yönlendiriyoruz.
     return null;
   }
-  if(saglayici==='gemini'){
+  let baslangicAdimi=null;
+  if(saglayici==='gemini') baslangicAdimi={tur:'gemini'};
+  else if(saglayici==='claude') baslangicAdimi={tur:'claude'};
+  else if(saglayici && saglayici.startsWith('groq:')) baslangicAdimi={tur:'groq', model:saglayici.slice(5)};
+
+  const denenecekler = baslangicAdimi
+    ? [baslangicAdimi, ...TAM_AI_KADEMESI.filter(a=>adimEtiketi(a)!==adimEtiketi(baslangicAdimi))]
+    : TAM_AI_KADEMESI;
+
+  let sonHata=null;
+  for(const adim of denenecekler){
     try{
-      groqKota.sonGuncelleme = new Date().toLocaleTimeString('tr-TR');
-      groqKota.toplamIstek++;
-      const res = await fetch('/api/gemini', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: 'gemini-3.5-flash',
-          max_tokens: 400,
-          temperature: 0.8,
-          reasoning_effort: 'low',
-          response_format: { type: 'json_object' },
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: userPrompt }
-          ]
-        })
-      });
-      if(!res.ok){
-        let mesaj = '';
-        try{ const errBody = await res.json(); mesaj = errBody?.error?.message || ''; }catch(_){}
-        throw new Error(res.status+': '+(mesaj || 'Gemini hatası'));
-      }
-      const data = await res.json();
-      const raw = data.choices?.[0]?.message?.content?.trim();
-      if(!raw) throw new Error('BOS_YANIT: Gemini içerik döndürmedi');
-      const result = jsonAyiklaBasit(raw);
+      const result = await botAdimCalistir(systemPrompt, userPrompt, adim);
       groqKota.sonHata = null;
-      sonBasariliBotModeli = 'gemini-3.5-flash';
+      sonBasariliBotModeli = adim.tur==='groq' ? adim.model : (adim.tur==='gemini' ? 'gemini-3.5-flash' : 'claude-sonnet-5');
       return result;
     }catch(e){
-      console.warn('Bot (Gemini) başarısız:', e.message);
-      groqKota.sonHata = 'Gemini: '+e.message;
-      sonBasariliBotModeli = null;
-      return null;
+      sonHata = `${adimEtiketi(adim)}: ${e.message}`;
+      console.warn(`Bot (${adimEtiketi(adim)}) başarısız, sıradaki AI deneniyor:`, e.message);
+      // sıradaki AI'ya geç
     }
   }
-  if(saglayici==='claude'){
-    try{
-      groqKota.sonGuncelleme = new Date().toLocaleTimeString('tr-TR');
-      groqKota.toplamIstek++;
-      const res = await fetch('/api/claude', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: 'claude-sonnet-5',
-          max_tokens: 400,
-          system: systemPrompt,
-          messages: [ { role: 'user', content: userPrompt } ]
-        })
-      });
-      if(!res.ok){
-        let mesaj = '';
-        try{ const errBody = await res.json(); mesaj = errBody?.error?.message || ''; }catch(_){}
-        throw new Error(res.status+': '+(mesaj || 'Claude hatası'));
-      }
-      const data = await res.json();
-      const raw = data.content?.[0]?.text?.trim();
-      if(!raw) throw new Error('BOS_YANIT: Claude içerik döndürmedi');
-      const result = jsonAyiklaBasit(raw);
-      groqKota.sonHata = null;
-      sonBasariliBotModeli = 'claude-sonnet-5';
-      return result;
-    }catch(e){
-      console.warn('Bot (Claude) başarısız:', e.message);
-      groqKota.sonHata = 'Claude: '+e.message;
-      sonBasariliBotModeli = null;
-      return null;
-    }
-  }
-  // 'groq:model-adi' → o tek Groq modelini zorlar; 'auto' → mevcut Groq kademesi.
-  const zorunluModel = (saglayici && saglayici.startsWith('groq:')) ? saglayici.slice(5) : null;
-  return await groqBotCall(systemPrompt, userPrompt, zorunluModel);
+  console.warn('Bot: tüm AI sağlayıcıları başarısız oldu:', sonHata);
+  groqKota.sonHata = sonHata;
+  sonBasariliBotModeli = null;
+  return null;
 }
 
 // Ana AI çağrısından (scorePoem) hemen SONRA çağrılır. adminSecilenSaglayici
@@ -4222,7 +4237,7 @@ function postCard(post, forceExpand=false, autoOpenComments=false, hedefYorumId=
   if(isAdmin && post.text && post.text.trim().length>10){
     const revalDiv=h('div',{style:{marginBottom:'12px'}});
     const modelSecici=h('select',{class:'inp',style:{marginBottom:'6px',fontSize:'.78rem',padding:'6px',borderRadius:'8px'}},[
-      h('option',{value:'auto'},'🔀 Otomatik kademe (Gemini → Groq, kota dolarsa sıradakine geçer)'),
+      h('option',{value:'auto'},'🔀 Otomatik kademe (Groq: 120b → qwen → 20b → Gemini, biri başarısız olursa sıradakine geçer)'),
       h('option',{value:'groq:openai/gpt-oss-120b'},'🟢 Groq: openai/gpt-oss-120b'),
       h('option',{value:'groq:qwen/qwen3.6-27b'},'🟢 Groq: qwen/qwen3.6-27b'),
       h('option',{value:'groq:openai/gpt-oss-20b'},'🟢 Groq: openai/gpt-oss-20b'),
@@ -5331,7 +5346,7 @@ function Profile(){
 
     const durumEl=h('p',{style:{color:'#6b5b8a',fontSize:'.85rem',marginTop:'10px',fontStyle:'italic'}},'');
     const topluModelSecici=h('select',{class:'inp',style:{marginBottom:'8px',fontSize:'.82rem',padding:'8px',borderRadius:'8px'}},[
-      h('option',{value:'auto'},'🔀 Otomatik kademe (Gemini → Groq, kota dolarsa sıradakine geçer)'),
+      h('option',{value:'auto'},'🔀 Otomatik kademe (Groq: 120b → qwen → 20b → Gemini, biri başarısız olursa sıradakine geçer)'),
       h('option',{value:'groq:openai/gpt-oss-120b'},'🟢 Groq: openai/gpt-oss-120b'),
       h('option',{value:'groq:qwen/qwen3.6-27b'},'🟢 Groq: qwen/qwen3.6-27b'),
       h('option',{value:'groq:openai/gpt-oss-20b'},'🟢 Groq: openai/gpt-oss-20b'),
