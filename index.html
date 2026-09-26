@@ -1436,9 +1436,9 @@ let adminSecilenSaglayici = 'auto';
 let sonBasariliBotModeli = null;
 
 const GROQ_MODEL_KADEMESI = [
-  'openai/gpt-oss-120b',      // ~200.000 token/gün — kaliteli, iyi bir denge
-  'llama-3.3-70b-versatile',  // ~100.000 token/gün — önceki varsayılan model
-  'llama-3.1-8b-instant',     // ~500.000 token/gün — daha basit ama en yüksek kota
+  'openai/gpt-oss-120b',   // ~200.000 token/gün — kaliteli, iyi bir denge
+  'qwen/qwen3.6-27b',      // Groq'un llama-3.3-70b-versatile YERİNE önerdiği model (o, 16 Ağustos 2026'da kapatıldı)
+  'openai/gpt-oss-20b',    // Groq'un llama-3.1-8b-instant YERİNE önerdiği, en yüksek kotalı/en hızlı model (o da 16 Ağustos 2026'da kapatıldı)
 ];
 
 // ── Hece (syllable) ön-hesaplaması ─────────────────────────────────────────
@@ -1543,6 +1543,9 @@ async function scorePoemTekModel(text, model){
   if(model.startsWith('openai/gpt-oss')){
     govde.reasoning_effort = 'low';
     govde.include_reasoning = false;
+  } else if(model.startsWith('qwen/')){
+    // Qwen3.6 gibi modeller 'low'/'high' değil 'none'/'default' kabul eder.
+    govde.reasoning_effort = 'none';
   }
   const res = await fetch('/api/groq', {
     method: 'POST',
@@ -1699,7 +1702,7 @@ async function scorePoem(text, saglayici='auto'){
     }
   }
   // 'auto': önce Gemini denenir; Gemini kota dolar/hata verirse Groq kademesine
-  // geçilir (openai/gpt-oss-120b → llama-3.3-70b-versatile → llama-3.1-8b-instant);
+  // geçilir (openai/gpt-oss-120b → qwen/qwen3.6-27b → openai/gpt-oss-20b);
   // o da tamamen başarısız olursa en son yerel algoritmaya düşülür.
   try{
     const geminiSonuc = await scorePoemGeminiCore(text);
@@ -2460,6 +2463,8 @@ async function groqBotCallTekModel(systemPrompt, userPrompt, model) {
   if(model.startsWith('openai/gpt-oss')){
     govde.reasoning_effort = 'low';
     govde.include_reasoning = false;
+  } else if(model.startsWith('qwen/')){
+    govde.reasoning_effort = 'none';
   }
   const res = await fetch('/api/groq', {
     method: 'POST',
@@ -2587,9 +2592,11 @@ async function botAriPuan(text, saglayici='auto') {
 async function siirIcinGifVerileriGetir(title, text){
   try{
     const govde = {
-      model: 'llama-3.1-8b-instant',
+      model: 'openai/gpt-oss-20b', // llama-3.1-8b-instant 16 Ağustos 2026'da kapatıldı; Groq'un önerdiği yerine geçen model
       max_tokens: 220,
       temperature: 0.7,
+      reasoning_effort: 'low', // gpt-oss modelleri "akıl yürütme" modelidir; bu olmadan 220 token'lık bütçe düşünmede tükenip boş yanıt dönebilir
+      include_reasoning: false,
       response_format: { type: 'json_object' },
       messages: [
         { role:'system', content:'Sen bir şiirden GIF arama terimi ve görsel üzerine bindirilecek kısa bir Türkçe alıntı/aforizma çıkaran bir asistansın. SADECE geçerli JSON döndürürsün, başka hiçbir şey yazmazsın.' },
@@ -4215,10 +4222,10 @@ function postCard(post, forceExpand=false, autoOpenComments=false, hedefYorumId=
   if(isAdmin && post.text && post.text.trim().length>10){
     const revalDiv=h('div',{style:{marginBottom:'12px'}});
     const modelSecici=h('select',{class:'inp',style:{marginBottom:'6px',fontSize:'.78rem',padding:'6px',borderRadius:'8px'}},[
-      h('option',{value:'auto'},'🔀 Groq — otomatik kademe (kota dolarsa sıradakine geçer)'),
+      h('option',{value:'auto'},'🔀 Otomatik kademe (Gemini → Groq, kota dolarsa sıradakine geçer)'),
       h('option',{value:'groq:openai/gpt-oss-120b'},'🟢 Groq: openai/gpt-oss-120b'),
-      h('option',{value:'groq:llama-3.3-70b-versatile'},'🟢 Groq: llama-3.3-70b-versatile'),
-      h('option',{value:'groq:llama-3.1-8b-instant'},'🟢 Groq: llama-3.1-8b-instant'),
+      h('option',{value:'groq:qwen/qwen3.6-27b'},'🟢 Groq: qwen/qwen3.6-27b'),
+      h('option',{value:'groq:openai/gpt-oss-20b'},'🟢 Groq: openai/gpt-oss-20b'),
       h('option',{value:'gemini'},'✨ Google Gemini'),
       h('option',{value:'claude'},'🎭 Anthropic Claude')
     ]);
@@ -5324,10 +5331,10 @@ function Profile(){
 
     const durumEl=h('p',{style:{color:'#6b5b8a',fontSize:'.85rem',marginTop:'10px',fontStyle:'italic'}},'');
     const topluModelSecici=h('select',{class:'inp',style:{marginBottom:'8px',fontSize:'.82rem',padding:'8px',borderRadius:'8px'}},[
-      h('option',{value:'auto'},'🔀 Groq — otomatik kademe (kota dolarsa sıradakine geçer)'),
+      h('option',{value:'auto'},'🔀 Otomatik kademe (Gemini → Groq, kota dolarsa sıradakine geçer)'),
       h('option',{value:'groq:openai/gpt-oss-120b'},'🟢 Groq: openai/gpt-oss-120b'),
-      h('option',{value:'groq:llama-3.3-70b-versatile'},'🟢 Groq: llama-3.3-70b-versatile'),
-      h('option',{value:'groq:llama-3.1-8b-instant'},'🟢 Groq: llama-3.1-8b-instant'),
+      h('option',{value:'groq:qwen/qwen3.6-27b'},'🟢 Groq: qwen/qwen3.6-27b'),
+      h('option',{value:'groq:openai/gpt-oss-20b'},'🟢 Groq: openai/gpt-oss-20b'),
       h('option',{value:'gemini'},'✨ Google Gemini'),
       h('option',{value:'claude'},'🎭 Anthropic Claude')
     ]);
