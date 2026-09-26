@@ -1654,32 +1654,34 @@ async function scorePoem(text, saglayici='auto'){
       }
     }
   }
-  // 'auto': mevcut kademe (openai/gpt-oss-120b → llama-3.3-70b-versatile → llama-3.1-8b-instant)
-  let sonHataMesaji = null;
-  for(const model of GROQ_MODEL_KADEMESI){
-    try{
-      const result = await scorePoemTekModel(text, model);
-      groqKota.sonKaynak = 'groq';
-      groqKota.sonModel = model;
-      groqKota.sonHata = null;
-      groqGunlukArttir(true);
-      return result;
-    } catch(e){
-      sonHataMesaji = e.message;
-      console.warn(`Groq (${model}) başarısız, sıradaki modele geçiliyor:`, e.message);
-      // sıradaki modele geç
-    }
-  }
-  console.warn('Tüm Groq modelleri başarısız oldu, Gemini yedek olarak deneniyor:', sonHataMesaji);
-  groqGunlukArttir(false);
+  // 'auto': önce Gemini denenir; Gemini kota dolar/hata verirse Groq kademesine
+  // geçilir (openai/gpt-oss-120b → llama-3.3-70b-versatile → llama-3.1-8b-instant);
+  // o da tamamen başarısız olursa en son yerel algoritmaya düşülür.
   try{
     const geminiSonuc = await scorePoemGeminiCore(text);
     return geminiSonuc;
   } catch(ge){
-    console.warn('Gemini de başarısız, yerel algoritma kullanılıyor:', ge.message);
+    console.warn('Gemini başarısız, Groq kademesi deneniyor:', ge.message);
+    let sonHataMesaji = null;
+    for(const model of GROQ_MODEL_KADEMESI){
+      try{
+        const result = await scorePoemTekModel(text, model);
+        groqKota.sonKaynak = 'groq';
+        groqKota.sonModel = model;
+        groqKota.sonHata = null;
+        groqGunlukArttir(true);
+        return result;
+      } catch(e){
+        sonHataMesaji = e.message;
+        console.warn(`Groq (${model}) başarısız, sıradaki modele geçiliyor:`, e.message);
+        // sıradaki modele geç
+      }
+    }
+    console.warn('Gemini ve tüm Groq modelleri başarısız oldu, yerel algoritma kullanılıyor:', sonHataMesaji);
+    groqGunlukArttir(false);
     groqKota.sonKaynak = 'yerel';
     groqKota.sonModel = null;
-    groqKota.sonHata = `Groq: ${sonHataMesaji} | Gemini: ${ge.message}`;
+    groqKota.sonHata = `Gemini: ${ge.message} | Groq: ${sonHataMesaji}`;
     return scorePoemYerel(text);
   }
 }
@@ -2490,52 +2492,6 @@ async function groqBotCall(systemPrompt, userPrompt, zorunluModel=null) {
   return null;
 }
 
-// ── Genel amaçlı yönlendirme çağrısı: önce Groq (kademe), o da tamamen
-// başarısız olursa (kota/hata) Gemini dener. scorePoem akışından farkı:
-// burada puanlama YOK, sadece "hangi ton/stil/prompt kullanılsın" gibi
-// KISA JSON kararları için kullanılıyor (ör. seslendirme yönü, müzik
-// prompt'u). İkisi de başarısız olursa null döner — çağıran taraf kendi
-// varsayılanına düşer (yerel bir algoritma yedeği burada YOKTUR).
-async function groqYaDaGeminiIleJSON(systemPrompt, userPrompt){
-  const groqSonuc = await groqBotCall(systemPrompt, userPrompt);
-  if(groqSonuc) return groqSonuc;
-  try{
-    groqKota.sonGuncelleme = new Date().toLocaleTimeString('tr-TR');
-    groqKota.toplamIstek++;
-    const res = await fetch('/api/gemini', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({
-        model:'gemini-3.5-flash',
-        max_tokens:400,
-        temperature:0.7,
-        reasoning_effort:'low',
-        response_format:{type:'json_object'},
-        messages:[
-          {role:'system', content:systemPrompt},
-          {role:'user', content:userPrompt}
-        ]
-      })
-    });
-    if(!res.ok){
-      let mesaj=''; try{ const e=await res.json(); mesaj=e?.error?.message||''; }catch(_){}
-      throw new Error(res.status+': '+(mesaj||'Gemini hatası'));
-    }
-    const data = await res.json();
-    const raw = data.choices?.[0]?.message?.content?.trim();
-    if(!raw) throw new Error('BOS_YANIT: Gemini içerik döndürmedi');
-    const clean = raw.replace(/```json|```/g,'').trim();
-    const jsonStr = clean.slice(clean.indexOf('{'), clean.lastIndexOf('}')+1);
-    const result = JSON.parse(jsonStr);
-    groqKota.sonKaynak='gemini'; groqKota.sonModel='gemini-3.5-flash'; groqKota.sonHata=null; groqKota.kotaDolduMu=false;
-    return result;
-  }catch(e){
-    console.warn('Gemini de başarısız (yönlendirme çağrısı):', e.message);
-    groqKota.sonKaynak='yerel'; groqKota.sonHata='Yönlendirme: '+e.message;
-    return null;
-  }
-}
-
 async function botDuyuPuan(text, saglayici='auto') {
   if (!text || text.trim().length < 5) return null;
   const system = 'Sen "duyu-yorum" adlı bir şiir eleştirmensin. YALNIZCA şiirin duygusallığını, duygu yoğunluğunu ve duygusal etkisini değerlendirirsin. Teknik unsurları değil, sadece duyguyu analiz et. Yanıtlarını SADECE JSON formatında ver.';
@@ -2678,11 +2634,10 @@ function otomatikGifUygulaGerekirse(postId, title, text, mevcutGorsel, mevcutYou
     db.collection("posts").doc(postId).update({ image: sonuc.gifUrl, autoGif: true, gifCaption: sonuc.caption || null }).catch(err=>console.error("Otomatik GIF kaydetme hatası:",err));
   });
 }
-// Bir şiir paylaşıldığında arka planda otomatik seslendirme (ACE-Step, ücretsiz
-// acemusic.ai API'si — gerçek yapay zeka sesi + arkasında AI'ın ürettiği fon
-// müziği tek parçada) oluşturup Firestore'a audioUrl olarak kaydeder. Hata
-// olursa (ör. API key tanımlı değilse veya kota dolmuşsa) sessizce yutulur —
-// paylaşım akışını asla engellemez, tıpkı otomatikGifUygulaGerekirse gibi.
+// Bir şiir paylaşıldığında arka planda otomatik seslendirme (ElevenLabs)
+// oluşturup Firestore'a audioUrl olarak kaydeder. Hata olursa (ör. API key
+// tanımlı değilse veya kota dolmuşsa) sessizce yutulur — paylaşım akışını
+// asla engellemez, tıpkı otomatikGifUygulaGerekirse gibi.
 function otomatikSesUygulaGerekirse(postId, title, text){
   if(!text || text.trim().length<10) return;
   // Görsel promptunda olduğu gibi (aiGorselPromptuGroqlaOlustur), önce Groq'a
@@ -2718,7 +2673,7 @@ async function adminSesiYenile(post){
   const res = await fetch('/api/ttsGenerate', {
     method:'POST',
     headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ title: post.title, text: post.text, postId: post.id, oldAudioUrl: post.audioUrl || '', ...yon })
+    body: JSON.stringify({ title: post.title, text: post.text, postId: post.id, ...yon })
   });
   if(!res.ok){
     let detay='';
@@ -2757,50 +2712,50 @@ async function postMuzigiKaldir(post){
   if(idx>-1){ S.posts[idx].musicUrl=null; save(); }
 }
 
-// ACE-Step'e (acemusic.ai) gönderilecek nihai İngilizce "caption"ı sabit bir
-// şablonla birleştirir — AI'ın uydurabileceği tutarsız bir caption yerine
-// ACE-Step'in iyi tepki verdiği bilinen, sınanmış bir yapı kullanılır.
-function aceSesCaptionOlustur(yon){
-  return `${yon.mood} spoken-word poetry reading, ${yon.gender} vocal, ${yon.instrument}, gentle expressive delivery, intimate and clear diction`;
-}
-// Şiirin duygusuna göre ACE-Step için bir SESLENDİRME yönü belirletir.
-// ESKİ akış (ElevenLabs/Edge TTS): Groq sabit bir "ses kimliği" (voiceKey)
-// seçerdi, gerçek ses üretimi ayrı bir TTS motorunda olurdu.
-// YENİ akış: ACE-Step şiiri GERÇEKTEN "söyleyerek/okuyarak" seslendirir VE
-// arkasına kendi ürettiği enstrümantal müziği otomatik ekler — yani TEK bir
-// üretimde hem "seslendirme" hem "fon müziği" birlikte oluşur (post.audioUrl).
-// Groq'a (o başarısız olursa Gemini'ye, groqYaDaGeminiIleJSON) sadece
-// cinsiyet/duygu/enstrüman TERCİHİNİ soruyoruz; asıl İngilizce caption'ı
-// burada BİZ sabit bir şablonla birleştiriyoruz (bkz. aceSesCaptionOlustur).
+// Şiirin duygusuna göre uygun bir ElevenLabs sesi + okuma tonu seçtirir.
+// Görsel oluşturmadaki aiGorselPromptuGroqlaOlustur ile AYNI mantık: Groq'a
+// sadece SEÇİM yaptırıyoruz (sabit bir ses listesinden), gerçek ses üretimi
+// sunucu tarafında (api/ttsGenerate.js) sabit ID'lerle yapılıyor — böylece
+// Groq'un uydurabileceği geçersiz bir ses ID'si asla ElevenLabs'e gitmez.
 async function aiSesYonlendirmesiGroqlaOlustur(title, text){
   const baslik=String(title||'').trim().slice(0,250);
   const siir=String(text||'').trim().slice(0,2200);
-  const VARSAYILAN={ gender:'female', mood:'melancholic and tender', instrument:'soft solo piano' };
-  if(!siir) return { caption: aceSesCaptionOlustur(VARSAYILAN), vocalLanguage:'tr' };
-  const sonuc = await groqYaDaGeminiIleJSON(
-    'Sen şiirleri seslendirecek bir seslendirme yönetmenisin. YALNIZCA JSON döndür.',
-    `Bu şiiri analiz et ve İngilizce olarak şu 3 alanı doldur:
-- "gender": "female" veya "male" — şiirin duygusuna en uygun seslendirmen cinsiyeti
-- "mood": şiirin duygusunu 2-4 İngilizce kelimeyle tarif et (örn. "melancholic and tender", "passionate and intense", "calm and reflective")
-- "instrument": okuma sırasında arka planda çalması gereken 1-2 enstrümanı İngilizce tarif et (örn. "soft solo piano", "warm acoustic guitar", "mournful violin")
+  const VARSAYILAN={voiceKey:'sakin', stability:0.5, style:0.35};
+  if(!siir) return VARSAYILAN;
+  try{
+    const sonuc=await groqBotCall(
+      'Sen şiirleri seslendirecek bir seslendirme yönetmenisin. YALNIZCA JSON döndür.',
+      `Bu şiiri analiz et ve aşağıdaki 5 ses karakterinden şiirin duygusuna/temasına EN UYGUN olanını seç:
+- "huzunlu": hüzünlü, melankolik, ayrılık/özlem temalı şiirler için duygusal kadın sesi
+- "romantik": aşk, sevgi, sıcaklık temalı şiirler için yumuşak, sıcak kadın sesi
+- "dramatik": yoğun, çarpıcı, isyan/hesaplaşma temalı şiirler için güçlü erkek sesi
+- "sakin": huzur, doğa, tefekkür temalı şiirler için sakin, dingin kadın sesi
+- "tutkulu": tutku, öfke, güçlü duygular içeren şiirler için derin, kararlı erkek sesi
+
+Ayrıca 0 ile 1 arasında iki değer belirle:
+- "stability": şiir ne kadar duygusal/değişken okunmalı (düşük=daha duygusal/oynak, yüksek=daha durağan/kararlı)
+- "style": okuma ne kadar abartılı/tiyatral olmalı (düşük=doğal, yüksek=abartılı)
 
 Şiirin başlığı: ${baslik}
 
 Şiir:
 ${siir}
 
-JSON: {"gender":"...", "mood":"...", "instrument":"..."}`
-  );
-  let yon = VARSAYILAN;
-  if(sonuc){
-    const gender = ['female','male'].includes(String(sonuc?.gender||'').trim()) ? sonuc.gender : VARSAYILAN.gender;
-    const mood = String(sonuc?.mood||'').trim().slice(0,80) || VARSAYILAN.mood;
-    const instrument = String(sonuc?.instrument||'').trim().slice(0,80) || VARSAYILAN.instrument;
-    yon = { gender, mood, instrument };
-  } else {
-    console.warn('Groq/Gemini ses yönlendirmesi oluşturamadı, varsayılan yön kullanılacak.');
+JSON: {"voiceKey":"...", "stability":0.0, "style":0.0}`
+    );
+    const voiceKey=String(sonuc?.voiceKey||'').trim();
+    const gecerliAnahtarlar=['huzunlu','romantik','dramatik','sakin','tutkulu'];
+    const stability=Number(sonuc?.stability);
+    const style=Number(sonuc?.style);
+    return {
+      voiceKey: gecerliAnahtarlar.includes(voiceKey) ? voiceKey : VARSAYILAN.voiceKey,
+      stability: Number.isFinite(stability) ? Math.min(1,Math.max(0,stability)) : VARSAYILAN.stability,
+      style: Number.isFinite(style) ? Math.min(1,Math.max(0,style)) : VARSAYILAN.style
+    };
+  }catch(err){
+    console.warn('Groq ses yönlendirmesi oluşturamadı, varsayılan ses kullanılacak:',err);
+    return VARSAYILAN;
   }
-  return { caption: aceSesCaptionOlustur(yon), vocalLanguage:'tr', gender: yon.gender };
 }
 
 // Paylaşım detayında ve kaydırma modunda kullanılan ortak, mor-yeşil temalı
@@ -2903,56 +2858,63 @@ function gifUzeriAforizmaBindir(imgEl, post, opts={}){
 
 A.addPost = async function(pd){
     if(!S.me) return;
-    // Bot puanları hesapla (önce bots, sonra async AI)
-    const botRatings={};
-    const botYorumlar={};
     const hasText=pd.text&&pd.text.trim().length>10;
-    let b1=null,b2=null,b3=null,ortakModel=null;
-    if(hasText){
-      // İlk botu 'auto' kademeyle çalıştırıp hangi modelin başarılı olduğunu öğreniyoruz,
-      // sonra diğer 2 botu VE ana AI'ı aynı modele zorluyoruz — böylece 4 değerlendirme
-      // de (3 bot + ana AI) her zaman aynı modeli kullanır, birbirinden farklı
-      // modellere düşüp tutarsız yorum vermezler.
-      b1 = await botDuyuPuan(pd.text);
-      ortakModel = sonBasariliBotModeli;
-      [b2,b3] = await Promise.all([botKatliPuan(pd.text, ortakModel), botAriPuan(pd.text, ortakModel)]);
-    }
-    if(b1){botRatings[b1.kullanici]=b1.puan;botYorumlar[b1.kullanici]={yorum:b1.yorum,ad:b1.ad};}
-    if(b2){botRatings[b2.kullanici]=b2.puan;botYorumlar[b2.kullanici]={yorum:b2.yorum,ad:b2.ad};}
-    if(b3){botRatings[b3.kullanici]=b3.puan;botYorumlar[b3.kullanici]={yorum:b3.yorum,ad:b3.ad};}
 
-    // Şiiri önce botsuz kaydet (hızlı görünüm için)
+    // Şiiri önce hiçbir AI/bot puanı olmadan kaydet (hızlı görünüm için)
     const np={...pd,id:uid(),authorId:S.me.id,ts:Date.now(),
-      userRatings:{...botRatings},
-      botYorumlar:{...botYorumlar},
+      userRatings:{},
+      botYorumlar:{},
       aiScore:null,aiYorum:null,aiGuclu:null,aiOneri:null,
       comments:[],date:now()};
     S.posts.unshift(np);
     save();render();
 
-    // Claude AI değerlendirmesini async bekle
-    if(pd.text&&pd.text.trim().length>10){
-      // Botlar hangi Groq modelini kullandıysa (ortakModel), ana AI da AYNI modeli
-      // kullansın — tutarlılık için. Botlar tamamen başarısız olup yerel algoritmaya
-      // düştüyse (ortakModel=null), ana AI kendi 'auto' kademesini normal şekilde dener.
-      const r = await scorePoem(pd.text, ortakModel ? ('groq:'+ortakModel) : 'auto');
+    if(hasText){
+      // DÜZELTME: Önceden 3 bot (duyu-yorum/katlı-yorum/arı-yorum) ana AI'dan ÖNCE
+      // ve kendi başına 'auto' modunda çalıştırılıyordu — bu mod Gemini'yi hiç
+      // denemiyor, yalnızca Groq kademesini dener; Groq (Llama modelleri) kota
+      // dolu/çalışmıyorsa botlar sessizce yerel algoritmaya düşüyordu. Ardından ana
+      // AI'ı botların kullandığı modele "zorlama" denemesi de yanlış formatta
+      // ('groq:' öneki eksik) olduğu için hiç işe yaramıyordu.
+      //
+      // Çözüm: Tıpkı admin panelindeki "Yeniden Değerlendir" akışında olduğu gibi,
+      // önce ana AI'ı ('auto' kademesiyle: Gemini → Groq → yerel) çalıştırıp GERÇEKTE
+      // hangi sağlayıcının başarılı olduğunu öğreniyoruz, sonra 3 botu da AYNI
+      // sağlayıcıya zorluyoruz. Böylece 4 değerlendirme (ana AI + 3 bot) her zaman
+      // aynı yapay zekadan gelir; hiçbiri sessizce farklı bir modele veya yerel
+      // algoritmaya düşüp tutarsızlık yaratmaz.
+      const r = await scorePoem(pd.text, 'auto');
       const kullanilanModel = groqKota.sonKaynak==='yerel' ? 'yerel' : (groqKota.sonModel||groqKota.sonKaynak);
-      if(r){
-        const idx=S.posts.findIndex(p=>p.id===np.id);
-        if(idx>-1){
+      const botSaglayici = sonBasariliSaglayiciyiBul();
+
+      const b1 = await botDuyuPuan(pd.text, botSaglayici);
+      const [b2,b3] = await Promise.all([botKatliPuan(pd.text, botSaglayici), botAriPuan(pd.text, botSaglayici)]);
+
+      const idx=S.posts.findIndex(p=>p.id===np.id);
+      if(idx>-1){
+        const yeniRatings={...S.posts[idx].userRatings};
+        const yeniBotYorumlar={...S.posts[idx].botYorumlar};
+        if(b1){yeniRatings[b1.kullanici]=b1.puan;yeniBotYorumlar[b1.kullanici]={yorum:b1.yorum,ad:b1.ad};}
+        if(b2){yeniRatings[b2.kullanici]=b2.puan;yeniBotYorumlar[b2.kullanici]={yorum:b2.yorum,ad:b2.ad};}
+        if(b3){yeniRatings[b3.kullanici]=b3.puan;yeniBotYorumlar[b3.kullanici]={yorum:b3.yorum,ad:b3.ad};}
+        if(r){yeniRatings['bot_ai_yorum']=r.score;}
+        S.posts[idx].userRatings=yeniRatings;
+        S.posts[idx].botYorumlar=yeniBotYorumlar;
+        if(r){
           S.posts[idx].aiScore=r.score;
           S.posts[idx].aiYorum=r.yorum;
           S.posts[idx].aiGuclu=r.gucluYonler;
           S.posts[idx].aiOneri=r.gelistirmeOnerisi;
           S.posts[idx].aiModel=kullanilanModel;
-          S.posts[idx].userRatings['bot_ai_yorum']=r.score;
-          save();
-          refreshCard(np.id);
-          db.collection("posts").doc(np.id).update({
-            aiScore:r.score,aiYorum:r.yorum,aiGuclu:r.gucluYonler,aiOneri:r.gelistirmeOnerisi,aiModel:kullanilanModel,
-            userRatings:S.posts[idx].userRatings
-          }).catch(err=>console.error(err));
         }
+        save();
+        refreshCard(np.id);
+        db.collection("posts").doc(np.id).update({
+          userRatings:S.posts[idx].userRatings,
+          botYorumlar:S.posts[idx].botYorumlar,
+          aiScore:S.posts[idx].aiScore,aiYorum:S.posts[idx].aiYorum,
+          aiGuclu:S.posts[idx].aiGuclu,aiOneri:S.posts[idx].aiOneri,aiModel:S.posts[idx].aiModel
+        }).catch(err=>console.error(err));
       }
     }
     db.collection("posts").doc(np.id).set(np).catch(err=>console.error("Kaydetme hatası:",err));
@@ -3860,20 +3822,19 @@ JSON: {"prompt":"..."}`
   }
 }
 
-// ── AI arka plan müziği (ACE-Step / acemusic.ai — ücretsiz, ENSTRÜMANTAL) ──
-// ACE-Step aslında sözlü şarkı da üretebilen bir modeldir, ama arka plan
-// müziği için bilerek SÖZSÜZ istiyoruz; sunucu tarafında (api/musicGenerate.js)
-// lyrics alanına sabit "[inst]" gönderilir. Groq (kota dolarsa Gemini,
-// groqYaDaGeminiIleJSON) önce şiiri analiz edip tür/tempo/çalgı öneren kısa
-// bir İngilizce prompt hazırlar; ikisi de başarısız olursa /api/musicGenerate
-// kendi genel yedek promptunu kullanır.
+// ── AI müzik (Hugging Face MusicGen — ücretsiz, ama SÖZSÜZ/ENSTRÜMANTAL) ──
+// MusicGen gerçek/sözlü bir "şarkı" üretemez, yalnızca şiirin ruh haline
+// uygun enstrümantal bir tema müziği üretir. Groq önce şiiri analiz edip
+// tür/tempo/çalgı öneren kısa bir İngilizce prompt hazırlar; Groq başarısız
+// olursa /api/musicGenerate kendi genel yedek promptunu kullanır.
 async function aiMuzikPromptuGroqlaOlustur(post){
   const baslik=String(post?.title||'').trim().slice(0,250);
   const siir=String(post?.text||'').trim().slice(0,2200);
   if(!siir) return '';
-  const sonuc = await groqYaDaGeminiIleJSON(
-    'Sen bir şiirin ruh haline uygun ENSTRÜMANTAL (sözsüz) arka plan/tema müziği tarif eden bir asistansın. YALNIZCA JSON döndür.',
-    `Bu şiiri analiz et ve enstrümantal müzik üretim modeli için türü, tempoyu, öne çıkan çalgıları ve duygusal atmosferi anlatan kısa, öz bir İngilizce prompt hazırla.
+  try{
+    const sonuc=await groqBotCall(
+      'Sen bir şiirin ruh haline uygun ENSTRÜMANTAL (sözsüz) arka plan/tema müziği tarif eden bir asistansın. Kullanılacak üretim modeli (MusicGen) ŞARKI SÖZÜ veya VOKAL ÜRETEMEZ, yalnızca enstrümantal müzik üretir. YALNIZCA JSON döndür.',
+      `Bu şiiri analiz et ve enstrümantal müzik üretim modeli için türü, tempoyu, öne çıkan çalgıları ve duygusal atmosferi anlatan kısa, öz bir İngilizce prompt hazırla.
 
 Şiirin başlığı: ${baslik}
 
@@ -3881,19 +3842,19 @@ async function aiMuzikPromptuGroqlaOlustur(post){
 ${siir}
 
 Kurallar:
-- Prompt İngilizce olsun.
+- Prompt İngilizce olsun ve MUTLAKA "no vocals, no singing, no lyrics" ifadesini içersin.
 - Şiirin duygusuna uygun tür/tempo/çalgı belirt (örn. melancholic solo piano, sad violin, calm ambient pad, hopeful acoustic guitar, vb.).
 - Şiirde geçen somut olay/nesneleri birebir tarif etmeye çalışma; sadece DUYGU ve ATMOSFER'e odaklan.
 - Prompt en fazla 250 karakter olsun.
 
 JSON: {"prompt":"..."}`
-  );
-  if(!sonuc){
-    console.warn('Groq/Gemini müzik promptu oluşturamadı, sunucu varsayılan promptu kullanacak.');
+    );
+    const prompt=String(sonuc?.prompt||'').trim();
+    return prompt.slice(0,400);
+  }catch(err){
+    console.warn('Groq müzik promptu oluşturamadı, varsayılan prompt kullanılacak:',err);
     return '';
   }
-  const prompt=String(sonuc?.prompt||'').trim();
-  return prompt.slice(0,400);
 }
 
 async function adminMuzikYenile(post){
@@ -3903,17 +3864,12 @@ async function adminMuzikYenile(post){
   const prompt=await aiMuzikPromptuGroqlaOlustur(post);
   const res=await fetch('/api/musicGenerate', {
     method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ title: post.title||'', postId: post.id, musicPrompt: prompt, oldMusicUrl: post.musicUrl || '' })
+    body: JSON.stringify({ title: post.title||'', postId: post.id, musicPrompt: prompt })
   });
   let data=null;
   try{ data=await res.json(); }catch(_){}
   if(!res.ok){
-    const anaMesaj = data?.error || `Müzik oluşturulamadı (HTTP ${res.status}).`;
-    // Sunucu, acemusic.ai VE HF Space'in ayrı ayrı neden başarısız olduğunu
-    // "detail" alanında gönderiyorsa, admin'in Vercel loglarına bakmasına
-    // gerek kalmadan asıl sebebi görebilmesi için mesaja ekliyoruz.
-    const ekDetay = data?.detail ? `\n(Ayrıntı: ${data.detail})` : '';
-    throw new Error(anaMesaj + ekDetay);
+    throw new Error(data?.error || `Müzik oluşturulamadı (HTTP ${res.status}).`);
   }
   if(!data?.musicUrl) throw new Error('Müzik linki dönmedi.');
   const idx=S.posts.findIndex(p=>p.id===post.id);
@@ -3946,12 +3902,13 @@ async function adminYapayZekaGorseliYenile(post){
     ? groqGorselPromptu
     : (post.text||'');
 
-  // Sırasıyla denenecek AI sağlayıcıları: Cloudflare FLUX → Hugging Face.
+  // Sırasıyla denenecek AI sağlayıcıları: Hugging Face → Cloudflare FLUX.
   // Pollinations ve Gemini (Nano Banana) çalışmadığı için zincirden çıkarıldı.
-  // Cloudflare kota/hata verirse otomatik olarak Hugging Face denenir.
+  // Hugging Face kota/hata verirse otomatik olarak Cloudflare FLUX denenir.
+  // İkisi de başarısız olursa en son GIPHY yedeği devreye girer (aşağıda).
   const saglayicilar=[
-    { ad:'Cloudflare FLUX', fn:fluxGorselDene, sure:90000, mesaj:'🧠 Cloudflare FLUX ile görsel oluşturuluyor...' },
-    { ad:'Hugging Face',    fn:huggingfaceGorselDene, sure:60000, mesaj:'🧠 Cloudflare kullanılamadı, Hugging Face deneniyor...' }
+    { ad:'Hugging Face',    fn:huggingfaceGorselDene, sure:60000, mesaj:'🧠 Hugging Face ile görsel oluşturuluyor...' },
+    { ad:'Cloudflare FLUX', fn:fluxGorselDene, sure:90000, mesaj:'🧠 Hugging Face kullanılamadı, Cloudflare FLUX deneniyor...' }
   ];
 
   const hatalar=[];
