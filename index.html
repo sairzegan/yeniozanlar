@@ -160,7 +160,7 @@ let S = {
   follows: lsGet('yo_follows', {}),
   msgs: lsGet('yo_msgs', []),
   notifs: lsGet('yo_notifs', []),
-  loading: !(_cacheUsers.length || _cachePosts.length)
+  loading: true
 };
 
 // Paylaşım linkiyle gelindiyse, uygulama açılır açılmaz doğrudan o şiirin
@@ -652,6 +652,9 @@ async function ffmpegMp4Donustur(webmBlob, durum, progText){
 
   ffmpeg.FS('writeFile','input.webm',await fetchFile(webmBlob));
   const ffArgs=[
+    '-fflags','+genpts',
+    '-analyzeduration','2147483647',
+    '-probesize','2147483647',
     '-i','input.webm',
     '-c:v','libx264',
     '-preset','veryfast',
