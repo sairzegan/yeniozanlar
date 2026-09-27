@@ -2849,15 +2849,28 @@ function sesOynaticiOlustur(audioUrl,opts={}){
   const platform=sesPlatformBilgisiGlobal(audioUrl);
   if(platform.type!=='direct'){
     const wrap=h('div',{style:{background:'#0f0a1a',border:'1px solid #2d1b52',borderRadius:'14px',padding:'8px',marginBottom:'14px'},onclick:e=>e.stopPropagation()});
-    let src=''; let height='166px';
+    let src=''; let height='166px'; let etiket='';
     if(platform.type==='spotify'){
       const m=String(audioUrl).match(/open\.spotify\.com\/([^/?#]+)\/([^/?#]+)/i);
-      if(m) src=`https://open.spotify.com/embed/${m[1]}/${m[2]}?utm_source=generator`; height='152px';
-      if(src) wrap.appendChild(h('iframe',{src,style:{width:'100%',height,border:'0',borderRadius:'10px'},allow:'autoplay; encrypted-media; fullscreen; picture-in-picture',allowFullscreen:true,loading:'lazy'}));
+      if(m) src=`https://open.spotify.com/embed/${m[1]}/${m[2]}?utm_source=generator`; height='152px'; etiket='🟢 Spotify — dinlemek için tıkla';
     } else if(platform.type==='soundcloud'){
-      src=`https://w.soundcloud.com/player/?url=${encodeURIComponent(audioUrl)}&auto_play=false&hide_related=true&show_comments=false&show_user=true&visual=true`;
-      if(src) wrap.appendChild(h('iframe',{src,style:{width:'100%',height,border:'0',borderRadius:'10px'},allow:'autoplay; encrypted-media; fullscreen; picture-in-picture',allowFullscreen:true,loading:'lazy'}));
-    } else if(platform.type==='youtube'){
+      src=`https://w.soundcloud.com/player/?url=${encodeURIComponent(audioUrl)}&auto_play=true&hide_related=true&show_comments=false&show_user=true&visual=true`;
+      etiket='🟠 SoundCloud — dinlemek için tıkla';
+    }
+    // DÜZELTME: Spotify/SoundCloud iframe'leri de artık YouTube gibi tıklanana
+    // kadar gömülmüyor (bkz. aşağıdaki YouTube notu — aynı WebGL/performans
+    // gerekçesi burada da geçerli).
+    if(src){
+      const yerTutucu=h('div',{style:{position:'relative',width:'100%',height,borderRadius:'10px',overflow:'hidden',cursor:'pointer',background:'#1a0f2e',display:'flex',alignItems:'center',justifyContent:'center',color:'#a78bfa',fontSize:'.82rem',textAlign:'center',padding:'0 10px'},
+        onclick:(e)=>{
+          e.stopPropagation();
+          const ifr=h('iframe',{src,style:{width:'100%',height,border:'0',borderRadius:'10px'},allow:'autoplay; encrypted-media; fullscreen; picture-in-picture',allowFullscreen:true});
+          yerTutucu.replaceWith(ifr);
+        }
+      },'▶️ '+etiket);
+      wrap.appendChild(yerTutucu);
+    }
+    if(platform.type==='youtube'){
       // DÜZELTME: burada eskiden YouTube <iframe>'i HER kart oluştuğunda hemen
       // gömülüyordu (kullanıcı oynatmasa bile) — her gömülü YouTube oynatıcısı
       // kendi WebGL bağlamını açtığı için art arda çok sayıda kart görüntülenince
@@ -5058,6 +5071,10 @@ function SwipeMode(){
   function aktifSesiDurdur(){
     aktifSesler.forEach(a=>{ try{ a.pause(); a.currentTime=0; }catch(_){} });
     aktifSesler=[];
+    // Bekleyen (henüz iframe'i oluşturmamış) video zamanlayıcısı varsa iptal
+    // et — kart zaten değişiyor/kapanıyor, gecikmeli iframe artık gereksiz.
+    const eskiKart=stage.firstElementChild;
+    if(eskiKart && eskiKart._videoTimer) clearTimeout(eskiKart._videoTimer);
   }
 
   const topbar=h('div',{class:'swipe-topbar'});
@@ -5170,7 +5187,16 @@ function swipeCard(post,sonrakineGec){
     // hareketiyle etkileşime girdiği için genelde bunu engellemez; yine de bazı
     // tarayıcılar sesli otomatik oynatmayı engelleyebilir (bu durumda video
     // duraklamış/tıklanmayı bekler halde gelir, kullanıcı oynat'a basar).
-    w.innerHTML=`<iframe src="https://www.youtube.com/embed/${vid}?autoplay=1&mute=0&playsinline=1&rel=0&modestbranding=1" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe>`;
+    // DÜZELTME: iframe'i HEMEN eklemek yerine kısa bir gecikmeyle ekliyoruz —
+    // kullanıcı hızlı hızlı kaydırıp bu karttan hemen geçerse iframe/WebGL
+    // bağlamı hiç oluşturulmaz. Hızlı art arda kaydırmalarda her karta bir
+    // YouTube oynatıcısı (ve WebGL bağlamı) açılıp hemen yok edilmesi,
+    // tarayıcının "Too many active WebGL contexts" uyarısı vermesine ve
+    // donma hissine yol açıyordu.
+    card._videoTimer = setTimeout(()=>{
+      if(!card.isConnected) return;
+      w.innerHTML=`<iframe src="https://www.youtube.com/embed/${vid}?autoplay=1&mute=0&playsinline=1&rel=0&modestbranding=1" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe>`;
+    }, 260);
     scroller.appendChild(w);
   }
 
