@@ -339,6 +339,25 @@ function bildirimDinleyiciBaslat(){
 
 const uid=()=>Math.random().toString(36).slice(2,9);
 const now=()=>new Date().toLocaleString('tr-TR');
+// Türkiye saatine (Europe/Istanbul) göre "bugünün" başlangıcını ms cinsinden döndürür.
+// Günlük paylaşım limiti (bkz. A.addPost / bugunkuPaylasimSayisi) buna göre hesaplanır,
+// böylece kullanıcının tarayıcı saat dilimi ne olursa olsun sınır Türkiye gününe göre işler.
+function turkiyeGunBaslangicMs(){
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Europe/Istanbul', year: 'numeric', month: '2-digit', day: '2-digit'
+  }).formatToParts(new Date());
+  const ty = Number(parts.find(x => x.type === 'year')?.value);
+  const tm = Number(parts.find(x => x.type === 'month')?.value);
+  const td = Number(parts.find(x => x.type === 'day')?.value);
+  // Türkiye saati UTC+3 sabit kullanılıyor (Firestore ts de bu varsayımla karşılaştırılıyor).
+  return Date.UTC(ty, tm - 1, td) - (3 * 60 * 60 * 1000);
+}
+// Kullanıcının BUGÜN (Türkiye saatiyle) kaç şiir paylaştığını sayar.
+function bugunkuPaylasimSayisi(userId){
+  if(!userId) return 0;
+  const baslangic = turkiyeGunBaslangicMs();
+  return S.posts.filter(p => p.authorId===userId && (p.ts||0) >= baslangic).length;
+}
 const ytId=url=>{const m=url?.match(/(?:youtu\.be\/|v=|embed\/)([A-Za-z0-9_-]{11})/);return m?m[1]:null};
 function lsGet(k,d){try{const v=localStorage.getItem(k);return v?JSON.parse(v):d}catch{return d}}
 function lsSet(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch{}}
@@ -3029,6 +3048,14 @@ function gifUzeriAforizmaBindir(imgEl, post, opts={}){
 
 A.addPost = async function(pd){
     if(!S.me) return;
+    // Güvenlik ağı: normalde bu limit paylaşım modalındaki "Paylaş" tuşunda zaten
+    // engelleniyor (bkz. Compose modal), ama A.addPost başka bir yerden çağrılırsa
+    // diye burada da aynı günlük limit tekrar kontrol ediliyor.
+    if(bugunkuPaylasimSayisi(S.me.id)>=3){
+      alert('Depolama ve zeka kotalarımız dolduğu için yarın paylaşım rica ederiz, aynı gün içinde sadece 3 paylaşabilirsiniz.');
+      go('feed');
+      return;
+    }
     const hasText=pd.text&&pd.text.trim().length>10;
 
     // Şiiri önce hiçbir AI/bot puanı olmadan kaydet (hızlı görünüm için)
@@ -4778,6 +4805,15 @@ function composeModal(onClose, existingPost=null){
           sesBtn,
           h('button',{class:'pb btn',style:{marginLeft:'auto'},onclick:async(e)=>{
             if(!text.trim()&&!ytUrl&&!image)return;
+            // Günlük paylaşım limiti (bkz. bugunkuPaylasimSayisi): depolama/AI kotalarını
+            // korumak için bir kullanıcı aynı (Türkiye) gün içinde en fazla 3 şiir paylaşabilir.
+            // Düzenleme yeni bir paylaşım SAYILMADIĞI için bu kontrol sadece yeni paylaşımda çalışır.
+            if(!duzenlemeModu && bugunkuPaylasimSayisi(S.me?.id)>=3){
+              alert('Depolama ve zeka kotalarımız dolduğu için yarın paylaşım rica ederiz, aynı gün içinde sadece 3 paylaşabilirsiniz.');
+              kapatVeTemizle();
+              go('feed');
+              return;
+            }
             kayitDurdur();
             const btn=e.target;
             if(duzenlemeModu){
@@ -5372,7 +5408,16 @@ function Profile(){
   card.appendChild(profilIc);
   if(!isMe && user.username !== ADMIN_USERNAME){
     const fb=h('button',{class:'pb btn',onclick:()=>{if(girisGerekli())return;A.toggleFollow(user.id);render();}},isF(user.id)?'Takibi Bırak':'Takip Et');
+    // "✉️ Mesaj Gönder": bu profildeki kullanıcıyla doğrudan sohbeti açar.
+    // S.mesajAcilacakId, Messages() ekranı ilk çizildiğinde bir kez okunup
+    // tüketilen tek seferlik bir "hedef" bayrağıdır (bkz. state tanımı ve Messages()).
+    const mb=h('button',{class:'btn',style:{marginLeft:'10px',background:'transparent',color:'#c4b5fd',border:'1px solid #6d28d9',borderRadius:'999px',padding:'12px 22px',fontSize:'.95rem',fontFamily:"'Crimson Text',serif",fontWeight:'600'},onclick:()=>{
+      if(girisGerekli())return;
+      S.mesajAcilacakId=user.id;
+      go('messages');
+    }},'✉️ Mesaj Gönder');
     card.appendChild(fb);
+    card.appendChild(mb);
   }
 
   // Admin paneli
@@ -5588,7 +5633,11 @@ function PostDetail(){
 }
 
 function Messages(){
-  let chat=null;
+  // Bir profilden "✉️ Mesaj Gönder" ile gelindiyse S.mesajAcilacakId doludur:
+  // sohbeti doğrudan o kullanıcıyla açıyoruz ve bayrağı hemen tüketip sıfırlıyoruz
+  // (aksi halde /#messages'a sonraki normal ziyaretlerde de yanlışlıkla tetiklenirdi).
+  let chat=S.mesajAcilacakId||null;
+  S.mesajAcilacakId=null;
   let activeTab='msgs'; // msgs | notifs
   const wrap=h('div',{},[navBar()]);
   const page=h('div',{class:'page'});
@@ -5746,7 +5795,7 @@ function Messages(){
   msgsBtn.onclick=()=>{activeTab='msgs';msgsBtn.style.background='linear-gradient(135deg,#7c3aed,#a855f7)';msgsBtn.style.color='#fff';msgsBtn.style.border='none';notifBtn.style.background='#1a0f2e';notifBtn.style.color='#a78bfa';notifBtn.style.border='1px solid #2d1b52';showMsgs();};
   notifBtn.onclick=()=>{activeTab='notifs';notifBtn.style.background='linear-gradient(135deg,#7c3aed,#a855f7)';notifBtn.style.color='#fff';notifBtn.style.border='none';msgsBtn.style.background='#1a0f2e';msgsBtn.style.color='#a78bfa';msgsBtn.style.border='1px solid #2d1b52';showNotifs();};
 
-  showMsgs();
+  if(chat){ showChat(); } else { showMsgs(); }
   return wrap;
 }
 
