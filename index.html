@@ -2829,12 +2829,22 @@ JSON: {"voiceKey":"...", "stability":0.0, "style":0.0}`
   }
 }
 
+// Uygulama genelinde oluşturulan TÜM ses (Audio) nesnelerinin kaydı. new Audio()
+// nesneleri DOM'a bağlı olmadan da çalabildiği için, render() tüm ekranı
+// yeniden çizip (app.innerHTML='') eski kartları yok ettiğinde İÇİNDEKİ audio
+// nesnesi hiçbir yerde durdurulmazsa ARKA PLANDA SESSİZCE ÇALMAYA DEVAM EDER.
+// Bu yüzden her audio oluşturulduğunda buraya kaydedilir; render() ekranı
+// yeniden çizmeden HEMEN ÖNCE bu kayıttaki TÜM sesleri durdurup listeyi temizler.
+const TUM_SES_KAYITLARI = new Set();
+
 // Paylaşım detayında ve kaydırma modunda kullanılan ortak, mor-yeşil temalı
-// ses oynatıcı: oynat/duraklat, durdur, ses seviyesi. new Audio() DOM'a hiç
-// eklenmeden de çalabildiği için audio elemanı kontrol amaçlı dışarı (opts
-// üzerinden çağırana) döndürülür; DOM'dan kaldırılması oynatmayı OTOMATİK
-// durdurmaz, bu yüzden çağıran taraf (postCard / SwipeMode) sekme kapanırken
-// veya bir sonraki şiire geçilirken audio.pause() çağırmalıdır.
+// ses oynatıcı: oynat/duraklat, durdur, ses seviyesi, süre çubuğu. new Audio()
+// DOM'a hiç eklenmeden de çalabildiği için audio elemanı kontrol amaçlı dışarı
+// (opts üzerinden çağırana) döndürülür; DOM'dan kaldırılması oynatmayı OTOMATİK
+// durdurmaz — bu yüzden hem çağıran taraf (postCard / SwipeMode) sekme kapanırken
+// veya bir sonraki şiire geçilirken audio.pause() çağırmalı, HEM DE global
+// render() her ekranı yeniden çizmeden önce TUM_SES_KAYITLARI'nı durdurmalıdır
+// (yukarıdaki not) — tek başına ikisi de yeterli değil, ikisi birlikte gerekli.
 function sesOynaticiOlustur(audioUrl,opts={}){
   const platform=sesPlatformBilgisiGlobal(audioUrl);
   if(platform.type!=='direct'){
@@ -2843,15 +2853,38 @@ function sesOynaticiOlustur(audioUrl,opts={}){
     if(platform.type==='spotify'){
       const m=String(audioUrl).match(/open\.spotify\.com\/([^/?#]+)\/([^/?#]+)/i);
       if(m) src=`https://open.spotify.com/embed/${m[1]}/${m[2]}?utm_source=generator`; height='152px';
-    } else if(platform.type==='youtube'){
-      const id=ytId(audioUrl); if(id) src=`https://www.youtube.com/embed/${id}?playsinline=1&rel=0`; height='180px';
+      if(src) wrap.appendChild(h('iframe',{src,style:{width:'100%',height,border:'0',borderRadius:'10px'},allow:'autoplay; encrypted-media; fullscreen; picture-in-picture',allowFullscreen:true,loading:'lazy'}));
     } else if(platform.type==='soundcloud'){
       src=`https://w.soundcloud.com/player/?url=${encodeURIComponent(audioUrl)}&auto_play=false&hide_related=true&show_comments=false&show_user=true&visual=true`;
+      if(src) wrap.appendChild(h('iframe',{src,style:{width:'100%',height,border:'0',borderRadius:'10px'},allow:'autoplay; encrypted-media; fullscreen; picture-in-picture',allowFullscreen:true,loading:'lazy'}));
+    } else if(platform.type==='youtube'){
+      // DÜZELTME: burada eskiden YouTube <iframe>'i HER kart oluştuğunda hemen
+      // gömülüyordu (kullanıcı oynatmasa bile) — her gömülü YouTube oynatıcısı
+      // kendi WebGL bağlamını açtığı için art arda çok sayıda kart görüntülenince
+      // (kaydırma modunda hızlı geçişlerde) tarayıcının "Too many active WebGL
+      // contexts" uyarısı vermesine ve donma hissine yol açıyordu. Artık ana
+      // paylaşım önizlemesindeki gibi sadece bir kapak görseli + oynat ikonu
+      // gösteriyoruz; gerçek <iframe> SADECE kullanıcı tıklayınca oluşturuluyor.
+      const id=ytId(audioUrl);
+      if(id){
+        const height2='180px';
+        const thumb=h('div',{style:{position:'relative',width:'100%',height:height2,borderRadius:'10px',overflow:'hidden',cursor:'pointer',background:'#000'},
+          onclick:(e)=>{
+            e.stopPropagation();
+            const ifr=h('iframe',{src:`https://www.youtube.com/embed/${id}?playsinline=1&rel=0&autoplay=1`,style:{width:'100%',height:height2,border:'0',borderRadius:'10px'},allow:'autoplay; encrypted-media; fullscreen; picture-in-picture',allowFullscreen:true});
+            thumb.replaceWith(ifr);
+          }
+        },[
+          h('img',{src:`https://img.youtube.com/vi/${id}/mqdefault.jpg`,style:{width:'100%',height:'100%',objectFit:'cover',opacity:'.8',display:'block'}}),
+          h('div',{style:{position:'absolute',inset:'0',display:'flex',alignItems:'center',justifyContent:'center'}},[h('span',{style:{fontSize:'2.2rem'}},'▶️')])
+        ]);
+        wrap.appendChild(thumb);
+      }
     }
-    if(src) wrap.appendChild(h('iframe',{src,style:{width:'100%',height,border:'0',borderRadius:'10px'},allow:'autoplay; encrypted-media; fullscreen; picture-in-picture',allowFullscreen:true,loading:'lazy'}));
     return {el:wrap,audio:null};
   }
   const audio=new Audio(audioUrl);
+  TUM_SES_KAYITLARI.add(audio);
   audio.preload='metadata';
   audio.volume=0.9;
   const etiketMetni=opts.label||'🎙️ Dinle';
@@ -5694,6 +5727,11 @@ function Notifs(){
 
 function render(){
   const app=document.getElementById('app');
+  // Ekran tamamen yeniden çizilmeden ÖNCE önceki ekrandan kalan TÜM ses/müzik
+  // oynatıcılarını durduruyoruz — aksi halde DOM'dan kaldırılan (artık ekranda
+  // görünmeyen) audio nesneleri arka planda sessizce çalmaya devam edebiliyordu.
+  TUM_SES_KAYITLARI.forEach(a=>{ try{ a.pause(); }catch(_){} });
+  TUM_SES_KAYITLARI.clear();
   app.innerHTML='';
   
   if (S.loading) {
