@@ -45,7 +45,13 @@ function getB2Client() {
     endpoint: `https://${endpoint}`,
     region,
     credentials: { accessKeyId: keyId, secretAccessKey: appKey },
-    forcePathStyle: true
+    forcePathStyle: true,
+    // Bkz. flux-image.js'teki aynı not: B2, AWS SDK'nın varsayılan CRC32
+    // checksum header'ını desteklemiyor, bu yüzden bunu kapatıyoruz.
+    requestChecksumCalculation: "WHEN_REQUIRED",
+    requestChecksumValidation: "WHEN_REQUIRED",
+    responseChecksumCalculation: "WHEN_REQUIRED",
+    responseChecksumValidation: "WHEN_REQUIRED"
   });
 }
 
@@ -88,20 +94,43 @@ async function uploadToGithubFallback(buffer, key, commitMessage) {
   }
 
   const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${key}`;
+  const ghHeaders = {
+    Authorization: `Bearer ${token}`,
+    Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28"
+  };
+
+  // ttsGenerate.js için key her zaman aynı (audio/{postId}.mp3) — yani ses
+  // yeniden oluşturulduğunda AYNI dosya yolu tekrar yazılabilir. GitHub'ın
+  // Contents API'si var olan bir dosyanın üzerine yazarken mevcut sürümün
+  // "sha" değerini istiyor, yoksa "dosya zaten var" hatası dönüyor. Bu
+  // yüzden önce dosya var mı diye bakıp varsa sha'sını alıyoruz.
+  let sha;
+  try {
+    const getRes = await fetchWithTimeout(
+      `${apiUrl}?ref=${encodeURIComponent(branch)}`,
+      { headers: ghHeaders },
+      15000
+    );
+    if (getRes.ok) {
+      const fileData = await getRes.json();
+      sha = fileData?.sha;
+    }
+  } catch (_) {
+    // Sha alınamadıysa sorun değil, aşağıda sha olmadan (yeni dosya
+    // varsayılarak) devam ediyoruz.
+  }
+
   const response = await fetchWithTimeout(
     apiUrl,
     {
       method: "PUT",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: "application/vnd.github+json",
-        "Content-Type": "application/json",
-        "X-GitHub-Api-Version": "2022-11-28"
-      },
+      headers: { ...ghHeaders, "Content-Type": "application/json" },
       body: JSON.stringify({
         message: commitMessage || `Yedek yükleme: ${key}`,
         content: buffer.toString("base64"),
-        branch
+        branch,
+        ...(sha ? { sha } : {})
       })
     },
     30000

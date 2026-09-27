@@ -73,7 +73,13 @@ function getB2Client() {
     endpoint: `https://${endpoint}`,
     region,
     credentials: { accessKeyId: keyId, secretAccessKey: appKey },
-    forcePathStyle: true
+    forcePathStyle: true,
+    // Bkz. flux-image.js'teki aynı not: B2, AWS SDK'nın varsayılan CRC32
+    // checksum header'ını desteklemiyor, bu yüzden bunu kapatıyoruz.
+    requestChecksumCalculation: 'WHEN_REQUIRED',
+    requestChecksumValidation: 'WHEN_REQUIRED',
+    responseChecksumCalculation: 'WHEN_REQUIRED',
+    responseChecksumValidation: 'WHEN_REQUIRED'
   });
 }
 

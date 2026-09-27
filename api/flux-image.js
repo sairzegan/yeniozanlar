@@ -49,7 +49,7 @@
 // artık base64 değil, bu URL yazılıyor.
 // ────────────────────────────────────────────────────────────────
 
-import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 
 const MODEL = '@cf/black-forest-labs/flux-1-schnell';
 
@@ -93,7 +93,16 @@ function getB2Client() {
     region,
     credentials: { accessKeyId: keyId, secretAccessKey: appKey },
     // B2'nin S3 uyumlu API'si virtual-hosted-style yerine path-style ister.
-    forcePathStyle: true
+    forcePathStyle: true,
+    // Backblaze B2, AWS SDK v3'ün (>=3.729.0) varsayılan olarak eklediği
+    // CRC32 checksum header'ını desteklemiyor ve isteği reddediyor — bu da
+    // her PutObject'in sessizce başarısız olup GitHub yedeğine düşmesine
+    // yol açıyordu. Bu dört ayarla checksum hesaplama/doğrulama sadece
+    // gerçekten zorunlu olduğunda yapılıyor, B2 ile uyumlu hale geliyor.
+    requestChecksumCalculation: 'WHEN_REQUIRED',
+    requestChecksumValidation: 'WHEN_REQUIRED',
+    responseChecksumCalculation: 'WHEN_REQUIRED',
+    responseChecksumValidation: 'WHEN_REQUIRED'
   });
 }
 
@@ -306,6 +315,147 @@ async function readCloudflareImage(response) {
 }
 
 // ============================================================
+// MEDYA SİLME (B2 + GitHub yedeği)
+// ============================================================
+// Vercel'in Hobby planında bir deployment başına 12 Serverless Function
+// sınırı var; ayrı bir /api/deleteMedia.js dosyası bu sınırı doldurduğu için
+// silme mantığı ayrı bir fonksiyon YERİNE bu dosyanın (flux-image) içine,
+// aynı fonksiyonun DELETE metoduyla çağrılan bir dalı olarak eklendi. Yani
+// /api/flux-image: POST → görsel üretir, DELETE → medya siler. Toplam
+// fonksiyon sayısı artmıyor.
+//
+// TASARIM: Frontend elindeki HERHANGİ bir URL'yi (GIPHY, Cloudinary,
+// Spotify/YouTube linki, statik müzik kütüphanesi, eski B2/GitHub dosyası —
+// ne olursa olsun) buraya gönderebilir. "Bu URL bana mı ait" kontrolünü
+// frontend değil BURASI yapar: sadece kendi B2 bucket'ımıza veya kendi
+// GitHub yedek reposuna ait URL desenini tanıyıp siler, gerisini sessizce
+// yok sayar (skipped:true).
+
+function matchB2Key(url) {
+  const endpoint = String(process.env.B2_ENDPOINT || '').trim();
+  const bucket = String(process.env.B2_BUCKET_NAME || '').trim();
+  if (!endpoint || !bucket || typeof url !== 'string') return null;
+
+  const prefix = `https://${endpoint}/${bucket}/`;
+  if (!url.startsWith(prefix)) return null;
+  return decodeURIComponent(url.slice(prefix.length).split('?')[0]);
+}
+
+function matchGithubKey(url) {
+  const owner = String(process.env.GITHUB_OWNER || '').trim();
+  const repo = String(process.env.GITHUB_REPO || '').trim();
+  const branch = String(process.env.GITHUB_BRANCH || 'main').trim();
+  if (!owner || !repo || typeof url !== 'string') return null;
+
+  const prefix = `https://cdn.jsdelivr.net/gh/${owner}/${repo}@${branch}/`;
+  if (!url.startsWith(prefix)) return null;
+  return { key: decodeURIComponent(url.slice(prefix.length).split('?')[0]), branch };
+}
+
+async function deleteFromB2(key) {
+  const client = getB2Client();
+  const bucket = String(process.env.B2_BUCKET_NAME || '').trim();
+  if (!client || !bucket) throw new Error('B2 yapılandırması eksik.');
+  await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+}
+
+// GitHub'ın Contents API'sinden dosya silmek için önce mevcut dosyanın
+// "sha" değerini bilmek gerekiyor (API böyle çalışıyor: hangi sürümü
+// sildiğinizi teyit etmeniz isteniyor).
+async function deleteFromGithub(key, branch) {
+  const owner = String(process.env.GITHUB_OWNER || '').trim();
+  const repo = String(process.env.GITHUB_REPO || '').trim();
+  const token = String(process.env.GITHUB_TOKEN || '').trim();
+  if (!owner || !repo || !token) throw new Error('GitHub yapılandırması eksik.');
+
+  const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${key}`;
+
+  const getRes = await fetchWithTimeout(
+    `${apiUrl}?ref=${encodeURIComponent(branch)}`,
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28'
+      }
+    },
+    15000
+  );
+
+  if (getRes.status === 404) return; // Dosya zaten yok, silinecek bir şey kalmamış.
+  if (!getRes.ok) {
+    const raw = await getRes.text().catch(() => '');
+    throw new Error(`GitHub dosya bilgisi alınamadı: HTTP ${getRes.status} — ${raw.slice(0, 200)}`);
+  }
+
+  const fileData = await getRes.json();
+  const sha = fileData?.sha;
+  if (!sha) throw new Error('GitHub dosyasının sha bilgisi bulunamadı.');
+
+  const delRes = await fetchWithTimeout(
+    apiUrl,
+    {
+      method: 'DELETE',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/vnd.github+json',
+        'Content-Type': 'application/json',
+        'X-GitHub-Api-Version': '2022-11-28'
+      },
+      body: JSON.stringify({ message: `Otomatik temizlik: ${key}`, sha, branch })
+    },
+    15000
+  );
+
+  if (!delRes.ok) {
+    const raw = await delRes.text().catch(() => '');
+    throw new Error(`GitHub silme başarısız: HTTP ${delRes.status} — ${raw.slice(0, 200)}`);
+  }
+}
+
+async function medyaSilmeIsteginiIsle(req, res) {
+  const gelenUrls = Array.isArray(req.body?.urls) ? req.body.urls : [];
+  const temizUrls = [...new Set(gelenUrls.filter(u => typeof u === 'string' && u.trim()))];
+
+  if (!temizUrls.length) {
+    return res.status(200).json({ results: [] });
+  }
+
+  // Kötüye kullanımı önlemek için tek istekte makul bir üst sınır.
+  const islenecekUrls = temizUrls.slice(0, 20);
+  const results = [];
+
+  for (const url of islenecekUrls) {
+    const b2Key = matchB2Key(url);
+    const ghMatch = !b2Key ? matchGithubKey(url) : null;
+
+    if (b2Key) {
+      try {
+        await deleteFromB2(b2Key);
+        results.push({ url, provider: 'b2', deleted: true });
+      } catch (err) {
+        console.error('B2 silme hatası:', url, err?.message || err);
+        results.push({ url, provider: 'b2', deleted: false, error: err?.message || String(err) });
+      }
+    } else if (ghMatch) {
+      try {
+        await deleteFromGithub(ghMatch.key, ghMatch.branch);
+        results.push({ url, provider: 'github', deleted: true });
+      } catch (err) {
+        console.error('GitHub silme hatası:', url, err?.message || err);
+        results.push({ url, provider: 'github', deleted: false, error: err?.message || String(err) });
+      }
+    } else {
+      // Bize ait değil (GIPHY, Cloudinary, Spotify/YouTube linki, statik
+      // müzik kütüphanesi vb.) — dokunmuyoruz.
+      results.push({ url, provider: 'none', deleted: false, skipped: true });
+    }
+  }
+
+  return res.status(200).json({ results });
+}
+
+// ============================================================
 // VERCEL
 // ============================================================
 
@@ -316,9 +466,13 @@ export const maxDuration = 75;
 // ============================================================
 
 export default async function handler(req, res) {
+  if (req.method === 'DELETE') {
+    return medyaSilmeIsteginiIsle(req, res);
+  }
+
   if (req.method !== 'POST') {
-    res.setHeader('Allow', 'POST');
-    return res.status(405).json({ error: 'Yalnızca POST destekleniyor.' });
+    res.setHeader('Allow', 'POST, DELETE');
+    return res.status(405).json({ error: 'Yalnızca POST veya DELETE destekleniyor.' });
   }
 
   const title = req.body?.title || '';
