@@ -44,7 +44,7 @@
 // dokümanına (post.image) yazıyordu. Bu, her paylaşımı ~150-200 KB
 // büyütüyor ve her okuma/yazmada bu veriyi taşıyor — günlük Firestore
 // kotasının (okunan/yazılan bayt) çok hızlı dolmasına yol açıyordu.
-// Artık görsel burada (sunucu tarafında) Backblaze B2'ye yükleniyor ve
+// Artık görsel burada (sunucu tarafında) Cloudflare R2'ye yükleniyor ve
 // istemciye SADECE küçük bir URL string'i dönülüyor. Firestore'a da
 // artık base64 değil, bu URL yazılıyor.
 // ────────────────────────────────────────────────────────────────
@@ -63,42 +63,28 @@ const TIMEOUT_MS = 65000;
 const MAX_PROMPT_CHARS = 1900;
 
 // ============================================================
-// BACKBLAZE B2 (S3 uyumlu API)
+// CLOUDFLARE R2 (S3 uyumlu API)
 // ============================================================
-// Vercel Blob yerine Backblaze B2 kullanıyoruz: ilk 10 GB depolama ve
-// günde 1 GB indirme kalıcı olarak ücretsiz, kredi kartı istemiyor.
 // Gerekli ortam değişkenleri:
-//   B2_KEY_ID            -> B2 uygulama anahtarının keyID'si
-//   B2_APPLICATION_KEY   -> B2 uygulama anahtarının applicationKey'i
-//   B2_BUCKET_NAME        -> örn. "yeniozanlar"
-//   B2_ENDPOINT           -> örn. "s3.us-east-005.backblazeb2.com"
-//   B2_REGION             -> örn. "us-east-005"
-// ÖNEMLİ: Bucket, B2 panelinde "Public" olarak ayarlanmalı, yoksa
-// döndürülen URL doğrudan tarayıcıda açılmaz.
+//   R2_ACCOUNT_ID        -> Cloudflare hesap ID
+//   R2_ACCESS_KEY_ID
+//   R2_SECRET_ACCESS_KEY
+//   R2_BUCKET_NAME
+//   R2_PUBLIC_URL        -> bucket'ın public dev URL'i, örn. https://pub-xxxx.r2.dev (sonunda / yok)
 
-function getB2Client() {
-  const endpoint = String(process.env.B2_ENDPOINT || '').trim();
-  const region = String(process.env.B2_REGION || '').trim();
-  const keyId = String(process.env.B2_KEY_ID || '').trim();
-  const appKey = String(process.env.B2_APPLICATION_KEY || '').trim();
+function getR2Client() {
+  const accountId = String(process.env.R2_ACCOUNT_ID || '').trim();
+  const accessKeyId = String(process.env.R2_ACCESS_KEY_ID || '').trim();
+  const secretAccessKey = String(process.env.R2_SECRET_ACCESS_KEY || '').trim();
 
-  if (!endpoint || !region || !keyId || !appKey) {
-    throw new Error(
-      'B2 ortam değişkenleri eksik: B2_ENDPOINT, B2_REGION, B2_KEY_ID, B2_APPLICATION_KEY gerekli.'
-    );
+  if (!accountId || !accessKeyId || !secretAccessKey) {
+    throw new Error('R2 ortam değişkenleri eksik: R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY gerekli.');
   }
 
   return new S3Client({
-    endpoint: `https://${endpoint}`,
-    region,
-    credentials: { accessKeyId: keyId, secretAccessKey: appKey },
-    // B2'nin S3 uyumlu API'si virtual-hosted-style yerine path-style ister.
-    forcePathStyle: true,
-    // Backblaze B2, AWS SDK v3'ün (>=3.729.0) varsayılan olarak eklediği
-    // CRC32 checksum header'ını desteklemiyor ve isteği reddediyor — bu da
-    // her PutObject'in sessizce başarısız olup GitHub yedeğine düşmesine
-    // yol açıyordu. Bu dört ayarla checksum hesaplama/doğrulama sadece
-    // gerçekten zorunlu olduğunda yapılıyor, B2 ile uyumlu hale geliyor.
+    endpoint: `https://${accountId}.r2.cloudflarestorage.com`,
+    region: 'auto',
+    credentials: { accessKeyId, secretAccessKey },
     requestChecksumCalculation: 'WHEN_REQUIRED',
     requestChecksumValidation: 'WHEN_REQUIRED',
     responseChecksumCalculation: 'WHEN_REQUIRED',
@@ -118,24 +104,24 @@ function makeMediaKey(title, ext) {
   return `ai-gorseller/${safeTitle}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
 }
 
-async function uploadToB2(buffer, key, contentType = 'image/jpeg') {
-  const bucket = String(process.env.B2_BUCKET_NAME || '').trim();
-  if (!bucket) {
-    throw new Error('B2_BUCKET_NAME ortam değişkeni eksik.');
-  }
+async function uploadToR2(buffer, key, contentType = 'image/jpeg') {
+  const bucket = String(process.env.R2_BUCKET_NAME || '').trim();
+  const publicBase = String(process.env.R2_PUBLIC_URL || '').trim().replace(/\/+$/, '');
+  if (!bucket) throw new Error('R2_BUCKET_NAME ortam değişkeni eksik.');
+  if (!publicBase) throw new Error('R2_PUBLIC_URL ortam değişkeni eksik.');
 
-  const client = getB2Client();
+  const client = getR2Client();
   await client.send(
     new PutObjectCommand({ Bucket: bucket, Key: key, Body: buffer, ContentType: contentType })
   );
 
-  return `https://${process.env.B2_ENDPOINT}/${bucket}/${key}`;
+  return `${publicBase}/${key}`;
 }
 
 // ============================================================
 // GITHUB + jsDelivr YEDEK DEPOLAMA
 // ============================================================
-// B2 herhangi bir sebeple (kota, kimlik doğrulama, ağ hatası vb.)
+// R2 herhangi bir sebeple (kota, kimlik doğrulama, ağ hatası vb.)
 // başarısız olursa aynı dosya bu public GitHub reposuna commit'lenir
 // ve jsDelivr CDN üzerinden servis edilir. Gerekli ortam değişkenleri:
 //   GITHUB_TOKEN  -> sadece bu repoya "Contents: Read and write" izinli,
@@ -182,14 +168,24 @@ async function uploadToGithubFallback(buffer, key, commitMessage) {
   return `https://cdn.jsdelivr.net/gh/${owner}/${repo}@${branch}/${key}`;
 }
 
+// TEŞHİS: gerçek anahtarları loglamıyoruz, sadece uzunluk + ilk birkaç karakter.
+function r2TeshisBilgisi() {
+  const maskele = (v) => {
+    const s = String(v || '');
+    return s ? `uzunluk=${s.length}, başlangıç="${s.slice(0, 4)}…"` : '(tanımsız)';
+  };
+  return `[R2_ACCESS_KEY_ID: ${maskele(process.env.R2_ACCESS_KEY_ID)} | R2_SECRET_ACCESS_KEY: ${maskele(process.env.R2_SECRET_ACCESS_KEY)} | R2_ACCOUNT_ID="${process.env.R2_ACCOUNT_ID || '(tanımsız)'}" | R2_BUCKET_NAME="${process.env.R2_BUCKET_NAME || '(tanımsız)'}" | R2_PUBLIC_URL="${process.env.R2_PUBLIC_URL || '(tanımsız)'}"]`;
+}
+
 async function uploadWithFallback(buffer, key, contentType, commitMessage) {
   try {
-    const url = await uploadToB2(buffer, key, contentType);
-    return { url, provider: 'b2' };
-  } catch (b2Err) {
-    console.error('B2 upload başarısız, GitHub yedeğine geçiliyor:', b2Err?.message || b2Err);
+    const url = await uploadToR2(buffer, key, contentType);
+    return { url, provider: 'r2' };
+  } catch (r2Err) {
+    const teshis = r2TeshisBilgisi();
+    console.error('R2 upload başarısız, GitHub yedeğine geçiliyor:', r2Err?.message || r2Err, teshis);
     const url = await uploadToGithubFallback(buffer, key, commitMessage);
-    return { url, provider: 'github', b2Error: b2Err?.message || String(b2Err) };
+    return { url, provider: 'github', r2Error: `${r2Err?.message || String(r2Err)} ${teshis}` };
   }
 }
 
@@ -315,28 +311,18 @@ async function readCloudflareImage(response) {
 }
 
 // ============================================================
-// MEDYA SİLME (B2 + GitHub yedeği)
+// MEDYA SİLME (R2 + GitHub yedeği)
 // ============================================================
-// Vercel'in Hobby planında bir deployment başına 12 Serverless Function
-// sınırı var; ayrı bir /api/deleteMedia.js dosyası bu sınırı doldurduğu için
-// silme mantığı ayrı bir fonksiyon YERİNE bu dosyanın (flux-image) içine,
-// aynı fonksiyonun DELETE metoduyla çağrılan bir dalı olarak eklendi. Yani
-// /api/flux-image: POST → görsel üretir, DELETE → medya siler. Toplam
-// fonksiyon sayısı artmıyor.
-//
-// TASARIM: Frontend elindeki HERHANGİ bir URL'yi (GIPHY, Cloudinary,
-// Spotify/YouTube linki, statik müzik kütüphanesi, eski B2/GitHub dosyası —
-// ne olursa olsun) buraya gönderebilir. "Bu URL bana mı ait" kontrolünü
-// frontend değil BURASI yapar: sadece kendi B2 bucket'ımıza veya kendi
-// GitHub yedek reposuna ait URL desenini tanıyıp siler, gerisini sessizce
-// yok sayar (skipped:true).
+// /api/flux-image: POST → görsel üretir, DELETE → medya siler (ayrı
+// fonksiyon Vercel Hobby'nin 12 fonksiyon sınırına takılmasın diye).
+// Frontend elindeki herhangi bir URL'yi gönderebilir; sadece kendi R2/GitHub
+// desenimize uyanları silip gerisini sessizce yok sayıyoruz (skipped:true).
 
-function matchB2Key(url) {
-  const endpoint = String(process.env.B2_ENDPOINT || '').trim();
-  const bucket = String(process.env.B2_BUCKET_NAME || '').trim();
-  if (!endpoint || !bucket || typeof url !== 'string') return null;
+function matchR2Key(url) {
+  const publicBase = String(process.env.R2_PUBLIC_URL || '').trim().replace(/\/+$/, '');
+  if (!publicBase || typeof url !== 'string') return null;
 
-  const prefix = `https://${endpoint}/${bucket}/`;
+  const prefix = `${publicBase}/`;
   if (!url.startsWith(prefix)) return null;
   return decodeURIComponent(url.slice(prefix.length).split('?')[0]);
 }
@@ -352,10 +338,10 @@ function matchGithubKey(url) {
   return { key: decodeURIComponent(url.slice(prefix.length).split('?')[0]), branch };
 }
 
-async function deleteFromB2(key) {
-  const client = getB2Client();
-  const bucket = String(process.env.B2_BUCKET_NAME || '').trim();
-  if (!client || !bucket) throw new Error('B2 yapılandırması eksik.');
+async function deleteFromR2(key) {
+  const client = getR2Client();
+  const bucket = String(process.env.R2_BUCKET_NAME || '').trim();
+  if (!client || !bucket) throw new Error('R2 yapılandırması eksik.');
   await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
 }
 
@@ -426,16 +412,16 @@ async function medyaSilmeIsteginiIsle(req, res) {
   const results = [];
 
   for (const url of islenecekUrls) {
-    const b2Key = matchB2Key(url);
-    const ghMatch = !b2Key ? matchGithubKey(url) : null;
+    const r2Key = matchR2Key(url);
+    const ghMatch = !r2Key ? matchGithubKey(url) : null;
 
-    if (b2Key) {
+    if (r2Key) {
       try {
-        await deleteFromB2(b2Key);
-        results.push({ url, provider: 'b2', deleted: true });
+        await deleteFromR2(r2Key);
+        results.push({ url, provider: 'r2', deleted: true });
       } catch (err) {
-        console.error('B2 silme hatası:', url, err?.message || err);
-        results.push({ url, provider: 'b2', deleted: false, error: err?.message || String(err) });
+        console.error('R2 silme hatası:', url, err?.message || err);
+        results.push({ url, provider: 'r2', deleted: false, error: err?.message || String(err) });
       }
     } else if (ghMatch) {
       try {
@@ -509,7 +495,7 @@ export default async function handler(req, res) {
           // hata oluşmasını engeller.
           steps: 4,
           // DÜZELTME (depolama/kota sorunu): Cloudflare varsayılan olarak 1024x1024
-          // üretiyordu, bu da B2/GitHub'a giden her dosyayı gereksiz yere
+          // üretiyordu, bu da R2/GitHub'a giden her dosyayı gereksiz yere
           // büyütüyordu. Şiir kartlarında görsel zaten 16:9 gösteriliyor, o yüzden
           // üretimi de doğrudan bu orana ve daha küçük bir çözünürlüğe indiriyoruz.
           // Bu tek başına dosya boyutunu (piksel sayısı ~%50-60 azalarak) belirgin
@@ -523,18 +509,15 @@ export default async function handler(req, res) {
 
     const buffer = await readCloudflareImage(response);
 
-    // --------------------------------------------------------
-    // BACKBLAZE B2'YE YÜKLE, BAŞARISIZ OLURSA GITHUB+jsDelivr'E DÜŞ —
-    // artık Firestore'a base64 yazılmıyor, sadece üretilen küçük URL yazılacak.
-    // --------------------------------------------------------
+    // R2'YE YÜKLE, BAŞARISIZ OLURSA GITHUB+jsDelivr'E DÜŞ
     const mediaKey = makeMediaKey(title, 'jpg');
     let uploadResult;
     try {
       uploadResult = await uploadWithFallback(buffer, mediaKey, 'image/jpeg', `Görsel: ${title || mediaKey}`);
     } catch (blobErr) {
-      console.error('B2 ve GitHub yedeği ikisi de başarısız:', blobErr?.message || blobErr);
+      console.error('R2 ve GitHub yedeği ikisi de başarısız:', blobErr?.message || blobErr);
       return res.status(502).json({
-        error: `Görsel üretildi ama hem Backblaze B2 hem GitHub yedeğine yüklenemedi: ${blobErr?.message || blobErr}`,
+        error: `Görsel üretildi ama hem Cloudflare R2 hem GitHub yedeğine yüklenemedi: ${blobErr?.message || blobErr}`,
         provider: 'cloudflare'
       });
     }
@@ -543,10 +526,7 @@ export default async function handler(req, res) {
       imageUrl: uploadResult.url,
       provider: 'cloudflare',
       storage: uploadResult.provider,
-      // TEŞHİS: B2 başarısız olup GitHub'a düşüldüyse gerçek B2 hatası burada
-      // (b2Error) döner, böylece istemci/tarayıcı konsolunda görülebilir —
-      // aksi halde bu hata sadece Vercel fonksiyon loglarında kalıyordu.
-      b2Error: uploadResult.b2Error || null,
+      r2Error: uploadResult.r2Error || null,
       model: MODEL
     });
   } catch (err) {

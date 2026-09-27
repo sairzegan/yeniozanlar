@@ -4,16 +4,14 @@
 //
 // DÜZELTME (bkz. flux-image.js'teki aynı not): FLUX.1-schnell'in prompt için
 // dokümante edilmemiş ama gerçek bir ~2048 karakter sınırı var. Aynı güvenlik
-// payını (1900 kr) burada da uyguluyoruz, çünkü bu model HF üzerinde de aynı
-// (fal-ai / replicate) altyapıyı kullanabiliyor.
+// payını (1900 kr) burada da uyguluyoruz.
 //
-// DÜZELTME (Firestore kotası): Artık ham binary döndürmek yerine görsel
-// burada Backblaze B2'ye yükleniyor ve istemciye sadece küçük bir URL
-// (JSON: {imageUrl}) dönülüyor — böylece Firestore'a base64 yazılmıyor.
+// Görsel burada üretilip Cloudflare R2'ye yükleniyor, istemciye sadece küçük
+// bir URL (JSON: {imageUrl}) dönülüyor.
 //
 // Vercel Environment Variables:
 // HUGGINGFACE_API_TOKEN = hf_...
-// B2_KEY_ID, B2_APPLICATION_KEY, B2_BUCKET_NAME, B2_ENDPOINT, B2_REGION
+// R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME, R2_PUBLIC_URL
 //
 // package.json bağımlılıkları:
 // "@huggingface/inference", "@aws-sdk/client-s3"
@@ -51,31 +49,24 @@ function buildPrompt(title, text) {
 }
 
 // ============================================================
-// BACKBLAZE B2 (S3 uyumlu API)
+// CLOUDFLARE R2 (S3 uyumlu API)
 // ============================================================
 // Gerekli ortam değişkenleri:
-//   B2_KEY_ID, B2_APPLICATION_KEY, B2_BUCKET_NAME, B2_ENDPOINT, B2_REGION
-// Bucket, B2 panelinde "Public" olarak ayarlanmalı.
+//   R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME, R2_PUBLIC_URL
 
-function getB2Client() {
-  const endpoint = String(process.env.B2_ENDPOINT || '').trim();
-  const region = String(process.env.B2_REGION || '').trim();
-  const keyId = String(process.env.B2_KEY_ID || '').trim();
-  const appKey = String(process.env.B2_APPLICATION_KEY || '').trim();
+function getR2Client() {
+  const accountId = String(process.env.R2_ACCOUNT_ID || '').trim();
+  const accessKeyId = String(process.env.R2_ACCESS_KEY_ID || '').trim();
+  const secretAccessKey = String(process.env.R2_SECRET_ACCESS_KEY || '').trim();
 
-  if (!endpoint || !region || !keyId || !appKey) {
-    throw new Error(
-      'B2 ortam değişkenleri eksik: B2_ENDPOINT, B2_REGION, B2_KEY_ID, B2_APPLICATION_KEY gerekli.'
-    );
+  if (!accountId || !accessKeyId || !secretAccessKey) {
+    throw new Error('R2 ortam değişkenleri eksik: R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY gerekli.');
   }
 
   return new S3Client({
-    endpoint: `https://${endpoint}`,
-    region,
-    credentials: { accessKeyId: keyId, secretAccessKey: appKey },
-    forcePathStyle: true,
-    // Bkz. flux-image.js'teki aynı not: B2, AWS SDK'nın varsayılan CRC32
-    // checksum header'ını desteklemiyor, bu yüzden bunu kapatıyoruz.
+    endpoint: `https://${accountId}.r2.cloudflarestorage.com`,
+    region: 'auto',
+    credentials: { accessKeyId, secretAccessKey },
     requestChecksumCalculation: 'WHEN_REQUIRED',
     requestChecksumValidation: 'WHEN_REQUIRED',
     responseChecksumCalculation: 'WHEN_REQUIRED',
@@ -95,18 +86,18 @@ function makeMediaKey(title, ext) {
   return `ai-gorseller/${safeTitle}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
 }
 
-async function uploadToB2(buffer, key, contentType = 'image/jpeg') {
-  const bucket = String(process.env.B2_BUCKET_NAME || '').trim();
-  if (!bucket) {
-    throw new Error('B2_BUCKET_NAME ortam değişkeni eksik.');
-  }
+async function uploadToR2(buffer, key, contentType = 'image/jpeg') {
+  const bucket = String(process.env.R2_BUCKET_NAME || '').trim();
+  const publicBase = String(process.env.R2_PUBLIC_URL || '').trim().replace(/\/+$/, '');
+  if (!bucket) throw new Error('R2_BUCKET_NAME ortam değişkeni eksik.');
+  if (!publicBase) throw new Error('R2_PUBLIC_URL ortam değişkeni eksik.');
 
-  const client = getB2Client();
+  const client = getR2Client();
   await client.send(
     new PutObjectCommand({ Bucket: bucket, Key: key, Body: buffer, ContentType: contentType })
   );
 
-  return `https://${process.env.B2_ENDPOINT}/${bucket}/${key}`;
+  return `${publicBase}/${key}`;
 }
 
 async function fetchWithTimeout(url, options = {}, timeoutMs = 30000) {
@@ -161,14 +152,24 @@ async function uploadToGithubFallback(buffer, key, commitMessage) {
   return `https://cdn.jsdelivr.net/gh/${owner}/${repo}@${branch}/${key}`;
 }
 
+// TEŞHİS: gerçek anahtarları loglamıyoruz, sadece uzunluk + ilk birkaç karakter.
+function r2TeshisBilgisi() {
+  const maskele = (v) => {
+    const s = String(v || '');
+    return s ? `uzunluk=${s.length}, başlangıç="${s.slice(0, 4)}…"` : '(tanımsız)';
+  };
+  return `[R2_ACCESS_KEY_ID: ${maskele(process.env.R2_ACCESS_KEY_ID)} | R2_SECRET_ACCESS_KEY: ${maskele(process.env.R2_SECRET_ACCESS_KEY)} | R2_ACCOUNT_ID="${process.env.R2_ACCOUNT_ID || '(tanımsız)'}" | R2_BUCKET_NAME="${process.env.R2_BUCKET_NAME || '(tanımsız)'}" | R2_PUBLIC_URL="${process.env.R2_PUBLIC_URL || '(tanımsız)'}"]`;
+}
+
 async function uploadWithFallback(buffer, key, contentType, commitMessage) {
   try {
-    const url = await uploadToB2(buffer, key, contentType);
-    return { url, provider: 'b2' };
-  } catch (b2Err) {
-    console.error('B2 upload başarısız, GitHub yedeğine geçiliyor:', b2Err?.message || b2Err);
+    const url = await uploadToR2(buffer, key, contentType);
+    return { url, provider: 'r2' };
+  } catch (r2Err) {
+    const teshis = r2TeshisBilgisi();
+    console.error('R2 upload başarısız, GitHub yedeğine geçiliyor:', r2Err?.message || r2Err, teshis);
     const url = await uploadToGithubFallback(buffer, key, commitMessage);
-    return { url, provider: 'github', b2Error: b2Err?.message || String(b2Err) };
+    return { url, provider: 'github', r2Error: `${r2Err?.message || String(r2Err)} ${teshis}` };
   }
 }
 
@@ -205,9 +206,6 @@ export default async function handler(req, res) {
         model: MODEL,
         inputs: prompt,
         provider: 'auto',
-        // DÜZELTME (depolama/kota sorunu, bkz. flux-image.js'teki aynı not):
-        // varsayılan çözünürlük yerine daha küçük, 16:9 bir boyut istiyoruz ki
-        // B2/GitHub yedeğine giden dosyalar küçük kalsın.
         parameters: { num_inference_steps: 4, width: 768, height: 432 }
       },
       { signal: controller.signal }
@@ -231,9 +229,9 @@ export default async function handler(req, res) {
     try {
       uploadResult = await uploadWithFallback(buffer, mediaKey, contentType, `Görsel: ${title || mediaKey}`);
     } catch (blobErr) {
-      console.error('B2 ve GitHub yedeği ikisi de başarısız:', blobErr?.message || blobErr);
+      console.error('R2 ve GitHub yedeği ikisi de başarısız:', blobErr?.message || blobErr);
       return res.status(502).json({
-        error: `Görsel üretildi ama hem Backblaze B2 hem GitHub yedeğine yüklenemedi: ${blobErr?.message || blobErr}`,
+        error: `Görsel üretildi ama hem Cloudflare R2 hem GitHub yedeğine yüklenemedi: ${blobErr?.message || blobErr}`,
         provider: 'huggingface'
       });
     }
@@ -242,9 +240,7 @@ export default async function handler(req, res) {
       imageUrl: uploadResult.url,
       provider: 'huggingface',
       storage: uploadResult.provider,
-      // TEŞHİS: B2 başarısız olup GitHub'a düşüldüyse gerçek B2 hatası burada
-      // (b2Error) döner, böylece istemci/tarayıcı konsolunda görülebilir.
-      b2Error: uploadResult.b2Error || null,
+      r2Error: uploadResult.r2Error || null,
       model: MODEL
     });
   } catch (err) {

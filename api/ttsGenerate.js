@@ -4,50 +4,39 @@ import fs from "fs/promises";
 import os from "os";
 import path from "path";
 
-// ElevenLabs'ten Microsoft Edge'in ücretsiz TTS motoruna geçildi: Edge/Windows
-// "Sesli Oku" özelliğinin arkasındaki, API anahtarı GEREKTİRMEYEN, tamamen
-// bedava serviste sadece 2 resmi Türkçe nöral ses var: Emel (kadın) ve
-// Ahmet (erkek). ElevenLabs'teki 5 farklı sesi birebir taklit edemesek de,
-// Groq'un seçtiği 5 "karakter"i bu iki sese, farklı konuşma hızı (rate) ve
-// perde (pitch) ayarlarıyla eşleyip biraz tonlama farkı yaratıyoruz.
-// ÖNEMLİ: Bu servis Microsoft tarafından resmi/belgeli bir API değil —
-// Edge tarayıcısının kullandığı servisi taklit ediyor. Yıllardır stabil
-// çalışıyor ama garanti yok; karşılığında ücretsiz ve kotasız.
+// ElevenLabs'ten Microsoft Edge'in ücretsiz TTS motoruna geçildi: API anahtarı
+// GEREKTİRMEYEN, tamamen bedava serviste sadece 2 resmi Türkçe nöral ses var:
+// Emel (kadın) ve Ahmet (erkek). Groq'un seçtiği 5 "karakter"i bu iki sese,
+// farklı konuşma hızı (rate) ve perde (pitch) ayarlarıyla eşleyip tonlama
+// farkı yaratıyoruz.
 const VOICE_MAP = {
-  huzunlu:  { voice: "tr-TR-EmelNeural",  pitch: "-8%", rate: "-12%" }, // hüzünlü, yavaş, kısık kadın sesi
-  romantik: { voice: "tr-TR-EmelNeural",  pitch: "+0%", rate: "-5%"  }, // yumuşak, sıcak kadın sesi
-  dramatik: { voice: "tr-TR-AhmetNeural", pitch: "-5%", rate: "-8%"  }, // güçlü, ağır erkek sesi
-  sakin:    { voice: "tr-TR-EmelNeural",  pitch: "-3%", rate: "-10%" }, // sakin, dingin kadın sesi
-  tutkulu:  { voice: "tr-TR-AhmetNeural", pitch: "+3%", rate: "+2%"  }, // canlı, kararlı erkek sesi
+  huzunlu:  { voice: "tr-TR-EmelNeural",  pitch: "-8%", rate: "-12%" },
+  romantik: { voice: "tr-TR-EmelNeural",  pitch: "+0%", rate: "-5%"  },
+  dramatik: { voice: "tr-TR-AhmetNeural", pitch: "-5%", rate: "-8%"  },
+  sakin:    { voice: "tr-TR-EmelNeural",  pitch: "-3%", rate: "-10%" },
+  tutkulu:  { voice: "tr-TR-AhmetNeural", pitch: "+3%", rate: "+2%"  },
 };
 const VARSAYILAN_SES = "sakin";
 
 // ============================================================
-// BACKBLAZE B2 (S3 uyumlu API) — Vercel Blob yerine kullanılıyor.
+// CLOUDFLARE R2 (S3 uyumlu API)
 // Gerekli ortam değişkenleri:
-//   B2_KEY_ID, B2_APPLICATION_KEY, B2_BUCKET_NAME, B2_ENDPOINT, B2_REGION
-// Bucket, B2 panelinde "Public" olarak ayarlanmalı.
+//   R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME, R2_PUBLIC_URL
 // ============================================================
 
-function getB2Client() {
-  const endpoint = String(process.env.B2_ENDPOINT || "").trim();
-  const region = String(process.env.B2_REGION || "").trim();
-  const keyId = String(process.env.B2_KEY_ID || "").trim();
-  const appKey = String(process.env.B2_APPLICATION_KEY || "").trim();
+function getR2Client() {
+  const accountId = String(process.env.R2_ACCOUNT_ID || "").trim();
+  const accessKeyId = String(process.env.R2_ACCESS_KEY_ID || "").trim();
+  const secretAccessKey = String(process.env.R2_SECRET_ACCESS_KEY || "").trim();
 
-  if (!endpoint || !region || !keyId || !appKey) {
-    throw new Error(
-      "B2 ortam değişkenleri eksik: B2_ENDPOINT, B2_REGION, B2_KEY_ID, B2_APPLICATION_KEY gerekli."
-    );
+  if (!accountId || !accessKeyId || !secretAccessKey) {
+    throw new Error("R2 ortam değişkenleri eksik: R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY gerekli.");
   }
 
   return new S3Client({
-    endpoint: `https://${endpoint}`,
-    region,
-    credentials: { accessKeyId: keyId, secretAccessKey: appKey },
-    forcePathStyle: true,
-    // Bkz. flux-image.js'teki aynı not: B2, AWS SDK'nın varsayılan CRC32
-    // checksum header'ını desteklemiyor, bu yüzden bunu kapatıyoruz.
+    endpoint: `https://${accountId}.r2.cloudflarestorage.com`,
+    region: "auto",
+    credentials: { accessKeyId, secretAccessKey },
     requestChecksumCalculation: "WHEN_REQUIRED",
     requestChecksumValidation: "WHEN_REQUIRED",
     responseChecksumCalculation: "WHEN_REQUIRED",
@@ -55,18 +44,18 @@ function getB2Client() {
   });
 }
 
-async function uploadToB2(buffer, key, contentType) {
-  const bucket = String(process.env.B2_BUCKET_NAME || "").trim();
-  if (!bucket) {
-    throw new Error("B2_BUCKET_NAME ortam değişkeni eksik.");
-  }
+async function uploadToR2(buffer, key, contentType) {
+  const bucket = String(process.env.R2_BUCKET_NAME || "").trim();
+  const publicBase = String(process.env.R2_PUBLIC_URL || "").trim().replace(/\/+$/, "");
+  if (!bucket) throw new Error("R2_BUCKET_NAME ortam değişkeni eksik.");
+  if (!publicBase) throw new Error("R2_PUBLIC_URL ortam değişkeni eksik.");
 
-  const client = getB2Client();
+  const client = getR2Client();
   await client.send(
     new PutObjectCommand({ Bucket: bucket, Key: key, Body: buffer, ContentType: contentType })
   );
 
-  return `https://${process.env.B2_ENDPOINT}/${bucket}/${key}`;
+  return `${publicBase}/${key}`;
 }
 
 async function fetchWithTimeout(url, options = {}, timeoutMs = 30000) {
@@ -100,11 +89,8 @@ async function uploadToGithubFallback(buffer, key, commitMessage) {
     "X-GitHub-Api-Version": "2022-11-28"
   };
 
-  // ttsGenerate.js için key her zaman aynı (audio/{postId}.mp3) — yani ses
-  // yeniden oluşturulduğunda AYNI dosya yolu tekrar yazılabilir. GitHub'ın
-  // Contents API'si var olan bir dosyanın üzerine yazarken mevcut sürümün
-  // "sha" değerini istiyor, yoksa "dosya zaten var" hatası dönüyor. Bu
-  // yüzden önce dosya var mı diye bakıp varsa sha'sını alıyoruz.
+  // Aynı key (audio/{postId}.mp3) tekrar yazılabiliyor — GitHub üzerine
+  // yazarken mevcut sürümün "sha" değerini istiyor, önce onu alıyoruz.
   let sha;
   try {
     const getRes = await fetchWithTimeout(
@@ -117,8 +103,7 @@ async function uploadToGithubFallback(buffer, key, commitMessage) {
       sha = fileData?.sha;
     }
   } catch (_) {
-    // Sha alınamadıysa sorun değil, aşağıda sha olmadan (yeni dosya
-    // varsayılarak) devam ediyoruz.
+    // sha alınamadıysa yeni dosya varsayılarak devam ediyoruz.
   }
 
   const response = await fetchWithTimeout(
@@ -144,14 +129,24 @@ async function uploadToGithubFallback(buffer, key, commitMessage) {
   return `https://cdn.jsdelivr.net/gh/${owner}/${repo}@${branch}/${key}`;
 }
 
+// TEŞHİS: gerçek anahtarları loglamıyoruz, sadece uzunluk + ilk birkaç karakter.
+function r2TeshisBilgisi() {
+  const maskele = (v) => {
+    const s = String(v || "");
+    return s ? `uzunluk=${s.length}, başlangıç="${s.slice(0, 4)}…"` : "(tanımsız)";
+  };
+  return `[R2_ACCESS_KEY_ID: ${maskele(process.env.R2_ACCESS_KEY_ID)} | R2_SECRET_ACCESS_KEY: ${maskele(process.env.R2_SECRET_ACCESS_KEY)} | R2_ACCOUNT_ID="${process.env.R2_ACCOUNT_ID || "(tanımsız)"}" | R2_BUCKET_NAME="${process.env.R2_BUCKET_NAME || "(tanımsız)"}" | R2_PUBLIC_URL="${process.env.R2_PUBLIC_URL || "(tanımsız)"}"]`;
+}
+
 async function uploadWithFallback(buffer, key, contentType, commitMessage) {
   try {
-    const url = await uploadToB2(buffer, key, contentType);
-    return { url, provider: "b2" };
-  } catch (b2Err) {
-    console.error("B2 upload başarısız, GitHub yedeğine geçiliyor:", b2Err?.message || b2Err);
+    const url = await uploadToR2(buffer, key, contentType);
+    return { url, provider: "r2" };
+  } catch (r2Err) {
+    const teshis = r2TeshisBilgisi();
+    console.error("R2 upload başarısız, GitHub yedeğine geçiliyor:", r2Err?.message || r2Err, teshis);
     const url = await uploadToGithubFallback(buffer, key, commitMessage);
-    return { url, provider: "github", b2Error: b2Err?.message || String(b2Err) };
+    return { url, provider: "github", r2Error: `${r2Err?.message || String(r2Err)} ${teshis}` };
   }
 }
 
@@ -178,8 +173,6 @@ export default async function handler(req, res) {
     const secim = VOICE_MAP[secilenAnahtar];
 
     const spoken = (title ? `${title}. ` : "") + cleanText;
-    // Edge TTS servisi çok uzun metinlerde zaman aşımına uğrayabiliyor,
-    // ElevenLabs'teki gibi güvenli bir üst sınır koruyoruz.
     const trimmed = spoken.length > 4500 ? spoken.slice(0, 4500) : spoken;
 
     const tts = new EdgeTTS({
@@ -192,9 +185,6 @@ export default async function handler(req, res) {
       timeout: 20000,
     });
 
-    // Vercel serverless ortamında dosya sistemi salt-okunur, sadece /tmp
-    // yazılabilir — bu yüzden Edge TTS'in dosyaya yazma API'sini /tmp'ye
-    // yazdırıp sonra buffer olarak geri okuyoruz.
     tmpPath = path.join(os.tmpdir(), `${cleanPostId}-${Date.now()}.mp3`);
     await tts.ttsPromise(trimmed, tmpPath);
 
@@ -203,9 +193,6 @@ export default async function handler(req, res) {
       return res.status(502).json({ error: "Boş ses verisi döndü." });
     }
 
-    // Backblaze B2'ye yükle, başarısız olursa GitHub+jsDelivr'e düş.
-    // S3 PutObject / GitHub Contents API aynı key ile üzerine yazar,
-    // yani ElevenLabs/Vercel Blob'daki "overwrite" davranışı korunuyor.
     const audioKey = `audio/${cleanPostId}.mp3`;
     const uploadResult = await uploadWithFallback(audioBuffer, audioKey, "audio/mpeg", `Ses: ${cleanPostId}`);
 
@@ -213,9 +200,7 @@ export default async function handler(req, res) {
       audioUrl: uploadResult.url,
       voiceKey: secilenAnahtar,
       storage: uploadResult.provider,
-      // TEŞHİS: B2 başarısız olup GitHub'a düşüldüyse gerçek B2 hatası burada
-      // (b2Error) döner — bkz. flux-image.js/huggingface-image.js'teki aynı not.
-      b2Error: uploadResult.b2Error || null
+      r2Error: uploadResult.r2Error || null
     });
   } catch (e) {
     console.error("ttsGenerate HATASI:", e);
