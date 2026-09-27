@@ -49,7 +49,24 @@
 // artık base64 değil, bu URL yazılıyor.
 // ────────────────────────────────────────────────────────────────
 
-import { S3Client, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, DeleteObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
+
+// R2 ücretsiz kota güvenlik payı: 10GB'ın altında, aşarsa GitHub'a düş.
+const R2_GUVENLIK_LIMITI = 9 * 1024 * 1024 * 1024;
+function r2AyAnahtari() {
+  const d = new Date();
+  return `_meta/r2-kullanim-${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}.json`;
+}
+async function r2KullanimOku(client, bucket) {
+  try {
+    const res = await client.send(new GetObjectCommand({ Bucket: bucket, Key: r2AyAnahtari() }));
+    const text = await res.Body.transformToString();
+    return Number(JSON.parse(text)?.bytes) || 0;
+  } catch (_) { return 0; }
+}
+function r2KullanimYaz(client, bucket, bytes) {
+  client.send(new PutObjectCommand({ Bucket: bucket, Key: r2AyAnahtari(), Body: JSON.stringify({ bytes }), ContentType: 'application/json' })).catch(() => {});
+}
 
 const MODEL = '@cf/black-forest-labs/flux-1-schnell';
 
@@ -111,9 +128,15 @@ async function uploadToR2(buffer, key, contentType = 'image/jpeg') {
   if (!publicBase) throw new Error('R2_PUBLIC_URL ortam değişkeni eksik.');
 
   const client = getR2Client();
+  const mevcutBayt = await r2KullanimOku(client, bucket);
+  if (mevcutBayt + buffer.length > R2_GUVENLIK_LIMITI) {
+    throw new Error('R2 aylık güvenlik limiti (9GB) aşılıyor.');
+  }
+
   await client.send(
     new PutObjectCommand({ Bucket: bucket, Key: key, Body: buffer, ContentType: contentType })
   );
+  r2KullanimYaz(client, bucket, mevcutBayt + buffer.length);
 
   return `${publicBase}/${key}`;
 }
