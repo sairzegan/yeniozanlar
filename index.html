@@ -2750,16 +2750,42 @@ async function adminSesiYenile(post){
   if(!data?.audioUrl) throw new Error('Ses linki dönmedi.');
   const idx = S.posts.findIndex(p=>p.id===post.id);
   if(idx>-1){
+    const eskiAudioUrl = S.posts[idx].audioUrl;
     S.posts[idx].audioUrl = data.audioUrl;
     save();
     await db.collection("posts").doc(post.id).update({ audioUrl: data.audioUrl });
+    if(eskiAudioUrl && eskiAudioUrl!==data.audioUrl) eskiMedyaTemizle([eskiAudioUrl]);
   }
   return data;
 }
 
-// Seslendirmeyi/müziği paylaşımdan kaldırır (dosyayı Blob'dan silmez, sadece
-// post.audioUrl / post.musicUrl alanını temizler). Yetki: admin HER paylaşımdan,
-// normal kullanıcı SADECE kendi paylaşımından kaldırabilir.
+// DÜZELTME: Aşağıdaki "dosyayı Blob'dan silmez" notu artık DOĞRU DEĞİL —
+// depodaki (Backblaze B2 / GitHub yedeği) eski dosya artık gerçekten
+// siliniyor (bkz. eskiMedyaTemizle). post.musicUrl İSTİSNA: o her zaman
+// TÜM şiirler arasında PAYLAŞILAN sabit bir müzik kütüphanesi dosyasına
+// işaret eder (bkz. musicGenerate.js), o yüzden ASLA silinmemeli — bu
+// yüzden postMuzigiKaldir bilerek eskiMedyaTemizle çağırmıyor.
+//
+// eskiMedyaTemizle: elindeki HERHANGİ bir URL'yi (GIPHY, Cloudinary,
+// Spotify/YouTube linki, paylaşılan müzik kütüphanesi dosyası, eski
+// B2/GitHub dosyası — ne olursa olsun) /api/flux-image'e DELETE isteğiyle
+// gönderir. NOT: Silme mantığı ayrı bir /api/deleteMedia.js dosyası OLARAK
+// DEĞİL, flux-image.js'in içine (DELETE metodu ile) eklendi — Vercel'in
+// Hobby planındaki 12 Serverless Function sınırını aşmamak için. "Bu URL
+// bize mi ait" kontrolünü backend kendisi yapar (sadece kendi B2
+// bucket'ına / GitHub yedek reposuna ait URL'leri siler, gerisini sessizce
+// yok sayar) — o yüzden burada ayrıca bir "bu benim mi" kontrolüne gerek
+// yok. En iyi çaba (best-effort) ile çalışır: başarısız olsa bile sadece
+// konsola yazar, hiçbir kullanıcı akışını engellemez veya bekletmez.
+function eskiMedyaTemizle(urls){
+  const temiz = (urls||[]).filter(u=>typeof u==='string' && u.trim());
+  if(!temiz.length) return;
+  fetch('/api/flux-image', {
+    method:'DELETE',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ urls: temiz })
+  }).catch(err=>console.warn('Eski medya temizlenemedi:', err?.message||err));
+}
 function sesMuzikKaldirmaYetkisiVarMi(post){
   if(!S.me) return false;
   if(S.me.username===ADMIN_USERNAME) return true;
@@ -2767,9 +2793,11 @@ function sesMuzikKaldirmaYetkisiVarMi(post){
 }
 async function postSesiKaldir(post){
   if(!sesMuzikKaldirmaYetkisiVarMi(post)) throw new Error('Bu işlem için yetkiniz yok.');
+  const eskiAudioUrl = post.audioUrl;
   await db.collection('posts').doc(post.id).update({ audioUrl: null });
   const idx=S.posts.findIndex(p=>p.id===post.id);
   if(idx>-1){ S.posts[idx].audioUrl=null; save(); }
+  eskiMedyaTemizle([eskiAudioUrl]);
 }
 async function postMuzigiKaldir(post){
   if(!sesMuzikKaldirmaYetkisiVarMi(post)) throw new Error('Bu işlem için yetkiniz yok.');
@@ -3071,9 +3099,13 @@ A.addPost = async function(pd){
 };
 A.deletePost = function(pid){
     if(!confirm("Bu şiir kalıcı olarak silinecek. Emin misiniz?")) return;
+    const silinenPost = S.posts.find(p=>p.id===pid);
     S.posts = S.posts.filter(p => p.id !== pid);
     save();render();
     db.collection("posts").doc(pid).delete().catch(err=>console.error("Silme hatası:",err));
+    // musicUrl kasıtlı olarak dahil edilmiyor: o paylaşılan sabit müzik
+    // kütüphanesine işaret ediyor, silinmemeli (bkz. eskiMedyaTemizle notu).
+    if(silinenPost) eskiMedyaTemizle([silinenPost.image, silinenPost.audioUrl]);
 };
 // Şiir sahibi kendi paylaşımının başlığını/metnini/görselini/YouTube linkini düzenler.
 // AI puanı ve mevcut yorumlar korunur (yeniden değerlendirme yapılmaz), sadece
@@ -3085,11 +3117,22 @@ A.editPost = function(pid, updates){
     const post = S.posts[pIndex];
     const isAdmin = S.me.username === ADMIN_USERNAME;
     if(post.authorId !== S.me.id && !isAdmin) return;
+    const eskiGorsel = post.image;
+    const eskiAudioUrl = post.audioUrl;
     S.posts[pIndex] = {...post, ...updates, edited:true};
     save();
     refreshCard(pid);
     db.collection("posts").doc(pid).update({...updates, edited:true}).catch(err=>console.error("Düzenleme hatası:",err));
     facebookOnizlemeyiTazele(pid);
+    // Görsel veya ses değiştirildi/kaldırıldıysa, artık kullanılmayan eski
+    // dosyayı depodan temizle (musicUrl kasıtlı olarak burada da yok —
+    // paylaşılan sabit müzik kütüphanesine işaret ediyor, silinmemeli).
+    if(Object.prototype.hasOwnProperty.call(updates,'image') && eskiGorsel && eskiGorsel!==updates.image){
+      eskiMedyaTemizle([eskiGorsel]);
+    }
+    if(Object.prototype.hasOwnProperty.call(updates,'audioUrl') && eskiAudioUrl && eskiAudioUrl!==updates.audioUrl){
+      eskiMedyaTemizle([eskiAudioUrl]);
+    }
     const guncelPost = S.posts[pIndex];
     // Düzenleme sırasında image alanı özellikle gönderildiyse (yeni resim seçildi
     // veya mevcut resim kaldırıldı) otomatik GIPHY çalıştırma. Kullanıcının seçimini
@@ -3864,11 +3907,13 @@ async function adminGiphyFallbackUygula(post){
   const data=await adminGiphyAlternatifiGetir(post);
   const idx=S.posts.findIndex(p=>p.id===post.id);
   if(idx<0) throw new Error('Paylaşım bulunamadı.');
+  const eskiGorsel=S.posts[idx].image;
   const now=Date.now();
   S.posts[idx]={...S.posts[idx],image:data.gifUrl,autoGif:true,gifCaption:null,aiImage:false,aiImageUpdatedAt:null};
   save();
   await db.collection('posts').doc(post.id).update({image:data.gifUrl,autoGif:true,gifCaption:null,aiImage:false,aiImageUpdatedAt:null});
   refreshCard(post.id);
+  if(eskiGorsel && eskiGorsel!==data.gifUrl) eskiMedyaTemizle([eskiGorsel]);
   return data;
 }
 
@@ -4020,6 +4065,7 @@ async function adminYapayZekaGorseliYenile(post){
   if(!S.me || S.me.username!==ADMIN_USERNAME){
     throw new Error('Bu işlem yalnızca admin içindir.');
   }
+  const eskiGorsel = post.image;
 
   // DÜZELTME (görselde istenmeyen yazı/harf çıkması sorunu):
   // Önceden burada Groq'un ürettiği İngilizce sahne tarifine EK OLARAK
@@ -4086,6 +4132,7 @@ async function adminYapayZekaGorseliYenile(post){
       save();
       await db.collection('posts').doc(post.id).update(updates);
       refreshCard(post.id);
+      if(eskiGorsel && eskiGorsel!==imageUrl) eskiMedyaTemizle([eskiGorsel]);
 
       return { type:'ai', provider, model };
     }catch(kaydetmeErr){
