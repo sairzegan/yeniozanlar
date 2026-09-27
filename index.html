@@ -3107,12 +3107,14 @@ A.addPost = async function(pd){
         }
         save();
         refreshCard(np.id);
-        db.collection("posts").doc(np.id).update({
-          userRatings:S.posts[idx].userRatings,
-          botYorumlar:S.posts[idx].botYorumlar,
-          aiScore:S.posts[idx].aiScore,aiYorum:S.posts[idx].aiYorum,
-          aiGuclu:S.posts[idx].aiGuclu,aiOneri:S.posts[idx].aiOneri,aiModel:S.posts[idx].aiModel
-        }).catch(err=>console.error(err));
+        // DÜZELTME: Burada önceden ayrıca bir db.collection("posts").doc(np.id).update({...})
+        // çağrısı da vardı. Ama bu satıra gelindiğinde belge Firestore'da HENÜZ
+        // OLUŞMAMIŞ oluyordu — belgeyi yaratan .set(np) çağrısı bundan sonraki
+        // satırda (if bloğunun dışında). Yani bu update() her zaman "No document
+        // to update" hatasıyla başarısız oluyordu (bkz. konsol hatası). Veri kaybı
+        // yoktu çünkü S.posts[idx] (np ile aynı referans) burada zaten güncellendiği
+        // için aşağıdaki .set(np) tüm AI alanlarını da (userRatings/aiScore/...)
+        // içeriyor — bu yüzden ayrı update() çağrısı gereksizdi, kaldırıldı.
       }
     }
     db.collection("posts").doc(np.id).set(np).catch(err=>console.error("Kaydetme hatası:",err));
