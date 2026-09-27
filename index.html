@@ -160,7 +160,7 @@ let S = {
   follows: lsGet('yo_follows', {}),
   msgs: lsGet('yo_msgs', []),
   notifs: lsGet('yo_notifs', []),
-  loading: !(_cacheUsers.length || _cachePosts.length)
+  loading: true
 };
 
 // Paylaşım linkiyle gelindiyse, uygulama açılır açılmaz doğrudan o şiirin
@@ -2786,23 +2786,21 @@ async function postMuzigiKaldir(post){
 async function aiSesYonlendirmesiGroqlaOlustur(title, text){
   const baslik=String(title||'').trim().slice(0,250);
   const siir=String(text||'').trim().slice(0,2200);
-  const VARSAYILAN={voiceKey:'sakin', stability:0.65, style:0.2};
+  const VARSAYILAN={voiceKey:'sakin', stability:0.5, style:0.35};
   if(!siir) return VARSAYILAN;
   try{
     const sonuc=await groqBotCall(
       'Sen şiirleri seslendirecek bir seslendirme yönetmenisin. YALNIZCA JSON döndür.',
-      `ÖNCELİKLİ KURAL: Bu bir ŞİİR OKUMASI olacak, ŞARKI SÖYLEME/EZGİ DEĞİL. Ses asla melodik, tekrarlayan bir ritimle veya nakarat söyler gibi YÜKSELİP ALÇALMAMALI. Doğal, içten, bir insanın sevdiği bir şiiri sesli okuduğu gibi, konuşma diline yakın bir tempoda ve tonlamada okunmalı. Bu kural, aşağıdaki seçimlerden HER ZAMAN daha önceliklidir.
-
-Bu şiiri analiz et ve aşağıdaki 5 ses karakterinden şiirin duygusuna/temasına EN UYGUN olanını seç:
+      `Bu şiiri analiz et ve aşağıdaki 5 ses karakterinden şiirin duygusuna/temasına EN UYGUN olanını seç:
 - "huzunlu": hüzünlü, melankolik, ayrılık/özlem temalı şiirler için duygusal kadın sesi
 - "romantik": aşk, sevgi, sıcaklık temalı şiirler için yumuşak, sıcak kadın sesi
 - "dramatik": yoğun, çarpıcı, isyan/hesaplaşma temalı şiirler için güçlü erkek sesi
 - "sakin": huzur, doğa, tefekkür temalı şiirler için sakin, dingin kadın sesi
 - "tutkulu": tutku, öfke, güçlü duygular içeren şiirler için derin, kararlı erkek sesi
 
-Ayrıca 0.4 ile 0.9 arasında "stability" ve 0 ile 0.6 arasında "style" değeri belirle (bu üst sınırların dışına ASLA çıkma — yüksek style ve düşük stability şarkı gibi, aşırı tiyatral/melodik bir okumaya yol açar):
-- "stability": okuma ne kadar durağan/tutarlı olsun (0.4=biraz daha duygusal ama hâlâ konuşma gibi, 0.9=çok durağan/sakin)
-- "style": okuma ne kadar abartılı olsun (0=tamamen doğal/düz okuma, 0.6=hafif vurgulu ama ASLA şarkı gibi değil)
+Ayrıca 0 ile 1 arasında iki değer belirle:
+- "stability": şiir ne kadar duygusal/değişken okunmalı (düşük=daha duygusal/oynak, yüksek=daha durağan/kararlı)
+- "style": okuma ne kadar abartılı/tiyatral olmalı (düşük=doğal, yüksek=abartılı)
 
 Şiirin başlığı: ${baslik}
 
@@ -2817,11 +2815,8 @@ JSON: {"voiceKey":"...", "stability":0.0, "style":0.0}`
     const style=Number(sonuc?.style);
     return {
       voiceKey: gecerliAnahtarlar.includes(voiceKey) ? voiceKey : VARSAYILAN.voiceKey,
-      // Şarkı gibi/aşırı melodik okumayı önlemek için değerler her zaman
-      // 0.4–0.9 (stability) ve 0–0.6 (style) aralığına SIKIŞTIRILIR — Groq
-      // bu aralığın dışında bir değer döndürse bile burada sınırlandırılır.
-      stability: Number.isFinite(stability) ? Math.min(0.9,Math.max(0.4,stability)) : VARSAYILAN.stability,
-      style: Number.isFinite(style) ? Math.min(0.6,Math.max(0,style)) : VARSAYILAN.style
+      stability: Number.isFinite(stability) ? Math.min(1,Math.max(0,stability)) : VARSAYILAN.stability,
+      style: Number.isFinite(style) ? Math.min(1,Math.max(0,style)) : VARSAYILAN.style
     };
   }catch(err){
     console.warn('Groq ses yönlendirmesi oluşturamadı, varsayılan ses kullanılacak:',err);
