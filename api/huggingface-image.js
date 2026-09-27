@@ -8,22 +8,18 @@
 // (fal-ai / replicate) altyapıyı kullanabiliyor.
 //
 // DÜZELTME (Firestore kotası): Artık ham binary döndürmek yerine görsel
-// burada Vercel Blob'a yükleniyor ve istemciye sadece küçük bir URL
+// burada Backblaze B2'ye yükleniyor ve istemciye sadece küçük bir URL
 // (JSON: {imageUrl}) dönülüyor — böylece Firestore'a base64 yazılmıyor.
 //
 // Vercel Environment Variables:
 // HUGGINGFACE_API_TOKEN = hf_...
-// CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET
-// (bkz. _lib/storage.js başındaki açıklama)
+// B2_KEY_ID, B2_APPLICATION_KEY, B2_BUCKET_NAME, B2_ENDPOINT, B2_REGION
 //
-// Vercel Environment (package.json) bağımlılıkları:
-// "@huggingface/inference", "cloudinary"
+// package.json bağımlılıkları:
+// "@huggingface/inference", "@aws-sdk/client-s3"
 
 import { InferenceClient } from '@huggingface/inference';
-// DEĞİŞİKLİK: Vercel Blob yerine Cloudflare R2 kullanılıyor.
-// put()'un imzası/dönüş değeri birebir aynı olduğu için aşağıdaki
-// uploadToVercelBlob() fonksiyonunda BAŞKA HİÇBİR ŞEY değişmedi.
-import { put } from './_lib/storage.js';
+import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 
 const MODEL = 'black-forest-labs/FLUX.1-schnell';
 const TIMEOUT_MS = 60000;
@@ -54,7 +50,34 @@ function buildPrompt(title, text) {
   return finalPrompt.length > MAX_PROMPT_CHARS ? finalPrompt.slice(0, MAX_PROMPT_CHARS) : finalPrompt;
 }
 
-async function uploadToVercelBlob(buffer, title = '', contentType = 'image/jpeg') {
+// ============================================================
+// BACKBLAZE B2 (S3 uyumlu API)
+// ============================================================
+// Gerekli ortam değişkenleri:
+//   B2_KEY_ID, B2_APPLICATION_KEY, B2_BUCKET_NAME, B2_ENDPOINT, B2_REGION
+// Bucket, B2 panelinde "Public" olarak ayarlanmalı.
+
+function getB2Client() {
+  const endpoint = String(process.env.B2_ENDPOINT || '').trim();
+  const region = String(process.env.B2_REGION || '').trim();
+  const keyId = String(process.env.B2_KEY_ID || '').trim();
+  const appKey = String(process.env.B2_APPLICATION_KEY || '').trim();
+
+  if (!endpoint || !region || !keyId || !appKey) {
+    throw new Error(
+      'B2 ortam değişkenleri eksik: B2_ENDPOINT, B2_REGION, B2_KEY_ID, B2_APPLICATION_KEY gerekli.'
+    );
+  }
+
+  return new S3Client({
+    endpoint: `https://${endpoint}`,
+    region,
+    credentials: { accessKeyId: keyId, secretAccessKey: appKey },
+    forcePathStyle: true
+  });
+}
+
+function makeMediaKey(title, ext) {
   const safeTitle =
     String(title || 'siir')
       .trim()
@@ -63,20 +86,84 @@ async function uploadToVercelBlob(buffer, title = '', contentType = 'image/jpeg'
       .replace(/^-|-$/g, '')
       .slice(0, 80) || 'siir';
 
-  const ext = contentType.includes('png') ? 'png' : 'jpg';
-  const pathname = `ai-gorseller/${safeTitle}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+  return `ai-gorseller/${safeTitle}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+}
 
-  const result = await put(pathname, buffer, {
-    access: 'public',
-    contentType,
-    addRandomSuffix: false
-  });
-
-  if (!result?.url) {
-    throw new Error('Vercel Blob yükleme başarılı görünüyor ama url dönmedi.');
+async function uploadToB2(buffer, key, contentType = 'image/jpeg') {
+  const bucket = String(process.env.B2_BUCKET_NAME || '').trim();
+  if (!bucket) {
+    throw new Error('B2_BUCKET_NAME ortam değişkeni eksik.');
   }
 
-  return result;
+  const client = getB2Client();
+  await client.send(
+    new PutObjectCommand({ Bucket: bucket, Key: key, Body: buffer, ContentType: contentType })
+  );
+
+  return `https://${process.env.B2_ENDPOINT}/${bucket}/${key}`;
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = 30000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// ============================================================
+// GITHUB + jsDelivr YEDEK DEPOLAMA (bkz. flux-image.js'teki aynı not)
+// ============================================================
+
+async function uploadToGithubFallback(buffer, key, commitMessage) {
+  const owner = String(process.env.GITHUB_OWNER || '').trim();
+  const repo = String(process.env.GITHUB_REPO || '').trim();
+  const token = String(process.env.GITHUB_TOKEN || '').trim();
+  const branch = String(process.env.GITHUB_BRANCH || 'main').trim();
+
+  if (!owner || !repo || !token) {
+    throw new Error('GitHub yedek depolama için GITHUB_OWNER, GITHUB_REPO, GITHUB_TOKEN gerekli.');
+  }
+
+  const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${key}`;
+  const response = await fetchWithTimeout(
+    apiUrl,
+    {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/vnd.github+json',
+        'Content-Type': 'application/json',
+        'X-GitHub-Api-Version': '2022-11-28'
+      },
+      body: JSON.stringify({
+        message: commitMessage || `Yedek yükleme: ${key}`,
+        content: buffer.toString('base64'),
+        branch
+      })
+    },
+    30000
+  );
+
+  if (!response.ok) {
+    const raw = await response.text().catch(() => '');
+    throw new Error(`GitHub yedek yükleme başarısız: HTTP ${response.status} — ${raw.slice(0, 300)}`);
+  }
+
+  return `https://cdn.jsdelivr.net/gh/${owner}/${repo}@${branch}/${key}`;
+}
+
+async function uploadWithFallback(buffer, key, contentType, commitMessage) {
+  try {
+    const url = await uploadToB2(buffer, key, contentType);
+    return { url, provider: 'b2' };
+  } catch (b2Err) {
+    console.error('B2 upload başarısız, GitHub yedeğine geçiliyor:', b2Err?.message || b2Err);
+    const url = await uploadToGithubFallback(buffer, key, commitMessage);
+    return { url, provider: 'github', b2Error: b2Err?.message || String(b2Err) };
+  }
 }
 
 export const maxDuration = 60;
@@ -129,21 +216,23 @@ export default async function handler(req, res) {
     }
 
     const contentType = blob.type && blob.type.startsWith('image/') ? blob.type : 'image/jpeg';
+    const mediaKey = makeMediaKey(title, contentType.includes('png') ? 'png' : 'jpg');
 
-    let blobResult;
+    let uploadResult;
     try {
-      blobResult = await uploadToVercelBlob(buffer, title, contentType);
+      uploadResult = await uploadWithFallback(buffer, mediaKey, contentType, `Görsel: ${title || mediaKey}`);
     } catch (blobErr) {
-      console.error('Vercel Blob upload başarısız:', blobErr?.message || blobErr);
+      console.error('B2 ve GitHub yedeği ikisi de başarısız:', blobErr?.message || blobErr);
       return res.status(502).json({
-        error: `Görsel üretildi ama depolamaya (Vercel Blob) yüklenemedi: ${blobErr?.message || blobErr}`,
+        error: `Görsel üretildi ama hem Backblaze B2 hem GitHub yedeğine yüklenemedi: ${blobErr?.message || blobErr}`,
         provider: 'huggingface'
       });
     }
 
     return res.status(200).json({
-      imageUrl: blobResult.url,
+      imageUrl: uploadResult.url,
       provider: 'huggingface',
+      storage: uploadResult.provider,
       model: MODEL
     });
   } catch (err) {

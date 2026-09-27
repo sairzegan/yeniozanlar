@@ -44,16 +44,12 @@
 // dokümanına (post.image) yazıyordu. Bu, her paylaşımı ~150-200 KB
 // büyütüyor ve her okuma/yazmada bu veriyi taşıyor — günlük Firestore
 // kotasının (okunan/yazılan bayt) çok hızlı dolmasına yol açıyordu.
-// Artık görsel burada (sunucu tarafında) Vercel Blob'a yükleniyor ve
+// Artık görsel burada (sunucu tarafında) Backblaze B2'ye yükleniyor ve
 // istemciye SADECE küçük bir URL string'i dönülüyor. Firestore'a da
 // artık base64 değil, bu URL yazılıyor.
 // ────────────────────────────────────────────────────────────────
 
-// DEĞİŞİKLİK: Vercel Blob yerine Cloudinary (kart gerektirmeyen ücretsiz
-// depolama) kullanılıyor. put()'un imzası/dönüş değeri birebir aynı olduğu
-// için aşağıdaki uploadToVercelBlob() fonksiyonunda BAŞKA HİÇBİR ŞEY
-// değişmedi.
-import { put } from './_lib/storage.js';
+import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 
 const MODEL = '@cf/black-forest-labs/flux-1-schnell';
 
@@ -67,13 +63,41 @@ const TIMEOUT_MS = 65000;
 const MAX_PROMPT_CHARS = 1900;
 
 // ============================================================
-// VERCEL BLOB
+// BACKBLAZE B2 (S3 uyumlu API)
 // ============================================================
-// Vercel projesine bir "Blob" store bağlandığında Vercel otomatik
-// olarak BLOB_READ_WRITE_TOKEN ortam değişkenini ekler; put() bunu
-// kendisi okur, elle geçmeye gerek yok.
+// Vercel Blob yerine Backblaze B2 kullanıyoruz: ilk 10 GB depolama ve
+// günde 1 GB indirme kalıcı olarak ücretsiz, kredi kartı istemiyor.
+// Gerekli ortam değişkenleri:
+//   B2_KEY_ID            -> B2 uygulama anahtarının keyID'si
+//   B2_APPLICATION_KEY   -> B2 uygulama anahtarının applicationKey'i
+//   B2_BUCKET_NAME        -> örn. "yeniozanlar"
+//   B2_ENDPOINT           -> örn. "s3.us-east-005.backblazeb2.com"
+//   B2_REGION             -> örn. "us-east-005"
+// ÖNEMLİ: Bucket, B2 panelinde "Public" olarak ayarlanmalı, yoksa
+// döndürülen URL doğrudan tarayıcıda açılmaz.
 
-async function uploadToVercelBlob(buffer, title = '') {
+function getB2Client() {
+  const endpoint = String(process.env.B2_ENDPOINT || '').trim();
+  const region = String(process.env.B2_REGION || '').trim();
+  const keyId = String(process.env.B2_KEY_ID || '').trim();
+  const appKey = String(process.env.B2_APPLICATION_KEY || '').trim();
+
+  if (!endpoint || !region || !keyId || !appKey) {
+    throw new Error(
+      'B2 ortam değişkenleri eksik: B2_ENDPOINT, B2_REGION, B2_KEY_ID, B2_APPLICATION_KEY gerekli.'
+    );
+  }
+
+  return new S3Client({
+    endpoint: `https://${endpoint}`,
+    region,
+    credentials: { accessKeyId: keyId, secretAccessKey: appKey },
+    // B2'nin S3 uyumlu API'si virtual-hosted-style yerine path-style ister.
+    forcePathStyle: true
+  });
+}
+
+function makeMediaKey(title, ext) {
   const safeTitle =
     String(title || 'siir')
       .trim()
@@ -82,21 +106,82 @@ async function uploadToVercelBlob(buffer, title = '') {
       .replace(/^-|-$/g, '')
       .slice(0, 80) || 'siir';
 
-  const pathname = `ai-gorseller/${safeTitle}-${Date.now()}-${Math.random()
-    .toString(36)
-    .slice(2, 8)}.jpg`;
+  return `ai-gorseller/${safeTitle}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+}
 
-  const result = await put(pathname, buffer, {
-    access: 'public',
-    contentType: 'image/jpeg',
-    addRandomSuffix: false
-  });
-
-  if (!result?.url) {
-    throw new Error('Vercel Blob yükleme başarılı görünüyor ama url dönmedi.');
+async function uploadToB2(buffer, key, contentType = 'image/jpeg') {
+  const bucket = String(process.env.B2_BUCKET_NAME || '').trim();
+  if (!bucket) {
+    throw new Error('B2_BUCKET_NAME ortam değişkeni eksik.');
   }
 
-  return result;
+  const client = getB2Client();
+  await client.send(
+    new PutObjectCommand({ Bucket: bucket, Key: key, Body: buffer, ContentType: contentType })
+  );
+
+  return `https://${process.env.B2_ENDPOINT}/${bucket}/${key}`;
+}
+
+// ============================================================
+// GITHUB + jsDelivr YEDEK DEPOLAMA
+// ============================================================
+// B2 herhangi bir sebeple (kota, kimlik doğrulama, ağ hatası vb.)
+// başarısız olursa aynı dosya bu public GitHub reposuna commit'lenir
+// ve jsDelivr CDN üzerinden servis edilir. Gerekli ortam değişkenleri:
+//   GITHUB_TOKEN  -> sadece bu repoya "Contents: Read and write" izinli,
+//                    fine-grained bir Personal Access Token
+//   GITHUB_OWNER  -> GitHub kullanıcı adı
+//   GITHUB_REPO   -> public repo adı
+//   GITHUB_BRANCH -> varsayılan: main
+
+async function uploadToGithubFallback(buffer, key, commitMessage) {
+  const owner = String(process.env.GITHUB_OWNER || '').trim();
+  const repo = String(process.env.GITHUB_REPO || '').trim();
+  const token = String(process.env.GITHUB_TOKEN || '').trim();
+  const branch = String(process.env.GITHUB_BRANCH || 'main').trim();
+
+  if (!owner || !repo || !token) {
+    throw new Error('GitHub yedek depolama için GITHUB_OWNER, GITHUB_REPO, GITHUB_TOKEN gerekli.');
+  }
+
+  const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${key}`;
+  const response = await fetchWithTimeout(
+    apiUrl,
+    {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/vnd.github+json',
+        'Content-Type': 'application/json',
+        'X-GitHub-Api-Version': '2022-11-28'
+      },
+      body: JSON.stringify({
+        message: commitMessage || `Yedek yükleme: ${key}`,
+        content: buffer.toString('base64'),
+        branch
+      })
+    },
+    30000
+  );
+
+  if (!response.ok) {
+    const raw = await response.text().catch(() => '');
+    throw new Error(`GitHub yedek yükleme başarısız: HTTP ${response.status} — ${raw.slice(0, 300)}`);
+  }
+
+  return `https://cdn.jsdelivr.net/gh/${owner}/${repo}@${branch}/${key}`;
+}
+
+async function uploadWithFallback(buffer, key, contentType, commitMessage) {
+  try {
+    const url = await uploadToB2(buffer, key, contentType);
+    return { url, provider: 'b2' };
+  } catch (b2Err) {
+    console.error('B2 upload başarısız, GitHub yedeğine geçiliyor:', b2Err?.message || b2Err);
+    const url = await uploadToGithubFallback(buffer, key, commitMessage);
+    return { url, provider: 'github', b2Error: b2Err?.message || String(b2Err) };
+  }
 }
 
 // ============================================================
@@ -277,23 +362,25 @@ export default async function handler(req, res) {
     const buffer = await readCloudflareImage(response);
 
     // --------------------------------------------------------
-    // VERCEL BLOB'A YÜKLE — artık Firestore'a base64 yazılmıyor,
-    // sadece bu adımda üretilen küçük URL yazılacak.
+    // BACKBLAZE B2'YE YÜKLE, BAŞARISIZ OLURSA GITHUB+jsDelivr'E DÜŞ —
+    // artık Firestore'a base64 yazılmıyor, sadece üretilen küçük URL yazılacak.
     // --------------------------------------------------------
-    let blobResult;
+    const mediaKey = makeMediaKey(title, 'jpg');
+    let uploadResult;
     try {
-      blobResult = await uploadToVercelBlob(buffer, title);
+      uploadResult = await uploadWithFallback(buffer, mediaKey, 'image/jpeg', `Görsel: ${title || mediaKey}`);
     } catch (blobErr) {
-      console.error('Vercel Blob upload başarısız:', blobErr?.message || blobErr);
+      console.error('B2 ve GitHub yedeği ikisi de başarısız:', blobErr?.message || blobErr);
       return res.status(502).json({
-        error: `Görsel üretildi ama depolamaya (Vercel Blob) yüklenemedi: ${blobErr?.message || blobErr}`,
+        error: `Görsel üretildi ama hem Backblaze B2 hem GitHub yedeğine yüklenemedi: ${blobErr?.message || blobErr}`,
         provider: 'cloudflare'
       });
     }
 
     return res.status(200).json({
-      imageUrl: blobResult.url,
+      imageUrl: uploadResult.url,
       provider: 'cloudflare',
+      storage: uploadResult.provider,
       model: MODEL
     });
   } catch (err) {
