@@ -209,7 +209,14 @@ export default async function handler(req, res) {
     const audioKey = `audio/${cleanPostId}.mp3`;
     const uploadResult = await uploadWithFallback(audioBuffer, audioKey, "audio/mpeg", `Ses: ${cleanPostId}`);
 
-    return res.status(200).json({ audioUrl: uploadResult.url, voiceKey: secilenAnahtar, storage: uploadResult.provider });
+    return res.status(200).json({
+      audioUrl: uploadResult.url,
+      voiceKey: secilenAnahtar,
+      storage: uploadResult.provider,
+      // TEŞHİS: B2 başarısız olup GitHub'a düşüldüyse gerçek B2 hatası burada
+      // (b2Error) döner — bkz. flux-image.js/huggingface-image.js'teki aynı not.
+      b2Error: uploadResult.b2Error || null
+    });
   } catch (e) {
     console.error("ttsGenerate HATASI:", e);
     return res.status(500).json({ error: "Sunucu hatası.", detail: String(e?.message || e).slice(0, 300) });

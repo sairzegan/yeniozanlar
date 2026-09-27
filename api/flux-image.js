@@ -543,6 +543,10 @@ export default async function handler(req, res) {
       imageUrl: uploadResult.url,
       provider: 'cloudflare',
       storage: uploadResult.provider,
+      // TEŞHİS: B2 başarısız olup GitHub'a düşüldüyse gerçek B2 hatası burada
+      // (b2Error) döner, böylece istemci/tarayıcı konsolunda görülebilir —
+      // aksi halde bu hata sadece Vercel fonksiyon loglarında kalıyordu.
+      b2Error: uploadResult.b2Error || null,
       model: MODEL
     });
   } catch (err) {
