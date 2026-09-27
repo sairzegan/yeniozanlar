@@ -160,7 +160,7 @@ let S = {
   follows: lsGet('yo_follows', {}),
   msgs: lsGet('yo_msgs', []),
   notifs: lsGet('yo_notifs', []),
-  loading: true
+  loading: !(_cacheUsers.length || _cachePosts.length)
 };
 
 // Paylaşım linkiyle gelindiyse, uygulama açılır açılmaz doğrudan o şiirin
