@@ -2740,8 +2740,8 @@ function otomatikSesUygulaGerekirse(postId, title, text){
       if(!data?.audioUrl) return;
       // TEŞHİS: bkz. görsel sağlayıcılarındaki aynı not — B2 başarısız olup
       // GitHub yedeğine düşüldüyse gerçek B2 hatasını konsola yazdırıyoruz.
-      if(data.storage && data.storage!=='b2'){
-        console.warn(`⚠️ Ses B2'ye değil "${data.storage}" yedeğine yüklendi. B2 hatası: ${data.b2Error||'(bilinmiyor)'}`);
+      if(data.storage && data.storage!=='r2'){
+        console.warn(`⚠️ Ses R2'ye değil "${data.storage}" yedeğine yüklendi. R2 hatası: ${data.r2Error||'(bilinmiyor)'}`);
       }
       const idx = S.posts.findIndex(p=>p.id===postId);
       if(idx<0) return;
@@ -2772,8 +2772,8 @@ async function adminSesiYenile(post){
   }
   const data = await res.json();
   if(!data?.audioUrl) throw new Error('Ses linki dönmedi.');
-  if(data.storage && data.storage!=='b2'){
-    console.warn(`⚠️ Ses B2'ye değil "${data.storage}" yedeğine yüklendi. B2 hatası: ${data.b2Error||'(bilinmiyor)'}`);
+  if(data.storage && data.storage!=='r2'){
+    console.warn(`⚠️ Ses R2'ye değil "${data.storage}" yedeğine yüklendi. R2 hatası: ${data.r2Error||'(bilinmiyor)'}`);
   }
   const idx = S.posts.findIndex(p=>p.id===post.id);
   if(idx>-1){
@@ -3978,9 +3978,9 @@ async function fluxGorselDene(title, text, signal){
   }
   if(!data?.imageUrl) throw new Error('Cloudflare FLUX görsel linki dönmedi.');
   // TEŞHİS: B2 başarısız olup GitHub yedeğine düşüldüyse gerçek B2 hatasını
-  // (b2Error) burada konsola yazdırıyoruz, aksi halde bu sessizce kayboluyordu.
-  if(data.storage && data.storage!=='b2'){
-    console.warn(`⚠️ Görsel B2'ye değil "${data.storage}" yedeğine yüklendi. B2 hatası: ${data.b2Error||'(bilinmiyor)'}`);
+  // (r2Error) burada konsola yazdırıyoruz, aksi halde bu sessizce kayboluyordu.
+  if(data.storage && data.storage!=='r2'){
+    console.warn(`⚠️ Görsel R2'ye değil "${data.storage}" yedeğine yüklendi. R2 hatası: ${data.r2Error||'(bilinmiyor)'}`);
   }
   return { imageUrl:data.imageUrl, provider:data.provider||'cloudflare', model:data.model||'@cf/black-forest-labs/flux-1-schnell' };
 }
@@ -3996,8 +3996,8 @@ async function huggingfaceGorselDene(title, text, signal){
     throw new Error(`Hugging Face HTTP ${r.status}${hata?` — ${hata}`:''}`);
   }
   if(!data?.imageUrl) throw new Error('Hugging Face görsel linki dönmedi.');
-  if(data.storage && data.storage!=='b2'){
-    console.warn(`⚠️ Görsel B2'ye değil "${data.storage}" yedeğine yüklendi. B2 hatası: ${data.b2Error||'(bilinmiyor)'}`);
+  if(data.storage && data.storage!=='r2'){
+    console.warn(`⚠️ Görsel R2'ye değil "${data.storage}" yedeğine yüklendi. R2 hatası: ${data.r2Error||'(bilinmiyor)'}`);
   }
   return { imageUrl:data.imageUrl, provider:data.provider||'huggingface', model:data.model||'black-forest-labs/FLUX.1-schnell' };
 }
