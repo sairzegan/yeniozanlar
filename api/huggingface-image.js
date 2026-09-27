@@ -205,7 +205,10 @@ export default async function handler(req, res) {
         model: MODEL,
         inputs: prompt,
         provider: 'auto',
-        parameters: { num_inference_steps: 4 }
+        // DÜZELTME (depolama/kota sorunu, bkz. flux-image.js'teki aynı not):
+        // varsayılan çözünürlük yerine daha küçük, 16:9 bir boyut istiyoruz ki
+        // B2/GitHub yedeğine giden dosyalar küçük kalsın.
+        parameters: { num_inference_steps: 4, width: 768, height: 432 }
       },
       { signal: controller.signal }
     );

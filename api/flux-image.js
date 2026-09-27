@@ -507,7 +507,15 @@ export default async function handler(req, res) {
           prompt,
           // Seed göndermiyoruz: geçersiz/desteklenmeyen seed nedeniyle
           // hata oluşmasını engeller.
-          steps: 4
+          steps: 4,
+          // DÜZELTME (depolama/kota sorunu): Cloudflare varsayılan olarak 1024x1024
+          // üretiyordu, bu da B2/GitHub'a giden her dosyayı gereksiz yere
+          // büyütüyordu. Şiir kartlarında görsel zaten 16:9 gösteriliyor, o yüzden
+          // üretimi de doğrudan bu orana ve daha küçük bir çözünürlüğe indiriyoruz.
+          // Bu tek başına dosya boyutunu (piksel sayısı ~%50-60 azalarak) belirgin
+          // biçimde küçültür; flux-1-schnell 8'in katları olan boyutları kabul eder.
+          width: 768,
+          height: 432
         })
       },
       TIMEOUT_MS
