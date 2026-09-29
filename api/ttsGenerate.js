@@ -293,7 +293,9 @@ export default async function handler(req, res) {
       return res.status(502).json({ error: "Boş ses verisi döndü." });
     }
 
-    const audioKey = `audio/${cleanPostId}.mp3`;
+    // Her üretimde BENZERSİZ dosya adı: aynı adla üzerine yazınca tarayıcı/CDN eski sesi
+    // önbellekten vermeye devam ediyordu. (Eski dosyayı index.html eskiMedyaTemizle siler.)
+    const audioKey = `audio/${cleanPostId}-${Date.now()}.mp3`;
     const uploadResult = await uploadWithFallback(audioBuffer, audioKey, "audio/mpeg", `Ses: ${cleanPostId}`);
 
     return res.status(200).json({
