@@ -209,11 +209,12 @@ async function verileriYukle() {
     // indiriliyordu; paylaşım sayısı arttıkça bu süre giderek uzuyordu. Artık akış,
     // en güncel içerikle saniyeler içinde doluyor; eski şiirler arka planda gelir.
     const [usersSnapshot, sonPostsSnapshot] = await Promise.all([
-      db.collection("users").get().catch(() => ({ docs: [] })),
+      db.collection("users").get().catch(err => { firestoreHataBildir(err); return { docs: [] }; }),
       db.collection("posts").orderBy("ts","desc").limit(30).get().catch(() => null)
     ]);
 
-    S.users = usersSnapshot.docs.length ? usersSnapshot.docs.map(doc => doc.data()) : [];
+    // Okuma başarısız olursa (kota/ağ) yerel önbellekteki kullanıcıları SİLME.
+    if(usersSnapshot.docs.length) S.users = usersSnapshot.docs.map(doc => doc.data());
 
     if (!S.users.find(u => u.username === ADMIN_USERNAME)) {
       S.users.push(adminProfileObj);
@@ -320,7 +321,7 @@ async function tumVeriyiArkaplandaTamamla(){
     const TAM_SENKRON_ARALIK = 30*60*1000;
     const sonTam = Number(lsGet('yo_tamSenkronTs', 0)) || 0;
     if((S.posts||[]).length > 30 && Date.now() - sonTam < TAM_SENKRON_ARALIK){
-      render();
+      S.tumPostlarHazir = true;
       return;
     }
     const postsSnapshot = await db.collection("posts").get().catch(err => { firestoreHataBildir(err); return { docs: [] }; });
@@ -331,12 +332,16 @@ async function tumVeriyiArkaplandaTamamla(){
       S.posts = postSirala(tumPostlar);
       lsSet('yo_posts', S.posts);
     }
+    S.tumPostlarHazir = true;
 
     // Mesaj ve bildirimler artık burada tek seferlik çekilmiyor; canliDinleyicileriBaslat()
     // ile ANLIK (onSnapshot) olarak dinleniyor.
-    render();
+    // Tüm ekranı yeniden çizmek kaydırmayı sıfırlıyor, yüklenen resimleri/sesleri bozuyordu.
+    // Yalnızca tüm şiirlere ihtiyaç duyan ekranlar yenilenir; akış zaten canlı listeden okur.
+    if(['leaderboard','explore','profile','postdetail'].includes(S.screen)) render();
   } catch(error) {
     console.log("Arkaplan senkron hatası:", error);
+    S.tumPostlarHazir = true;
   }
 }
 
@@ -3077,14 +3082,14 @@ function sesOynaticiOlustur(audioUrl,opts={}){
   }
   const audio=new Audio(audioUrl);
   TUM_SES_KAYITLARI.add(audio);
-  audio.preload='metadata';
+  audio.preload='none'; // Akıştaki onlarca oynatıcı aynı anda indirmeye başlayıp telefonu kilitliyordu
   audio.volume=0.9;
   const etiketMetni=opts.label||'🎙️ Dinle';
   const gradyan=opts.gradient||'linear-gradient(135deg,#7c3aed,#34d399)';
   const wrap=h('div',{style:{display:'flex',alignItems:'center',flexWrap:'wrap',gap:'8px',background:'#0f0a1a',border:'1px solid #2d1b52',borderRadius:'14px',padding:'8px 12px',marginBottom:'14px'},onclick:(e)=>e.stopPropagation()});
   const label=h('span',{style:{fontSize:'.72rem',color:'#a78bfa',flexShrink:'0',whiteSpace:'nowrap',width:'100%'}},etiketMetni);
   const playBtn=h('button',{class:'btn',style:{background:gradyan,border:'none',borderRadius:'50%',width:'34px',height:'34px',display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:'.95rem',flexShrink:'0',padding:'0',lineHeight:'1'},
-    onclick:(e)=>{e.stopPropagation(); if(audio.paused) audio.play().catch(()=>{}); else audio.pause();}
+    onclick:(e)=>{e.stopPropagation(); if(audio.paused){ if(audio.error||audio.networkState===audio.NETWORK_NO_SOURCE){ try{audio.load();}catch(_){} } audio.play().catch(()=>{ try{audio.load(); audio.play().catch(()=>{});}catch(_){} }); } else audio.pause();}
   },'▶️');
   const stopBtn=h('button',{class:'btn',style:{background:'#1a0f2e',border:'1px solid #3d1f6e',borderRadius:'50%',width:'28px',height:'28px',display:'flex',alignItems:'center',justifyContent:'center',color:'#a78bfa',fontSize:'.75rem',flexShrink:'0',padding:'0',lineHeight:'1'},
     onclick:(e)=>{e.stopPropagation(); audio.pause(); audio.currentTime=0;}
@@ -4086,6 +4091,21 @@ function h(tag,props={},kids=[]){
     if(c instanceof Node)e.appendChild(c);
     else e.appendChild(document.createTextNode(String(c)));
   }
+  if(tag==='img'){
+    // Telefonda ekran dışındaki görseller geç yüklensin, çözme işlemi ana iş parçacığını
+    // kilitlemesin; yüklenemezse bir kez önbellek kırarak yeniden denensin.
+    if(!e.hasAttribute('loading')) e.setAttribute('loading','lazy');
+    e.setAttribute('decoding','async');
+    if(!props['data-noretry']){
+      e.addEventListener('error',()=>{
+        if(e.dataset.retry) return;
+        e.dataset.retry='1';
+        const u=e.getAttribute('src');
+        if(!u||u.startsWith('data:')||u.startsWith('blob:')) return;
+        setTimeout(()=>{ e.src=u+(u.includes('?')?'&':'?')+'r='+Date.now(); },1200);
+      });
+    }
+  }
   return e;
 }
 
@@ -4096,7 +4116,21 @@ function av(user,size=40,onClick){
   if(isAdm){
     d.textContent='👑';
   }else if(user.avatarUrl){
-    const img=h('img',{src:user.avatarUrl,alt:'Profil resmi',loading:'lazy',style:{width:'100%',height:'100%',objectFit:'cover',display:'block'}});
+    const bas=user.avatar||user.name?.slice(0,2).toUpperCase()||'?';
+    const px=Math.min(400,Math.ceil(size*2));
+    // 1200px'lik profil resmini 28px'lik yorum avatarında indirmek telefonu kasıyordu:
+    // Cloudinary'den yalnızca gereken boyutta, sıkıştırılmış kopya istiyoruz.
+    const kucuk=String(user.avatarUrl).replace(/(res\.cloudinary\.com\/[^/]+\/image\/upload\/)(v\d+\/)/,`$1c_fill,g_auto,w_${px},h_${px},f_auto,q_auto/$2`);
+    const img=h('img',{src:kucuk,alt:'',loading:'lazy','data-noretry':'1',style:{width:'100%',height:'100%',objectFit:'cover',display:'block'}});
+    let deneme=0;
+    img.addEventListener('error',()=>{
+      deneme++;
+      if(deneme===1){
+        setTimeout(()=>{ img.src=String(user.avatarUrl)+(String(user.avatarUrl).includes('?')?'&':'?')+'r='+Date.now(); },1000);
+      } else {
+        img.remove(); d.textContent=bas;
+      }
+    });
     d.appendChild(img);
   }else{
     d.textContent=user.avatar||user.name?.slice(0,2).toUpperCase()||'?';
@@ -5227,7 +5261,32 @@ function Feed(){
   if (feedPosts.length === 0) {
     page.appendChild(h('p', {style:{textAlign:'center', color:'#6b5b8a', fontStyle:'italic', marginTop:'40px'}}, 'Henüz hiç şiir eklenmemiş. İlk şiiri siz paylaşın! ✨'));
   } else {
-    feedPosts.forEach(p=>page.appendChild(postCard(p)));
+    // Tüm kartları tek seferde çizmek telefonu kasıyor, görsel/sesleri yarım bırakıyordu.
+    // 8'er kart çizilir; aşağı inildikçe canlı S.posts listesinden devamı eklenir.
+    const PARCA=8; let gosterilen=0;
+    const sentinel=h('div',{style:{height:'40px'}});
+    page.appendChild(sentinel);
+    let io=null;
+    const dahaFazla=()=>{
+      const hepsi=gorunurPaylasimlar(S.posts);
+      const son=Math.min(gosterilen+PARCA,hepsi.length);
+      for(let i=gosterilen;i<son;i++) page.insertBefore(postCard(hepsi[i]),sentinel);
+      gosterilen=son;
+      if(gosterilen>=hepsi.length){ sentinel.style.display='none'; }
+    };
+    dahaFazla();
+    if('IntersectionObserver' in window){
+      io=new IntersectionObserver(es=>{
+        if(!sentinel.isConnected){ io.disconnect(); return; }
+        if(es.some(x=>x.isIntersecting)){
+          dahaFazla();
+          io.unobserve(sentinel); io.observe(sentinel); // hâlâ görünürse tekrar tetikle
+        }
+      },{rootMargin:'700px'});
+      io.observe(sentinel);
+    } else {
+      while(gosterilen<gorunurPaylasimlar(S.posts).length) dahaFazla();
+    }
   }
   
   wrap.appendChild(page);return wrap;
@@ -5296,6 +5355,9 @@ function Leaderboard(){
   const page=h('div',{class:'page'});
   page.appendChild(h('h2',{style:{fontFamily:"'Playfair Display',serif",color:'#e9d5ff',marginBottom:'4px',fontSize:'1.4rem'}},'🏆 Sıralama'));
   page.appendChild(h('p',{style:{color:'#6b5b8a',fontSize:'.85rem',marginBottom:'16px',fontStyle:'italic'}},'Puan ver, yorum yaz!'));
+  if(!S.tumPostlarHazir){
+    page.appendChild(h('p',{style:{color:'#a78bfa',fontSize:'.8rem',marginBottom:'12px'}},'⏳ Tüm şiirler yükleniyor, liste birazdan tamamlanacak…'));
+  }
 
   const pb=h('button',{class:'btn',style:{flex:'1',padding:'10px',borderRadius:'10px',fontSize:'.88rem',background:'linear-gradient(135deg,#7c3aed,#a855f7)',color:'#fff',border:'none'}},'🪶 En İyi Şiirler');
   const ub=h('button',{class:'btn',style:{flex:'1',padding:'10px',borderRadius:'10px',fontSize:'.88rem',background:'#1a0f2e',color:'#a78bfa',border:'1px solid #2d1b52'}},'👑 En İyi Ozanlar');
