@@ -172,8 +172,66 @@ async function uploadWithFallback(buffer, key, contentType, commitMessage) {
   }
 }
 
+
+// ============================================================
+// ACE-Step (acemusic.ai, ÜCRETSİZ) — şiiri YAPAY ZEKA VOKALİYLE söyletir.
+// musicGenerate.js ile aynı uç nokta / aynı ACE_MUSIC_API_KEY. Fark: burada
+// enstrümantal DEĞİL, şiirin kendisi `lyrics` olarak gönderiliyor.
+// Başarısız olursa (kota, zaman aşımı, çok uzun şiir, boş cevap...) sessizce
+// Edge TTS (düz okuma) devreye girer, yani ses her koşulda üretilir.
+// Kapatmak için Vercel'de SES_MOTORU=edge tanımla.
+// ============================================================
+const ACE_ENDPOINT = "https://api.acemusic.ai/v1/chat/completions";
+const ACE_TIMEOUT_MS = 90000;
+const ACE_MAX_SIIR_KARAKTER = 1200; // daha uzun şiirler şarkıya sığmaz -> Edge TTS ile tam okunur
+
+const ACE_STIL = {
+  huzunlu:  "slow melancholic ballad, soft piano, sad emotional vocal, intimate and gentle",
+  romantik: "romantic slow ballad, warm acoustic guitar and strings, tender vocal",
+  dramatik: "dramatic cinematic ballad, deep emotional male vocal, piano and strings, powerful",
+  sakin:    "calm ambient ballad, soft piano, gentle soothing vocal, peaceful and reflective",
+  tutkulu:  "passionate emotional ballad, expressive male vocal, guitar and strings, intense",
+};
+
+function aceKullanilabilirMi(cleanText) {
+  if (String(process.env.SES_MOTORU || "").trim().toLowerCase() === "edge") return false;
+  if (!process.env.ACE_MUSIC_API_KEY) return false;
+  return cleanText.length <= ACE_MAX_SIIR_KARAKTER;
+}
+
+async function aceStepIleSesUret(title, cleanText, voiceKey) {
+  const stil = ACE_STIL[voiceKey] || ACE_STIL[VARSAYILAN_SES];
+  const lyrics = "[Verse]\n" + cleanText.replace(/\r/g, "").replace(/\n{3,}/g, "\n\n");
+  const res = await fetch(ACE_ENDPOINT, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${process.env.ACE_MUSIC_API_KEY}`,
+    },
+    body: JSON.stringify({
+      messages: [{ role: "user", content: `<prompt>${stil}</prompt>\n<lyrics>${lyrics}</lyrics>` }],
+      stream: false,
+      audio_config: { format: "mp3", instrumental: false, vocal_language: "tr" },
+    }),
+    signal: AbortSignal.timeout(ACE_TIMEOUT_MS),
+  });
+  if (!res.ok) {
+    let detay = "";
+    try { const j = await res.json(); detay = j?.error?.message || j?.detail || JSON.stringify(j).slice(0, 200); } catch (_) {}
+    throw new Error(`ACE-Step HTTP ${res.status}${detay ? ": " + detay : ""}`);
+  }
+  const data = await res.json();
+  const dataUrl = data?.choices?.[0]?.message?.audio?.[0]?.audio_url?.url;
+  if (!dataUrl || typeof dataUrl !== "string" || !dataUrl.startsWith("data:")) {
+    throw new Error("ACE-Step ses verisi döndürmedi.");
+  }
+  const buf = Buffer.from(dataUrl.slice(dataUrl.indexOf(",") + 1), "base64");
+  if (!buf.length) throw new Error("ACE-Step boş ses döndürdü.");
+  return buf;
+}
+
 // Vercel varsayılan süre sınırı (10 sn) TTS + yükleme için yetmez.
-export const maxDuration = 60;
+export const maxDuration = 180;
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
@@ -200,20 +258,37 @@ export default async function handler(req, res) {
     const spoken = (title ? `${title}. ` : "") + cleanText;
     const trimmed = spoken.length > 4500 ? spoken.slice(0, 4500) : spoken;
 
-    const tts = new EdgeTTS({
-      voice: secim.voice,
-      lang: "tr-TR",
-      outputFormat: "audio-24khz-96kbitrate-mono-mp3",
-      pitch: secim.pitch,
-      rate: secim.rate,
-      volume: "default",
-      timeout: 20000,
-    });
+    let audioBuffer = null;
+    let motor = "edge-tts";
+    let aceHata = null;
 
-    tmpPath = path.join(os.tmpdir(), `${cleanPostId}-${Date.now()}.mp3`);
-    await tts.ttsPromise(trimmed, tmpPath);
+    if (aceKullanilabilirMi(cleanText)) {
+      try {
+        audioBuffer = await aceStepIleSesUret(title, cleanText, secilenAnahtar);
+        motor = "ace-step";
+      } catch (aceErr) {
+        aceHata = String(aceErr?.message || aceErr).slice(0, 300);
+        console.warn("ACE-Step ses üretimi başarısız, Edge TTS'e geçiliyor:", aceHata);
+        audioBuffer = null;
+      }
+    }
 
-    const audioBuffer = await fs.readFile(tmpPath);
+    if (!audioBuffer) {
+      const tts = new EdgeTTS({
+        voice: secim.voice,
+        lang: "tr-TR",
+        outputFormat: "audio-24khz-96kbitrate-mono-mp3",
+        pitch: secim.pitch,
+        rate: secim.rate,
+        volume: "default",
+        timeout: 20000,
+      });
+
+      tmpPath = path.join(os.tmpdir(), `${cleanPostId}-${Date.now()}.mp3`);
+      await tts.ttsPromise(trimmed, tmpPath);
+      audioBuffer = await fs.readFile(tmpPath);
+    }
+
     if (!audioBuffer.length) {
       return res.status(502).json({ error: "Boş ses verisi döndü." });
     }
@@ -224,6 +299,8 @@ export default async function handler(req, res) {
     return res.status(200).json({
       audioUrl: uploadResult.url,
       voiceKey: secilenAnahtar,
+      engine: motor,
+      aceError: aceHata,
       storage: uploadResult.provider,
       r2Error: uploadResult.r2Error || null
     });
