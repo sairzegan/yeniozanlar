@@ -465,6 +465,56 @@ async function medyaSilmeIsteginiIsle(req, res) {
 }
 
 // ============================================================
+// MEDYA YÜKLEME (profil/kapak/yorum/ses) — Cloudinary yerine R2
+// ============================================================
+// /api/flux-image: POST {action:'upload', dataUrl, folder, userId?}
+// Vercel istek gövdesi sınırı ~4.5MB olduğu için (base64 %33 şişirir) ham dosya
+// en fazla ~3MB olabilir. Yeni bir /api dosyası açmıyoruz (Vercel Hobby 12
+// fonksiyon sınırı); aynı fonksiyon R2 + GitHub yedeğini zaten kullanıyor.
+
+const IZINLI_YUKLEME_KLASORLERI = new Set(['profiles/avatar', 'profiles/cover', 'comments', 'audio']);
+const IZINLI_MIME_UZANTI = {
+  'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif',
+  'video/mp4': 'mp4', 'video/webm': 'webm', 'video/quicktime': 'mov',
+  'audio/mpeg': 'mp3', 'audio/mp3': 'mp3', 'audio/mp4': 'm4a', 'audio/x-m4a': 'm4a', 'audio/aac': 'aac',
+  'audio/wav': 'wav', 'audio/x-wav': 'wav', 'audio/webm': 'weba', 'audio/ogg': 'ogg'
+};
+const MAX_YUKLEME_BAYT = 3.3 * 1024 * 1024;
+
+async function medyaYuklemeIsteginiIsle(req, res) {
+  const dataUrl = String(req.body?.dataUrl || '');
+  const folder = String(req.body?.folder || '');
+  const userId = String(req.body?.userId || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 40);
+
+  if (!IZINLI_YUKLEME_KLASORLERI.has(folder)) {
+    return res.status(400).json({ error: 'Geçersiz klasör.' });
+  }
+
+  const m = dataUrl.match(/^data:([^;,]+)((?:;[^;,]+)*);base64,/i);
+  if (!m) return res.status(400).json({ error: 'Geçersiz dosya verisi.' });
+
+  const mime = m[1].toLowerCase();
+  const ext = IZINLI_MIME_UZANTI[mime];
+  if (!ext) return res.status(400).json({ error: `Desteklenmeyen dosya türü: ${mime}` });
+
+  const buffer = Buffer.from(dataUrl.slice(m[0].length), 'base64');
+  if (!buffer.length) return res.status(400).json({ error: 'Dosya boş.' });
+  if (buffer.length > MAX_YUKLEME_BAYT) {
+    return res.status(413).json({ error: 'Dosya en fazla 3 MB olabilir.' });
+  }
+
+  const key = `${folder}/${userId ? userId + '/' : ''}${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+
+  try {
+    const result = await uploadWithFallback(buffer, key, mime, `Yükleme: ${key}`);
+    return res.status(200).json({ url: result.url, storage: result.provider, r2Error: result.r2Error || null });
+  } catch (err) {
+    console.error('Medya yükleme başarısız:', err?.message || err);
+    return res.status(502).json({ error: `Dosya yüklenemedi: ${err?.message || err}` });
+  }
+}
+
+// ============================================================
 // VERCEL
 // ============================================================
 
@@ -482,6 +532,10 @@ export default async function handler(req, res) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST, DELETE');
     return res.status(405).json({ error: 'Yalnızca POST veya DELETE destekleniyor.' });
+  }
+
+  if (req.body?.action === 'upload') {
+    return medyaYuklemeIsteginiIsle(req, res);
   }
 
   const title = req.body?.title || '';
