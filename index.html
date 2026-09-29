@@ -184,6 +184,12 @@ let S = {
 })();
 
 const parseDate=d=>{if(!d)return 0;try{const p=d.split(' ');const dmy=p[0].split('.');const hms=p[1]?.split(':');return new Date(dmy[2],dmy[1]-1,dmy[0],hms?.[0]||0,hms?.[1]||0,hms?.[2]||0).getTime();}catch{return 0;}};
+// Mesaj/bildirim kayıtlarının zamanı: yeni kayıtlarda ts (ms) var; eski kayıtlarda
+// yalnızca "29.09.2026 14:30:00" biçiminde metin var. Metni localeCompare ile
+// karşılaştırmak YANLIŞ sonuç verir (gün önce gelir), bu yüzden sayıya çeviriyoruz.
+const kayitZamani = x => Number(x?.ts) || parseDate(x?.date) || 0;
+const zamanArtan  = (a,b) => kayitZamani(a) - kayitZamani(b);
+const zamanAzalan = (a,b) => kayitZamani(b) - kayitZamani(a);
 const postSirala = arr => arr.sort((a,b)=>{
   const ap = Number(a.pinnedAt||0), bp = Number(b.pinnedAt||0);
   if(ap || bp){ if(ap !== bp) return bp-ap; }
@@ -295,11 +301,7 @@ async function verileriYukle() {
 
 async function tumVeriyiArkaplandaTamamla(){
   try {
-    const [postsSnapshot, msgsSnapshot, notifsSnapshot] = await Promise.all([
-      db.collection("posts").get().catch(() => ({ docs: [] })),
-      S.me ? db.collection("msgs").get().catch(() => ({ docs: [] })) : Promise.resolve(null),
-      S.me ? db.collection("notifs").where("toId","==",S.me.id).get().catch(() => ({ docs: [] })) : Promise.resolve(null)
-    ]);
+    const postsSnapshot = await db.collection("posts").get().catch(() => ({ docs: [] }));
 
     const tumPostlar = postsSnapshot.docs.length ? postsSnapshot.docs.map(doc => doc.data()) : [];
     if(tumPostlar.length){
@@ -307,35 +309,72 @@ async function tumVeriyiArkaplandaTamamla(){
       lsSet('yo_posts', S.posts);
     }
 
-    if(msgsSnapshot){
-      S.msgs = msgsSnapshot.docs.length ? msgsSnapshot.docs.map(doc => doc.data()) : [];
-      lsSet('yo_msgs', S.msgs);
-    }
-    if(notifsSnapshot){
-      S.notifs = notifsSnapshot.docs.length ? notifsSnapshot.docs.map(doc => doc.data()).sort((a,b)=>b.date.localeCompare(a.date)) : [];
-      lsSet('yo_notifs', S.notifs);
-    }
+    // Mesaj ve bildirimler artık burada tek seferlik çekilmiyor; canliDinleyicileriBaslat()
+    // ile ANLIK (onSnapshot) olarak dinleniyor.
     render();
   } catch(error) {
     console.log("Arkaplan senkron hatası:", error);
   }
 }
 
-// Bildirimleri CANLI (real-time) dinler — sayfa yenilenmeden yeni bir bildirim
-// geldiği an S.notifs ve rozetler güncellenir. Böylece örn. yorumuna yanıt
-// verildiğinde, sayfayı yenilemeye gerek kalmadan rozette anında görünür.
-let bildirimDinleyiciAktifMi = false;
-function bildirimDinleyiciBaslat(){
-  if(!S.me || bildirimDinleyiciAktifMi) return;
-  bildirimDinleyiciAktifMi = true;
-  db.collection("notifs").where("toId","==",S.me.id).onSnapshot(snapshot=>{
-    S.notifs = snapshot.docs.map(doc=>doc.data()).sort((a,b)=>b.date.localeCompare(a.date));
-    lsSet('yo_notifs', S.notifs);
-    mesajBildirimRozetGuncelle();
-    // Bildirimler ekranı o an açıksa listeyi de tazele
-    if(S.screen==='notifs') render();
-  }, err=>console.error("Bildirim dinleme hatası:", err));
+// Bildirimleri VE mesajları CANLI (real-time) dinler — sayfa yenilemeden anında düşer.
+// Önceden dinleyici yalnızca sayfa ilk açıldığında (zaten giriş yapılmışsa) başlıyordu;
+// giriş yapıp sayfayı yenilemeden kalan kullanıcıda hiç başlamıyordu ve mesajlar hiç
+// dinlenmiyordu. Artık login/register'da başlatılır, logout'ta durdurulur.
+let _canliUnsubs = [];
+let _canliKullaniciId = null;
+let _msgKutusu = { gelen: [], giden: [] };
+
+function canliDinleyicileriDurdur(){
+  _canliUnsubs.forEach(fn => { try{ fn(); }catch(_){} });
+  _canliUnsubs = [];
+  _canliKullaniciId = null;
+  _msgKutusu = { gelen: [], giden: [] };
 }
+
+function canliArayuzuTazele(){
+  mesajBildirimRozetGuncelle();
+  // Mesajlar ekranı açıksa sohbeti/listeyi (yazılan taslağı bozmadan) tazele
+  if(S.screen==='messages' && typeof window._mesajEkraniTazele==='function'){
+    window._mesajEkraniTazele();
+  } else if(S.screen==='notifs'){
+    render();
+  }
+}
+
+function canliDinleyicileriBaslat(){
+  if(!S.me || S.me.id==='admin_root') return;
+  if(_canliKullaniciId === S.me.id && _canliUnsubs.length) return;
+  canliDinleyicileriDurdur();
+  const benId = S.me.id;
+  _canliKullaniciId = benId;
+
+  // Bildirimler
+  _canliUnsubs.push(db.collection("notifs").where("toId","==",benId).onSnapshot(snapshot=>{
+    S.notifs = snapshot.docs.map(doc=>doc.data()).sort(zamanAzalan);
+    lsSet('yo_notifs', S.notifs);
+    canliArayuzuTazele();
+  }, err=>console.error("Bildirim dinleme hatası:", err)));
+
+  // Mesajlar: gelenler + gönderilenler (iki ayrı sorgu birleştirilir)
+  const msgBirlestir = ()=>{
+    const harita = new Map();
+    [..._msgKutusu.gelen, ..._msgKutusu.giden].forEach(m=>harita.set(m.id, m));
+    S.msgs = Array.from(harita.values()).sort(zamanArtan);
+    lsSet('yo_msgs', S.msgs);
+    canliArayuzuTazele();
+  };
+  _canliUnsubs.push(db.collection("msgs").where("toId","==",benId).onSnapshot(snap=>{
+    _msgKutusu.gelen = snap.docs.map(d=>d.data());
+    msgBirlestir();
+  }, err=>console.error("Gelen mesaj dinleme hatası:", err)));
+  _canliUnsubs.push(db.collection("msgs").where("fromId","==",benId).onSnapshot(snap=>{
+    _msgKutusu.giden = snap.docs.map(d=>d.data());
+    msgBirlestir();
+  }, err=>console.error("Giden mesaj dinleme hatası:", err)));
+}
+// Eski isim (verileriYukle içinde kullanılıyor)
+function bildirimDinleyiciBaslat(){ canliDinleyicileriBaslat(); }
 
 const uid=()=>Math.random().toString(36).slice(2,9);
 const now=()=>new Date().toLocaleString('tr-TR');
@@ -357,6 +396,36 @@ function bugunkuPaylasimSayisi(userId){
   if(!userId) return 0;
   const baslangic = turkiyeGunBaslangicMs();
   return S.posts.filter(p => p.authorId===userId && (p.ts||0) >= baslangic).length;
+}
+// Her gömülü YouTube oynatıcısı kendi WebGL bağlamını açar; ekranda çok sayıda
+// oynatıcı olunca tarayıcı "Too many active WebGL contexts" uyarısı verir. Bu yüzden
+// oynatıcılar yalnızca tıklanınca yüklenir ve aynı anda en fazla 2 tanesi canlı tutulur
+// (yenisi açılınca en eskisi tekrar kapak görseline döner).
+const AKTIF_YT=[];
+function iframeleriBosalt(kok){
+  (kok||document).querySelectorAll('iframe').forEach(f=>{ try{ f.src='about:blank'; }catch(_){} });
+}
+function ytOynatici(id,opts={}){
+  const oran=opts.oran||'16/9';
+  const kutu=h('div',{style:{position:'relative',width:'100%',aspectRatio:oran,background:'#000',borderRadius:'12px',overflow:'hidden',cursor:'pointer'}});
+  const kapakGoster=()=>{
+    iframeleriBosalt(kutu);
+    kutu.innerHTML='';
+    kutu.style.cursor='pointer';
+    kutu.appendChild(h('img',{src:`https://img.youtube.com/vi/${id}/mqdefault.jpg`,loading:'lazy',alt:'Video',style:{width:'100%',height:'100%',objectFit:'cover',opacity:'.8',display:'block'}}));
+    kutu.appendChild(h('div',{style:{position:'absolute',inset:'0',display:'flex',alignItems:'center',justifyContent:'center'}},[h('span',{style:{fontSize:'2.2rem'}},'▶️')]));
+    kutu.onclick=oynat;
+  };
+  const oynat=(e)=>{
+    if(e) e.stopPropagation();
+    for(let i=AKTIF_YT.length-1;i>=0;i--) if(!AKTIF_YT[i].kutu.isConnected) AKTIF_YT.splice(i,1);
+    while(AKTIF_YT.length>=2){ const eski=AKTIF_YT.shift(); eski.kapakGoster(); }
+    kutu.onclick=null; kutu.style.cursor='default'; kutu.innerHTML='';
+    kutu.appendChild(h('iframe',{src:`https://www.youtube.com/embed/${id}?playsinline=1&rel=0&autoplay=1`,allow:'autoplay; encrypted-media; fullscreen; picture-in-picture',allowFullscreen:true,style:{position:'absolute',inset:'0',width:'100%',height:'100%',border:'0'}}));
+    AKTIF_YT.push({kutu,kapakGoster});
+  };
+  kapakGoster();
+  return kutu;
 }
 const ytId=url=>{const m=url?.match(/(?:youtu\.be\/|v=|embed\/)([A-Za-z0-9_-]{11})/);return m?m[1]:null};
 function lsGet(k,d){try{const v=localStorage.getItem(k);return v?JSON.parse(v):d}catch{return d}}
@@ -2323,9 +2392,11 @@ const A = {
     if(S.users.find(x=>x.username===usernameClean))return 'Bu kullanıcı adı alınmış.';
     const user={id:uid(),name:u.trim(),username:usernameClean,password:p,bio:'',avatar:u.slice(0,2).toUpperCase(),avatarUrl:'',coverUrl:'',color:`hsl(${Math.random()*360},70%,65%)`};
     
+ 
     S.me=user;
     S.users.push(user);
     save();
+    canliDinleyicileriBaslat();
     
     db.collection("users").doc(user.id).set(user)
       .then(() => { verileriYukle(); })
@@ -2352,9 +2423,9 @@ const A = {
 
     const user=S.users.find(x=>x.username===usernameClean&&x.password===p);
     if(!user)return'Kullanıcı adı veya şifre hatalı.';
-    S.me=user;save();go('feed');return null;
+    S.me=user;save();canliDinleyicileriBaslat();go('feed');return null;
   },
-  logout(){S.me=null;lsSet('yo_me',null);go('feed')},
+  logout(){canliDinleyicileriDurdur();S.me=null;S.msgs=[];S.notifs=[];lsSet('yo_me',null);lsSet('yo_msgs',[]);lsSet('yo_notifs',[]);go('feed')},
 };
 
 // ── BOT PUANLAMALARI (A dışında tanımlanır) ──────────────────────────────────
@@ -3394,7 +3465,7 @@ function yorumMedyaGoster(media){
   else if(media.type==='video') wrap.appendChild(h('video',{src:media.url,controls:true,preload:'metadata'}));
   else if(media.type==='youtube'){
     const id=ytId(media.url);
-    if(id) wrap.appendChild(h('iframe',{src:`https://www.youtube.com/embed/${id}`,allow:'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture',allowFullscreen:true}));
+    if(id) wrap.appendChild(ytOynatici(id));
     else return null;
   } else if(media.type==='gif'){
     wrap.appendChild(h('img',{src:media.url,loading:'lazy',alt:'GIF yorum'}));
@@ -3771,8 +3842,8 @@ A.toggleFollow = function(tid){
 };
 A.sendMsg = function(toId,text){
     if(!S.me) return;
-    const msg={id:uid(),fromId:S.me.id,toId,text,date:now(),read:false};
-    S.msgs=[...S.msgs,msg];save();render();
+    const msg={id:uid(),fromId:S.me.id,toId,text,date:now(),ts:Date.now(),read:false};
+    S.msgs=[...S.msgs,msg].sort(zamanArtan);save();
     db.collection("msgs").doc(msg.id).set(msg).catch(err=>console.error("Mesaj hatası:",err));
 };
 A.deleteMsg = function(mid){
@@ -3814,7 +3885,7 @@ A.addNotif = function(toId,text,extra={}){
     // extra.postId: bildirime tıklanınca hangi şiire gidileceği
     // extra.fromId: bildirime tıklanınca hangi profile gidileceği (örn. takip bildirimi)
     // extra.tur: 'yorum' ise şiir açıldığında yorum bölümü otomatik açılır
-    const notif={id:uid(),toId,text,date:now(),read:false,postId:extra.postId||null,fromId:extra.fromId||null,tur:extra.tur||null};
+    const notif={id:uid(),toId,text,date:now(),ts:Date.now(),read:false,postId:extra.postId||null,fromId:extra.fromId||null,tur:extra.tur||null};
     db.collection("notifs").doc(notif.id).set(notif).catch(e=>console.error(e));
 };
 
@@ -4303,7 +4374,7 @@ function postCard(post, forceExpand=false, autoOpenComments=false, hedefYorumId=
     const fullImg=h('img',{src:post.image,style:{width:'100%',height:'auto',borderRadius:'12px',marginBottom:'14px',display:'block'}});
     full.appendChild(gifUzeriAforizmaBindir(fullImg, post, {marginBottom:'14px', borderRadius:'12px'}));
   }
-  if(vid){const w=h('div',{style:{borderRadius:'12px',overflow:'hidden',marginBottom:'14px'}});w.innerHTML=`<iframe src="https://www.youtube.com/embed/${vid}" allowfullscreen style="width:100%;aspect-ratio:16/9;border:none;border-radius:12px"></iframe>`;full.appendChild(w);}
+  if(vid){const w=h('div',{style:{borderRadius:'12px',overflow:'hidden',marginBottom:'14px'}});w.appendChild(ytOynatici(vid));full.appendChild(w);}
 
   // Sesli okuma (varsa) — NORMAL MODDA otomatik başlamaz, kullanıcı ▶️ ile
   // kendi başlatır (kapanınca/panel kapatılınca yine de durdurulur).
@@ -4715,7 +4786,7 @@ function composeModal(onClose, existingPost=null){
       if(m) sesPreviewWrap.appendChild(h('iframe',{src:`https://open.spotify.com/embed/${m[1]}/${m[2]}?utm_source=generator`,style:{width:'100%',height:'152px',border:'0',borderRadius:'12px'},allow:'autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture',loading:'lazy'}));
     } else if(info.type==='youtube'){
       const id=ytId(url);
-      if(id) sesPreviewWrap.appendChild(h('iframe',{src:`https://www.youtube.com/embed/${id}?playsinline=1&rel=0`,style:{width:'100%',height:'180px',border:'0',borderRadius:'12px'},allow:'autoplay; encrypted-media; picture-in-picture',allowFullscreen:true}));
+      if(id) sesPreviewWrap.appendChild(ytOynatici(id));
     } else if(info.type==='soundcloud'){
       sesPreviewWrap.appendChild(h('iframe',{src:`https://w.soundcloud.com/player/?url=${encodeURIComponent(url)}&color=%237c3aed&auto_play=false&hide_related=true&show_comments=false&show_user=true&show_reposts=false&visual=true`,style:{width:'100%',height:'166px',border:'0',borderRadius:'12px'},allow:'autoplay'}));
     } else {
@@ -5206,6 +5277,7 @@ function SwipeMode(){
 
   function renderCard(){
     aktifSesiDurdur();
+    iframeleriBosalt(stage);
     stage.innerHTML='';
     if(!list.length){
       stage.appendChild(h('div',{class:'swipe-empty'},'Bu modda henüz gösterilecek şiir yok. 🌙'));
@@ -5678,14 +5750,20 @@ function Messages(){
   const ct=h('div');page.appendChild(ct);wrap.appendChild(page);
 
   function showMsgs(){
-    ct.innerHTML='';
+    ct.innerHTML='';ct.dataset.mod='list';
     // Sadece mesajlaşılan kişileri göster
     const contactedIds=new Set();
     S.msgs.forEach(m=>{
       if(m.fromId===S.me?.id)contactedIds.add(m.toId);
       if(m.toId===S.me?.id)contactedIds.add(m.fromId);
     });
-    const contacts=S.users.filter(u=>contactedIds.has(u.id)&&u.id!==S.me?.id);
+    const sonMesajZamani = uid2 => {
+      let t=0;
+      S.msgs.forEach(m=>{ if((m.fromId===S.me?.id&&m.toId===uid2)||(m.fromId===uid2&&m.toId===S.me?.id)) t=Math.max(t,kayitZamani(m)); });
+      return t;
+    };
+    const contacts=S.users.filter(u=>contactedIds.has(u.id)&&u.id!==S.me?.id)
+      .sort((a,b)=>sonMesajZamani(b.id)-sonMesajZamani(a.id));
 
     // Mesaj yazılabilecek tüm kullanıcılar için "Yeni Mesaj" butonu
     const newMsgBtn=h('button',{class:'btn',style:{width:'100%',marginBottom:'12px',background:'linear-gradient(135deg,#1e0a3e,#2d1060)',border:'1px dashed #5b21b6',borderRadius:'12px',padding:'12px',color:'#a78bfa',fontSize:'.9rem',fontFamily:"'Crimson Text',serif",display:'flex',alignItems:'center',justifyContent:'center',gap:'8px'},onclick:()=>showUserList()});
@@ -5697,7 +5775,7 @@ function Messages(){
       return;
     }
     contacts.forEach(u=>{
-      const last=[...S.msgs].reverse().find(m=>(m.fromId===S.me?.id&&m.toId===u.id)||(m.fromId===u.id&&m.toId===S.me?.id));
+      const last=[...S.msgs].sort(zamanAzalan).find(m=>(m.fromId===S.me?.id&&m.toId===u.id)||(m.fromId===u.id&&m.toId===S.me?.id));
       const unread=S.msgs.filter(m=>m.fromId===u.id&&m.toId===S.me?.id&&!m.read).length;
       const card=h('div',{class:'card',style:{display:'flex',alignItems:'center',gap:'12px',cursor:'pointer'},onclick:()=>{chat=u.id;showChat();}});
       card.appendChild(av(u,44));
@@ -5713,7 +5791,7 @@ function Messages(){
   }
 
   function showUserList(){
-    ct.innerHTML='';
+    ct.innerHTML='';ct.dataset.mod='users';
     ct.appendChild(h('button',{class:'btn',style:{background:'none',color:'#a78bfa',marginBottom:'12px',fontSize:'.9rem'},onclick:()=>showMsgs()},'← Geri'));
     ct.appendChild(h('p',{style:{color:'#a78bfa',fontFamily:"'Crimson Text',serif",fontSize:'.9rem',marginBottom:'12px',fontStyle:'italic'}},'Mesaj göndermek istediğin kişiyi seç:'));
     const others=S.users.filter(u=>u.id!==S.me?.id&&u.username!==ADMIN_USERNAME);
@@ -5729,14 +5807,14 @@ function Messages(){
   }
 
   function showNotifs(){
-    ct.innerHTML='';
+    ct.innerHTML='';ct.dataset.mod='notifs';
     const unread=(S.notifs||[]).filter(n=>!n.read);
     if(unread.length>0){
       unread.forEach(n=>{n.read=true;db.collection("notifs").doc(n.id).update({read:true}).catch(()=>{});});
       lsSet('yo_notifs',S.notifs);
       mesajBildirimRozetGuncelle();
     }
-    const notifs=S.notifs||[];
+    const notifs=[...(S.notifs||[])].sort(zamanAzalan);
     if(!notifs.length){
       ct.appendChild(h('p',{style:{color:'#6b5b8a',fontStyle:'italic',textAlign:'center',marginTop:'40px'}},'Henüz bildirim yok. Şiirlerine yorum ve puan geldikçe burada görünecek! 🌙'));
       return;
@@ -5781,7 +5859,7 @@ function Messages(){
       lsSet('yo_msgs',S.msgs);
       mesajBildirimRozetGuncelle();
     }
-    ct.innerHTML='';
+    ct.innerHTML='';ct.dataset.mod='chat';
     const chatUser=S.users.find(u=>u.id===chat);
     const hdr=h('div',{style:{display:'flex',alignItems:'center',gap:'10px',marginBottom:'12px'}});
     hdr.appendChild(h('button',{class:'btn',style:{background:'none',color:'#a78bfa',fontSize:'.9rem'},onclick:()=>{chat=null;showMsgs();}},'←'));
@@ -5790,7 +5868,7 @@ function Messages(){
     hdr.appendChild(h('button',{class:'btn',title:'Sohbeti sil',style:{background:'none',color:'#f87171',fontSize:'.85rem',padding:'4px 8px'},onclick:()=>{A.deleteConversation(chat);}},'🗑 Sohbeti Sil'));
     ct.appendChild(hdr);
     const msgs=h('div',{style:{height:'55vh',overflowY:'auto',display:'flex',flexDirection:'column',gap:'10px',paddingBottom:'8px'}});
-    S.msgs.filter(m=>(m.fromId===S.me?.id&&m.toId===chat)||(m.fromId===chat&&m.toId===S.me?.id)).forEach(m=>{
+    S.msgs.filter(m=>(m.fromId===S.me?.id&&m.toId===chat)||(m.fromId===chat&&m.toId===S.me?.id)).sort(zamanArtan).forEach(m=>{
       const mine=m.fromId===S.me?.id;
       const bubbleRow=h('div',{style:{display:'flex',justifyContent:mine?'flex-end':'flex-start',alignItems:'center',gap:'6px'}});
       const bubble=h('div',{style:{maxWidth:'70%',background:mine?'linear-gradient(135deg,#7c3aed,#a855f7)':'#1a0f2e',borderRadius:mine?'16px 16px 4px 16px':'16px 16px 16px 4px',padding:'10px 14px',border:mine?'none':'1px solid #2d1b52'}},[h('p',{style:{color:'#f0e8ff',fontSize:'.95rem'}},m.text),h('p',{style:{color:mine?'#ddd6fe':'#6b5b8a',fontSize:'.7rem',marginTop:'4px',textAlign:mine?'right':'left'}},m.date)]);
@@ -5814,6 +5892,23 @@ function Messages(){
   msgsBtn.onclick=()=>{activeTab='msgs';msgsBtn.style.background='linear-gradient(135deg,#7c3aed,#a855f7)';msgsBtn.style.color='#fff';msgsBtn.style.border='none';notifBtn.style.background='#1a0f2e';notifBtn.style.color='#a78bfa';notifBtn.style.border='1px solid #2d1b52';showMsgs();};
   notifBtn.onclick=()=>{activeTab='notifs';notifBtn.style.background='linear-gradient(135deg,#7c3aed,#a855f7)';notifBtn.style.color='#fff';notifBtn.style.border='none';msgsBtn.style.background='#1a0f2e';msgsBtn.style.color='#a78bfa';msgsBtn.style.border='1px solid #2d1b52';showNotifs();};
 
+  // Canlı dinleyici (bkz. canliDinleyicileriBaslat) yeni mesaj/bildirim getirince bu
+  // fonksiyon çağrılır: açık sohbeti sayfayı yeniden kurmadan, yazılmakta olan mesaj
+  // taslağını ve odağı koruyarak tazeler.
+  window._mesajEkraniTazele=()=>{
+    if(!ct.isConnected) return;
+    const mod=ct.dataset.mod;
+    if(mod==='chat' && chat){
+      const eski=ct.querySelector('input');
+      const taslak=eski?eski.value:'';
+      const odakta=!!eski && document.activeElement===eski;
+      showChat();
+      const yeni=ct.querySelector('input');
+      if(yeni){ yeni.value=taslak; if(odakta) yeni.focus(); }
+    } else if(mod==='list'){ showMsgs(); }
+    else if(mod==='notifs'){ showNotifs(); }
+    // 'users' (kişi seçimi) açıkken dokunma
+  };
   if(chat){ showChat(); } else { showMsgs(); }
   return wrap;
 }
@@ -5831,7 +5926,7 @@ function Notifs(){
   const wrap=h('div',{},[navBar()]);
   const page=h('div',{class:'page'});
   page.appendChild(h('h2',{style:{fontFamily:"'Playfair Display',serif",color:'#e9d5ff',marginBottom:'16px',fontSize:'1.4rem'}},'🔔 Bildirimler'));
-  const notifs=S.notifs||[];
+  const notifs=[...(S.notifs||[])].sort(zamanAzalan);
   if(!notifs.length){
     page.appendChild(h('p',{style:{color:'#6b5b8a',fontStyle:'italic',textAlign:'center',marginTop:'40px'}},'Henüz bildirim yok. Şiirlerine yorum ve puan geldikçe burada görünecek! 🌙'));
   } else {
@@ -5873,6 +5968,8 @@ function render(){
   // görünmeyen) audio nesneleri arka planda sessizce çalmaya devam edebiliyordu.
   TUM_SES_KAYITLARI.forEach(a=>{ try{ a.pause(); }catch(_){} });
   TUM_SES_KAYITLARI.clear();
+  iframeleriBosalt(app);
+  AKTIF_YT.length=0;
   app.innerHTML='';
   
   if (S.loading) {
