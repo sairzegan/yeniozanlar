@@ -173,7 +173,13 @@ let S = {
 (function(){
   const yolEslesme = location.pathname.match(/^\/post\/([^/]+)/);
   const hashEslesme = location.hash.match(/^#postdetail-(.+)$/);
-  let id = yolEslesme ? yolEslesme[1] : (hashEslesme ? hashEslesme[1] : null);
+  // Adreste #messages gibi bir ekran varsa (sayfa yenilenince) o ekrana dön;
+  // /post/... yolu ancak ekran belirtilmemişse şiir sayfasını açar.
+  const ekranEslesme = location.hash.match(/^#(messages|notifs|leaderboard|explore|feed)$/);
+  let id = ekranEslesme ? null : (yolEslesme ? yolEslesme[1] : (hashEslesme ? hashEslesme[1] : null));
+  if(ekranEslesme){
+    S.screen = ekranEslesme[1];
+  }
   if(id){
     id = decodeURIComponent(id);
     const sonTireIndex = id.lastIndexOf('-');
@@ -2355,7 +2361,9 @@ function go(screen,extra={}){
   S.profileId = 'profileId' in extra ? extra.profileId : null;
   S.postId = 'postId' in extra ? extra.postId : null;
   render();
-  const yol = (screen==='postdetail' && S.postId) ? postYolu(S.postId) : '#'+screen;
+  // '/#ekran' (başında /): adres /post/... üzerindeyken '#messages' eklenip
+  // /post/baslik#messages gibi karışık bir adres oluşmasın.
+  const yol = (screen==='postdetail' && S.postId) ? postYolu(S.postId) : '/#'+screen;
   history.pushState({screen:S.screen, profileId:S.profileId, postId:S.postId}, '', yol);
 }
 window.addEventListener('popstate', (e)=>{
