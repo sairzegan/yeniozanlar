@@ -272,6 +272,12 @@ async function verileriYukle() {
     } else if (S.me && S.users.length) {
       const guncelBen = S.users.find(u => u.id === S.me.id);
       if (guncelBen) S.me = guncelBen;
+      else if (usersSnapshot.docs.length) {
+        // Hesap admin tarafından silinmiş: oturumu kapat.
+        canliDinleyicileriDurdur();
+        S.me = null; S.msgs = []; S.notifs = [];
+        lsSet('yo_me', null); lsSet('yo_msgs', []); lsSet('yo_notifs', []);
+      }
     }
   } catch (error) {
     console.log("Bağlantı hatası:", error);
@@ -3828,6 +3834,113 @@ A.deleteComment = function(pid,cid){
       db.collection("posts").doc(pid).update({ comments: updatedComments });
     }
 };
+// ── ADMİN: KULLANICI SİL ─────────────────────────────────────────────────────
+// Kullanıcıyı ve ona ait her şeyi kalıcı olarak siler:
+//  • kullanıcının kendi şiirleri (görsel/ses dosyalarıyla birlikte)
+//  • başkalarının şiirlerine verdiği puanlar, tepkiler (👍👎❤️) ve yorumları
+//  • gönderdiği/aldığı mesajlar ve bildirimler
+//  • kullanıcı kaydı (users) ve yerel takip bağlantıları
+// Firestore'daki TÜM şiirler sunucudan taranır (yerel liste eksik olabilir).
+A.deleteUser = async function(userId){
+  if(S.me?.username!==ADMIN_USERNAME) return;
+  const hedef = S.users.find(u=>u.id===userId);
+  if(!hedef || hedef.username===ADMIN_USERNAME || userId==='admin_root') return;
+  if(!confirm(`@${hedef.username} kullanıcısı KALICI olarak silinecek.\n\nŞiirleri, verdiği puanlar, tepkiler, yorumlar ve mesajları da silinecek. Bu işlem geri alınamaz.\n\nEmin misiniz?`)) return;
+  if(!confirm('Son onay: bu kullanıcıyı ve tüm verilerini silmek istiyor musunuz?')) return;
+
+  try{
+    const silinecekMedya=[];
+    const yazimlar=[]; // {ref, tur:'sil'|'guncelle', veri}
+
+    // Tüm şiirleri sunucudan çek
+    const tumPostSnap = await db.collection('posts').get();
+    tumPostSnap.docs.forEach(doc=>{
+      const p = doc.data();
+      if(p.authorId===userId){
+        yazimlar.push({ref:doc.ref, tur:'sil'});
+        silinecekMedya.push(p.image, p.audioUrl);
+        return;
+      }
+      const guncelle={};
+      // Puan
+      if(p.userRatings && Object.prototype.hasOwnProperty.call(p.userRatings,userId)){
+        const yeni={...p.userRatings}; delete yeni[userId];
+        guncelle.userRatings=yeni;
+      }
+      // Tepkiler
+      if(p.reactions){
+        const yeniR={...p.reactions}; let degisti=false;
+        ['like','dislike','heart'].forEach(t=>{
+          if((yeniR[t]||[]).includes(userId)){ yeniR[t]=yeniR[t].filter(x=>x!==userId); degisti=true; }
+        });
+        if(degisti) guncelle.reactions=yeniR;
+      }
+      // Yorumlar (kullanıcının yorumları + onlara verilen yanıtlar)
+      if(Array.isArray(p.comments) && p.comments.length){
+        const silinenIds=new Set(p.comments.filter(c=>c.authorId===userId).map(c=>c.id));
+        if(silinenIds.size){
+          let degisti=true;
+          while(degisti){
+            degisti=false;
+            p.comments.forEach(c=>{ if(c.parentId && silinenIds.has(c.parentId) && !silinenIds.has(c.id)){ silinenIds.add(c.id); degisti=true; } });
+          }
+          guncelle.comments=p.comments.filter(c=>!silinenIds.has(c.id));
+        }
+      }
+      if(Object.keys(guncelle).length) yazimlar.push({ref:doc.ref, tur:'guncelle', veri:guncelle});
+    });
+
+    // Mesajlar ve bildirimler
+    const [m1,m2,n1,n2] = await Promise.all([
+      db.collection('msgs').where('fromId','==',userId).get(),
+      db.collection('msgs').where('toId','==',userId).get(),
+      db.collection('notifs').where('toId','==',userId).get(),
+      db.collection('notifs').where('fromId','==',userId).get()
+    ]);
+    [m1,m2,n1,n2].forEach(snap=>snap.docs.forEach(d=>yazimlar.push({ref:d.ref, tur:'sil'})));
+
+    // Kullanıcı kaydı
+    yazimlar.push({ref:db.collection('users').doc(userId), tur:'sil'});
+    silinecekMedya.push(hedef.avatarUrl, hedef.coverUrl);
+
+    // Firestore batch (en fazla 500 işlem/batch)
+    for(let i=0;i<yazimlar.length;i+=400){
+      const batch=db.batch();
+      yazimlar.slice(i,i+400).forEach(y=>{
+        if(y.tur==='sil') batch.delete(y.ref); else batch.update(y.ref,y.veri);
+      });
+      await batch.commit();
+    }
+
+    // Yerel durumu güncelle
+    S.posts = S.posts.filter(p=>p.authorId!==userId).map(p=>{
+      const q={...p};
+      if(q.userRatings && userId in q.userRatings){ q.userRatings={...q.userRatings}; delete q.userRatings[userId]; }
+      if(q.reactions){ q.reactions={...q.reactions}; ['like','dislike','heart'].forEach(t=>{ q.reactions[t]=(q.reactions[t]||[]).filter(x=>x!==userId); }); }
+      if(Array.isArray(q.comments)){
+        const sil=new Set(q.comments.filter(c=>c.authorId===userId).map(c=>c.id));
+        let d=true; while(d){ d=false; q.comments.forEach(c=>{ if(c.parentId&&sil.has(c.parentId)&&!sil.has(c.id)){sil.add(c.id);d=true;} }); }
+        if(sil.size) q.comments=q.comments.filter(c=>!sil.has(c.id));
+      }
+      return q;
+    });
+    S.users = S.users.filter(u=>u.id!==userId);
+    S.msgs  = S.msgs.filter(m=>m.fromId!==userId && m.toId!==userId);
+    S.notifs= (S.notifs||[]).filter(n=>n.fromId!==userId && n.toId!==userId);
+    const yeniFollows={};
+    Object.entries(S.follows||{}).forEach(([k,l])=>{ if(k!==userId) yeniFollows[k]=(l||[]).filter(x=>x!==userId); });
+    S.follows=yeniFollows;
+    lsSet('yo_users',S.users); lsSet('yo_msgs',S.msgs); lsSet('yo_notifs',S.notifs);
+    save();
+
+    eskiMedyaTemizle(silinecekMedya);
+    alert(`@${hedef.username} ve tüm verileri silindi.`);
+    go('feed');
+  }catch(err){
+    console.error('Kullanıcı silme hatası:',err);
+    alert('Kullanıcı silinirken bir hata oluştu: '+(err?.message||err)+'\nBazı veriler silinmemiş olabilir; işlemi tekrar deneyebilirsiniz.');
+  }
+};
 A.toggleFollow = function(tid){
   if(!S.me) return;
   const l=S.follows[S.me.id]||[];
@@ -5509,6 +5622,12 @@ function Profile(){
     }},'✉️ Mesaj Gönder');
     card.appendChild(fb);
     card.appendChild(mb);
+  }
+  // Admin, başka bir kullanıcının profilinde o kullanıcıyı tüm verileriyle silebilir.
+  if(isAdminViewer && !isMe && user.username!==ADMIN_USERNAME){
+    card.appendChild(h('div',{style:{marginTop:'14px'}},[
+      h('button',{class:'btn',style:{background:'#2a0f14',color:'#fca5a5',border:'1px solid #7f1d1d',borderRadius:'999px',padding:'10px 22px',fontSize:'.95rem',fontFamily:"'Crimson Text',serif",fontWeight:'600'},onclick:()=>A.deleteUser(user.id)},'🗑 Kullanıcıyı Sil')
+    ]));
   }
 
   // Admin paneli
