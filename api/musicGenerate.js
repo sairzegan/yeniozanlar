@@ -2,7 +2,97 @@
 // depolama) kullanılıyor. put()/del()'in imzası/dönüş değeri birebir aynı
 // olduğu için aşağıdaki kodda (eski dosyayı silme, yeni dosyayı yükleme)
 // BAŞKA HİÇBİR ŞEY değişmedi.
-import { put, del } from "./_lib/storage.js";
+import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
+
+// ============================================================
+// CLOUDFLARE R2 (Cloudinary kotası dolduğu için depolama R2'ye taşındı)
+// ttsGenerate.js / flux-image.js ile aynı ortam değişkenleri:
+//   R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME, R2_PUBLIC_URL
+// R2 başarısız olursa GitHub + jsDelivr yedeği (GITHUB_OWNER/REPO/TOKEN) denenir.
+// ============================================================
+const R2_GUVENLIK_LIMITI = 9 * 1024 * 1024 * 1024;
+function r2AyAnahtari() {
+  const d = new Date();
+  return `_meta/r2-kullanim-${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}.json`;
+}
+async function r2KullanimOku(client, bucket) {
+  try {
+    const r = await client.send(new GetObjectCommand({ Bucket: bucket, Key: r2AyAnahtari() }));
+    return Number(JSON.parse(await r.Body.transformToString())?.bytes) || 0;
+  } catch (_) { return 0; }
+}
+function r2KullanimYaz(client, bucket, bytes) {
+  client.send(new PutObjectCommand({ Bucket: bucket, Key: r2AyAnahtari(), Body: JSON.stringify({ bytes }), ContentType: "application/json" })).catch(() => {});
+}
+function getR2Client() {
+  const accountId = String(process.env.R2_ACCOUNT_ID || "").trim();
+  const accessKeyId = String(process.env.R2_ACCESS_KEY_ID || "").trim();
+  const secretAccessKey = String(process.env.R2_SECRET_ACCESS_KEY || "").trim();
+  if (!accountId || !accessKeyId || !secretAccessKey) {
+    throw new Error("R2 ortam değişkenleri eksik: R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY gerekli.");
+  }
+  return new S3Client({
+    endpoint: `https://${accountId}.r2.cloudflarestorage.com`,
+    region: "auto",
+    credentials: { accessKeyId, secretAccessKey },
+    requestChecksumCalculation: "WHEN_REQUIRED",
+    requestChecksumValidation: "WHEN_REQUIRED",
+    responseChecksumCalculation: "WHEN_REQUIRED",
+    responseChecksumValidation: "WHEN_REQUIRED",
+  });
+}
+async function uploadToR2(buffer, key, contentType) {
+  const bucket = String(process.env.R2_BUCKET_NAME || "").trim();
+  const publicBase = String(process.env.R2_PUBLIC_URL || "").trim().replace(/\/+$/, "");
+  if (!bucket) throw new Error("R2_BUCKET_NAME ortam değişkeni eksik.");
+  if (!publicBase) throw new Error("R2_PUBLIC_URL ortam değişkeni eksik.");
+  const client = getR2Client();
+  const mevcut = await r2KullanimOku(client, bucket);
+  if (mevcut + buffer.length > R2_GUVENLIK_LIMITI) throw new Error("R2 aylık güvenlik limiti (9GB) aşılıyor.");
+  await client.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: buffer, ContentType: contentType }));
+  r2KullanimYaz(client, bucket, mevcut + buffer.length);
+  return `${publicBase}/${key}`;
+}
+async function uploadToGithubFallback(buffer, key, commitMessage) {
+  const owner = String(process.env.GITHUB_OWNER || "").trim();
+  const repo = String(process.env.GITHUB_REPO || "").trim();
+  const token = String(process.env.GITHUB_TOKEN || "").trim();
+  const branch = String(process.env.GITHUB_BRANCH || "main").trim();
+  if (!owner || !repo || !token) throw new Error("GitHub yedek depolama için GITHUB_OWNER, GITHUB_REPO, GITHUB_TOKEN gerekli.");
+  const response = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${key}`, {
+    method: "PUT",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/vnd.github+json",
+      "Content-Type": "application/json",
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+    body: JSON.stringify({ message: commitMessage || `Yedek yükleme: ${key}`, content: buffer.toString("base64"), branch }),
+    signal: AbortSignal.timeout(30000),
+  });
+  if (!response.ok) {
+    const raw = await response.text().catch(() => "");
+    throw new Error(`GitHub yedek yükleme başarısız: HTTP ${response.status} — ${raw.slice(0, 300)}`);
+  }
+  return `https://cdn.jsdelivr.net/gh/${owner}/${repo}@${branch}/${key}`;
+}
+async function uploadWithFallback(buffer, key, contentType, commitMessage) {
+  try {
+    return await uploadToR2(buffer, key, contentType);
+  } catch (r2Err) {
+    console.error("R2 upload başarısız, GitHub yedeğine geçiliyor:", r2Err?.message || r2Err);
+    return await uploadToGithubFallback(buffer, key, commitMessage);
+  }
+}
+// Sadece kendi R2 bucket'ımıza ait eski müzik dosyasını siler (en iyi çaba).
+async function eskiR2DosyasiniSil(url) {
+  try {
+    const publicBase = String(process.env.R2_PUBLIC_URL || "").trim().replace(/\/+$/, "");
+    if (!publicBase || typeof url !== "string" || !url.startsWith(publicBase + "/")) return;
+    const key = decodeURIComponent(url.slice(publicBase.length + 1).split("?")[0]);
+    await getR2Client().send(new DeleteObjectCommand({ Bucket: String(process.env.R2_BUCKET_NAME || "").trim(), Key: key }));
+  } catch (_) {}
+}
 // NOT: aceStepHfSpaceIleUret ARTIK en üstte statik olarak değil, aşağıda
 // (aceStepHfSpaceKatmaniniDene içinde) DİNAMİK olarak import ediliyor.
 // Sebep: @gradio/client paketi bir nedenle (eksik kurulum, Vercel'in Node
@@ -166,8 +256,8 @@ export default async function handler(req, res) {
     res.setHeader("Allow", "POST");
     return res.status(405).json({ error: "Sadece POST." });
   }
-  if (!process.env.CLOUDINARY_CLOUD_NAME || !process.env.CLOUDINARY_API_KEY || !process.env.CLOUDINARY_API_SECRET) {
-    return res.status(500).json({ error: "Cloudinary ortam değişkenleri eksik (CLOUDINARY_CLOUD_NAME / CLOUDINARY_API_KEY / CLOUDINARY_API_SECRET tanımlı mı?)." });
+  if (!process.env.R2_BUCKET_NAME || !process.env.R2_PUBLIC_URL) {
+    return res.status(500).json({ error: "R2 ortam değişkenleri eksik (R2_BUCKET_NAME / R2_PUBLIC_URL tanımlı mı?)." });
   }
 
   const { postId, musicPrompt, oldMusicUrl } = req.body || {};
@@ -216,21 +306,15 @@ export default async function handler(req, res) {
     // gelen tam URL'den, yoksa eski sabit isimden) Blob'dan siliyoruz ki
     // eski veri birikmesin.
     if (oldMusicUrl) {
-      await del(String(oldMusicUrl)).catch(() => {});
+      await eskiR2DosyasiniSil(String(oldMusicUrl));
     }
-    await del(`audio/${cleanPostId}-music.mp3`).catch(() => {});
 
     const benzersizDosyaAdi = `audio/${cleanPostId}-music-${Date.now()}.mp3`;
-    const blob = await put(benzersizDosyaAdi, buffer, {
-      access: "public",
-      contentType: "audio/mpeg",
-      addRandomSuffix: false,
-      cacheControlMaxAge: 31536000,
-    });
+    const musicUrl = await uploadWithFallback(buffer, benzersizDosyaAdi, "audio/mpeg", `Müzik: ${cleanPostId}`);
 
     // NOT: Dosya yolu artık zaten benzersiz (zaman damgalı) olduğu için
     // ayrıca bir "?v=" sürüm parametresi eklemeye gerek yok.
-    return res.status(200).json({ musicUrl: blob.url, prompt: musicPrompt || "", kaynak });
+    return res.status(200).json({ musicUrl, prompt: musicPrompt || "", kaynak });
   } catch (e) {
     console.error("musicGenerate HATASI (Blob yükleme):", e);
     return res.status(502).json({ error: kullaniciDostuHataMesaji(e) });

@@ -185,12 +185,19 @@ const ACE_ENDPOINT = "https://api.acemusic.ai/v1/chat/completions";
 const ACE_TIMEOUT_MS = 90000;
 const ACE_MAX_SIIR_KARAKTER = 1200; // daha uzun şiirler şarkıya sığmaz -> Edge TTS ile tam okunur
 
+// ŞARKI DEĞİL, ŞİİR OKUMA: prompt "spoken word / poetry recitation" üzerine kurulu.
+// "ballad, vocal, melody" gibi şarkıyı çağrıştıran kelimeler bilerek kullanılmıyor.
+const ACE_ORTAK =
+  "spoken word poetry recitation, a single voice reading the poem aloud in Turkish, " +
+  "speaking not singing, no singing, no melody, no chorus, no rap, no autotune, " +
+  "natural speech rhythm with gentle pauses between lines, close intimate microphone, " +
+  "very quiet minimal ambient background pad, no drums, no beat";
 const ACE_STIL = {
-  huzunlu:  "slow melancholic ballad, soft piano, sad emotional vocal, intimate and gentle",
-  romantik: "romantic slow ballad, warm acoustic guitar and strings, tender vocal",
-  dramatik: "dramatic cinematic ballad, deep emotional male vocal, piano and strings, powerful",
-  sakin:    "calm ambient ballad, soft piano, gentle soothing vocal, peaceful and reflective",
-  tutkulu:  "passionate emotional ballad, expressive male vocal, guitar and strings, intense",
+  huzunlu:  ACE_ORTAK + ", soft sad female voice, slow, melancholic, tender",
+  romantik: ACE_ORTAK + ", warm soft female voice, slow, romantic, tender",
+  dramatik: ACE_ORTAK + ", deep male voice, slow, dramatic, serious, cinematic",
+  sakin:    ACE_ORTAK + ", calm soothing female voice, slow, peaceful, reflective",
+  tutkulu:  ACE_ORTAK + ", expressive male voice, passionate, emotional, slightly faster",
 };
 
 function aceKullanilabilirMi(cleanText) {
@@ -201,7 +208,7 @@ function aceKullanilabilirMi(cleanText) {
 
 async function aceStepIleSesUret(title, cleanText, voiceKey) {
   const stil = ACE_STIL[voiceKey] || ACE_STIL[VARSAYILAN_SES];
-  const lyrics = "[Verse]\n" + cleanText.replace(/\r/g, "").replace(/\n{3,}/g, "\n\n");
+  const lyrics = "[Spoken Word]\n" + cleanText.replace(/\r/g, "").replace(/\n{3,}/g, "\n\n");
   const res = await fetch(ACE_ENDPOINT, {
     method: "POST",
     headers: {
