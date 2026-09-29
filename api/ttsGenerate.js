@@ -172,6 +172,9 @@ async function uploadWithFallback(buffer, key, contentType, commitMessage) {
   }
 }
 
+// Vercel varsayılan süre sınırı (10 sn) TTS + yükleme için yetmez.
+export const maxDuration = 60;
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     res.setHeader("Allow", "POST");

@@ -516,15 +516,9 @@ export default async function handler(req, res) {
           prompt,
           // Seed göndermiyoruz: geçersiz/desteklenmeyen seed nedeniyle
           // hata oluşmasını engeller.
-          steps: 4,
-          // DÜZELTME (depolama/kota sorunu): Cloudflare varsayılan olarak 1024x1024
-          // üretiyordu, bu da R2/GitHub'a giden her dosyayı gereksiz yere
-          // büyütüyordu. Şiir kartlarında görsel zaten 16:9 gösteriliyor, o yüzden
-          // üretimi de doğrudan bu orana ve daha küçük bir çözünürlüğe indiriyoruz.
-          // Bu tek başına dosya boyutunu (piksel sayısı ~%50-60 azalarak) belirgin
-          // biçimde küçültür; flux-1-schnell 8'in katları olan boyutları kabul eder.
-          width: 768,
-          height: 432
+          // Cloudflare flux-1-schnell şeması SADECE prompt, steps (ve seed) kabul eder.
+          // width/height gönderilirse 400 "Additional properties not allowed" hatası verir.
+          steps: 4
         })
       },
       TIMEOUT_MS
