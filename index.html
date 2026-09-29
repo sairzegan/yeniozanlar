@@ -4506,11 +4506,12 @@ function postCard(post, forceExpand=false, autoOpenComments=false, hedefYorumId=
       aiAudioBtn.disabled=true; aiAudioBtn.textContent='⏳ Ses hazırlanıyor...';
       revalStatus.style.display='block'; revalStatus.style.color='#6b5b8a'; revalStatus.textContent='🎙️ Şiirin tonuna uygun ses seçiliyor, seslendiriliyor...';
       try{
-        await adminSesiYenile(post);
+        const sesSonuc=await adminSesiYenile(post);
+        window.__sonSesSonuc=sesSonuc;
         refreshCard(post.id);
         const newCard=document.querySelector('[data-pid="'+post.id+'"]');
         const newStatus=newCard?newCard.querySelector('.reval-status'):null;
-        if(newStatus){newStatus.style.display='block';newStatus.textContent='✅ Ses oluşturuldu!';newStatus.style.color='#34d399';}
+        if(newStatus){newStatus.style.display='block';newStatus.textContent='✅ Ses oluşturuldu! Motor: '+(window.__sonSesSonuc?.engine==='ace-step'?'ACE-Step (yapay zeka vokal)':'Edge TTS (düz okuma)')+(window.__sonSesSonuc?.aceError?' — ACE-Step hatası: '+window.__sonSesSonuc.aceError:'');newStatus.style.color='#34d399';}
       }catch(err){
         revalStatus.textContent='❌ Ses hatası: '+err.message;
         revalStatus.style.color='#f87171';
