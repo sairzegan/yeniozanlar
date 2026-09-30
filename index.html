@@ -417,7 +417,7 @@ function canliArayuzuTazele(){
 }
 
 function canliDinleyicileriBaslat(){
-  if(!S.me || S.me.id==='admin_root') return;
+  if(!S.me) return;
   if(_canliKullaniciId === S.me.id && _canliUnsubs.length) return;
   canliDinleyicileriDurdur();
   const benId = S.me.id;
@@ -2505,6 +2505,7 @@ const A = {
       }
       S.loading = false; 
       save();
+      canliDinleyicileriBaslat();
       go('feed');
       render();
       return null;
@@ -3089,6 +3090,9 @@ JSON: {"voiceKey":"...", "stability":0.0, "style":0.0}`
 // Bu yüzden her audio oluşturulduğunda buraya kaydedilir; render() ekranı
 // yeniden çizmeden HEMEN ÖNCE bu kayıttaki TÜM sesleri durdurup listeyi temizler.
 const TUM_SES_KAYITLARI = new Set();
+// Aynı ses adresi için TEK Audio nesnesi: kart yeniden çizilse bile eski nesne
+// arkada çalmaya devam edip çift ses oluşturmasın.
+const SES_URL_HARITASI = new Map();
 
 // Paylaşım detayında ve kaydırma modunda kullanılan ortak, mor-yeşil temalı
 // ses oynatıcı: oynat/duraklat, durdur, ses seviyesi, süre çubuğu. new Audio()
@@ -3149,7 +3153,11 @@ function sesOynaticiOlustur(audioUrl,opts={}){
     }
     return {el:wrap,audio:null};
   }
-  const audio=new Audio(audioUrl);
+  let audio=SES_URL_HARITASI.get(audioUrl);
+  if(!audio){
+    audio=new Audio(audioUrl);
+    SES_URL_HARITASI.set(audioUrl,audio);
+  }
   TUM_SES_KAYITLARI.add(audio);
   audio.preload='none'; // Akıştaki onlarca oynatıcı aynı anda indirmeye başlayıp telefonu kilitliyordu
   audio.volume=0.9;
@@ -3158,7 +3166,7 @@ function sesOynaticiOlustur(audioUrl,opts={}){
   const wrap=h('div',{style:{display:'flex',alignItems:'center',flexWrap:'wrap',gap:'8px',background:'#0f0a1a',border:'1px solid #2d1b52',borderRadius:'14px',padding:'8px 12px',marginBottom:'14px'},onclick:(e)=>e.stopPropagation()});
   const label=h('span',{style:{fontSize:'.72rem',color:'#a78bfa',flexShrink:'0',whiteSpace:'nowrap',width:'100%'}},etiketMetni);
   const playBtn=h('button',{class:'btn',style:{background:gradyan,border:'none',borderRadius:'50%',width:'34px',height:'34px',display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontSize:'.95rem',flexShrink:'0',padding:'0',lineHeight:'1'},
-    onclick:(e)=>{e.stopPropagation(); if(audio.paused){ if(audio.error||audio.networkState===audio.NETWORK_NO_SOURCE){ try{audio.load();}catch(_){} } audio.play().catch(()=>{ try{audio.load(); audio.play().catch(()=>{});}catch(_){} }); } else audio.pause();}
+    onclick:(e)=>{e.stopPropagation(); if(!audio.paused){ audio.pause(); return; } if(audio.error||audio.networkState===audio.NETWORK_NO_SOURCE){ try{audio.load();}catch(_){} } const p=audio.play(); if(p&&p.catch) p.catch((err)=>{ if(err&&err.name==='AbortError') return; try{audio.load(); audio.play().catch(()=>{});}catch(_){} });}
   },'▶️');
   const stopBtn=h('button',{class:'btn',style:{background:'#1a0f2e',border:'1px solid #3d1f6e',borderRadius:'50%',width:'28px',height:'28px',display:'flex',alignItems:'center',justifyContent:'center',color:'#a78bfa',fontSize:'.75rem',flexShrink:'0',padding:'0',lineHeight:'1'},
     onclick:(e)=>{e.stopPropagation(); audio.pause(); audio.currentTime=0;}
@@ -3194,6 +3202,10 @@ function sesOynaticiOlustur(audioUrl,opts={}){
   audio.addEventListener('play',()=>{playBtn.textContent='⏸️';});
   audio.addEventListener('pause',()=>{playBtn.textContent='▶️';});
   audio.addEventListener('ended',()=>{playBtn.textContent='▶️'; seekSlider.value='0'; gecenSure.textContent='0:00';});
+  if(!audio.paused) playBtn.textContent='⏸️';
+  sureBilgisiGuncelle();
+  seekSlider.value=String(audio.currentTime||0);
+  gecenSure.textContent=suretMetniFormatla(audio.currentTime||0);
   wrap.appendChild(label);
   wrap.appendChild(playBtn);
   wrap.appendChild(stopBtn);
@@ -6348,6 +6360,7 @@ function render(){
   // görünmeyen) audio nesneleri arka planda sessizce çalmaya devam edebiliyordu.
   TUM_SES_KAYITLARI.forEach(a=>{ try{ a.pause(); }catch(_){} });
   TUM_SES_KAYITLARI.clear();
+  SES_URL_HARITASI.clear();
   iframeleriBosalt(app);
   AKTIF_YT.length=0;
   app.innerHTML='';
