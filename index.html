@@ -202,7 +202,20 @@ const postSirala = arr => arr.sort((a,b)=>{
   return (b.ts||parseDate(b.date))-(a.ts||parseDate(a.date));
 });
 
+// Ayın şiirleri sorgusu diğer sorgularla PARALEL başlar (eskiden art arda bekleniyordu).
+function ayinSiirleriSorgusuBaslat(){
+  try{
+    const turkeyParts = new Intl.DateTimeFormat('en-US',{timeZone:'Europe/Istanbul',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());
+    const ty = Number(turkeyParts.find(x=>x.type==='year')?.value);
+    const tm = Number(turkeyParts.find(x=>x.type==='month')?.value);
+    const bas = Date.UTC(ty,tm-1,1) - (3*60*60*1000);
+    const son = Date.UTC(ty,tm,1) - (3*60*60*1000);
+    return db.collection('posts').where('ts','>=',bas).where('ts','<',son).orderBy('ts','desc').get().catch(()=>null);
+  }catch(e){ return Promise.resolve(null); }
+}
+
 async function verileriYukle() {
+  const aySorgusu = ayinSiirleriSorgusuBaslat();
   try {
     // 1. AŞAMA — HIZLI AÇILIŞ: kullanıcıları ve yalnızca EN YENİ ~30 şiiri çekiyoruz.
     // Önceden TÜM şiirler (içlerindeki tüm resimlerle birlikte) her açılışta tek seferde
@@ -222,8 +235,13 @@ async function verileriYukle() {
     lsSet('yo_users', S.users);
 
     if (sonPostsSnapshot && sonPostsSnapshot.docs.length) {
-      S.posts = postSirala(sonPostsSnapshot.docs.map(doc => doc.data()));
-      lsSet('yo_posts', S.posts);
+      // ÖNCEKİ HATA: önbellekteki tüm şiirler burada yalnızca son 30 şiirle DEĞİŞTİRİLİYORDU;
+      // sıralama sayfası ~100 şiirle kalıyor, tam liste için sayfayı yenileyip beklemek gerekiyordu.
+      // Artık yeni gelenler mevcut listeye eklenir/güncellenir.
+      const mevcut1 = new Map(S.posts.map(post => [post.id, post]));
+      sonPostsSnapshot.docs.forEach(doc => { const d = doc.data(); mevcut1.set(d.id, d); });
+      S.posts = postSirala(Array.from(mevcut1.values()));
+      postOnbellegeYaz(S.posts);
     }
 
     // AYIN ŞİİRLERİ için yalnızca en yeni 30 şiire güvenme.
@@ -244,19 +262,14 @@ async function verileriYukle() {
       const ayBaslangicMs = Date.UTC(ty, tm - 1, 1) - (3 * 60 * 60 * 1000);
       const sonrakiAyBaslangicMs = Date.UTC(ty, tm, 1) - (3 * 60 * 60 * 1000);
 
-      const aySnapshot = await db.collection('posts')
-        .where('ts', '>=', ayBaslangicMs)
-        .where('ts', '<', sonrakiAyBaslangicMs)
-        .orderBy('ts', 'desc')
-        .get()
-        .catch(() => null);
+      const aySnapshot = await aySorgusu;
 
       if (aySnapshot && aySnapshot.docs.length) {
         const ayPosts = aySnapshot.docs.map(doc => doc.data());
         const mevcut = new Map(S.posts.map(post => [post.id, post]));
         ayPosts.forEach(post => mevcut.set(post.id, post));
         S.posts = postSirala(Array.from(mevcut.values()));
-        lsSet('yo_posts', S.posts);
+        postOnbellegeYaz(S.posts);
       }
     } catch (e) {
       console.warn('Ayın şiirleri verisi alınamadı:', e);
@@ -269,7 +282,7 @@ async function verileriYukle() {
         const dogPost = await db.collection("posts").doc(S.postId).get();
         if (dogPost.exists) {
           S.posts = postSirala([...S.posts, dogPost.data()]);
-          lsSet('yo_posts', S.posts);
+          postOnbellegeYaz(S.posts);
         }
       } catch {}
     }
@@ -305,6 +318,7 @@ async function verileriYukle() {
     }
     render();
     bildirimDinleyiciBaslat();
+    adminEskiBildirimTemizligi();
     // 2. AŞAMA — kullanıcı akışı görmeye başladıktan SONRA, arka planda geri kalan
     // (eski) şiirleri, mesajları ve bildirimleri sessizce tamamlıyoruz. Bu aşama
     // sıralama/keşfet gibi TÜM şiirlere ihtiyaç duyan ekranların doğruluğu içindir.
@@ -320,17 +334,22 @@ async function tumVeriyiArkaplandaTamamla(){
     // şiirleri (1. aşama) yenileniyor.
     const TAM_SENKRON_ARALIK = 30*60*1000;
     const sonTam = Number(lsGet('yo_tamSenkronTs', 0)) || 0;
-    if((S.posts||[]).length > 30 && Date.now() - sonTam < TAM_SENKRON_ARALIK){
+    const tamSayi = Number(lsGet('yo_tamSayi', 0)) || 0;
+    // Yalnızca önbellek GERÇEKTEN tam ise (son tam senkrondaki şiir sayısına ulaşıyorsa) atla.
+    // Eski koşul "30'dan fazla şiir varsa" idi; ay şiirleriyle ~100'e çıkan eksik liste de
+    // "tam" sayılıp 30 dakika boyunca eksik kalıyordu.
+    if(tamSayi > 0 && (S.posts||[]).length >= tamSayi && Date.now() - sonTam < TAM_SENKRON_ARALIK){
       S.tumPostlarHazir = true;
       return;
     }
     const postsSnapshot = await db.collection("posts").get().catch(err => { firestoreHataBildir(err); return { docs: [] }; });
-    if(postsSnapshot.docs.length) lsSet('yo_tamSenkronTs', Date.now());
-
     const tumPostlar = postsSnapshot.docs.length ? postsSnapshot.docs.map(doc => doc.data()) : [];
     if(tumPostlar.length){
       S.posts = postSirala(tumPostlar);
-      lsSet('yo_posts', S.posts);
+      const yazim = postOnbellegeYaz(S.posts);
+      // Önbellek tam yazılamadıysa bir sonraki açılışta tekrar tam senkron yapılsın.
+      lsSet('yo_tamSayi', yazim==='tam' ? S.posts.length : 0);
+      lsSet('yo_tamSenkronTs', Date.now());
     }
     S.tumPostlarHazir = true;
 
@@ -383,6 +402,7 @@ function canliDinleyicileriDurdur(){
   _canliUnsubs.forEach(fn => { try{ fn(); }catch(_){} });
   _canliUnsubs = [];
   _canliKullaniciId = null;
+  _eskiBildirimTemizlendi = false;
   _msgKutusu = { gelen: [], giden: [] };
 }
 
@@ -407,6 +427,7 @@ function canliDinleyicileriBaslat(){
   _canliUnsubs.push(db.collection("notifs").where("toId","==",benId).onSnapshot(snapshot=>{
     S.notifs = snapshot.docs.map(doc=>doc.data()).sort(zamanAzalan);
     lsSet('yo_notifs', S.notifs);
+    eskiBildirimleriTemizle();
     canliArayuzuTazele();
   }, err=>firestoreHataBildir(err)));
 
@@ -485,7 +506,17 @@ function ytOynatici(id,opts={}){
 }
 const ytId=url=>{const m=url?.match(/(?:youtu\.be\/|v=|embed\/)([A-Za-z0-9_-]{11})/);return m?m[1]:null};
 function lsGet(k,d){try{const v=localStorage.getItem(k);return v?JSON.parse(v):d}catch{return d}}
-function lsSet(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch{}}
+function lsSet(k,v){try{localStorage.setItem(k,JSON.stringify(v));return true}catch{return false}}
+// Şiir önbelleği: 500+ şiir localStorage'ın ~5MB sınırını aşınca yazma SESSİZCE başarısız
+// oluyor ve önbellek eski/eksik kalıyordu. Önce tam yazılır; olmazsa base64 (data:) görseller
+// çıkarılarak hafif kopya yazılır. Dönüş: 'tam' | 'hafif' | 'yok'
+function postOnbellegeYaz(posts){
+  if(lsSet('yo_posts',posts)) return 'tam';
+  const hafif=posts.map(p=>(typeof p.image==='string'&&p.image.startsWith('data:'))?{...p,image:''}:p);
+  if(lsSet('yo_posts',hafif)) return 'hafif';
+  try{localStorage.removeItem('yo_posts')}catch{}
+  return 'yok';
+}
 
 // Bir şiirin, başka sitelerde/uygulamalarda paylaşılabilecek özel linkini üretir.
 // Facebook/WhatsApp gibi sitelerin önizleme botları JavaScript çalıştırmaz; bu
@@ -2441,7 +2472,7 @@ function mesajBildirimRozetGuncelle(){
   });
 }
 
-function save(){lsSet('yo_users',S.users);lsSet('yo_posts',S.posts);lsSet('yo_me',S.me);lsSet('yo_follows',S.follows);lsSet('yo_msgs',S.msgs)}
+function save(){lsSet('yo_users',S.users);postOnbellegeYaz(S.posts);lsSet('yo_me',S.me);lsSet('yo_follows',S.follows);lsSet('yo_msgs',S.msgs)}
 
 const A = {
   register(u, p){
@@ -3901,6 +3932,73 @@ A.deleteComment = function(pid,cid){
 //  • gönderdiği/aldığı mesajlar ve bildirimler
 //  • kullanıcı kaydı (users) ve yerel takip bağlantıları
 // Firestore'daki TÜM şiirler sunucudan taranır (yerel liste eksik olabilir).
+// ── BİLDİRİM TEMİZLİĞİ ───────────────────────────────────────────────────────
+const BILDIRIM_OMUR_MS = 30*24*60*60*1000; // 1 ay
+
+async function bildirimleriBatchSil(refler){
+  for(let i=0;i<refler.length;i+=400){
+    const batch=db.batch();
+    refler.slice(i,i+400).forEach(r=>batch.delete(r));
+    await batch.commit();
+  }
+}
+
+// Her kullanıcı, KENDİ bildirimlerinden 1 aydan eskileri siler. Bildirimler zaten canlı
+// dinleyiciyle bellekte olduğu için ek OKUMA maliyeti yoktur; yalnızca silme (yazma) yapılır.
+let _eskiBildirimTemizlendi = false;
+function eskiBildirimleriTemizle(){
+  if(_eskiBildirimTemizlendi || !S.me || S.me.id==='admin_root') return;
+  _eskiBildirimTemizlendi = true;
+  const sinir = Date.now() - BILDIRIM_OMUR_MS;
+  const eskiler = (S.notifs||[]).filter(n => { const t=kayitZamani(n); return t && t < sinir; });
+  if(!eskiler.length) return;
+  bildirimleriBatchSil(eskiler.map(n=>db.collection('notifs').doc(n.id))).then(()=>{
+    const silinen=new Set(eskiler.map(n=>n.id));
+    S.notifs=(S.notifs||[]).filter(n=>!silinen.has(n.id));
+    lsSet('yo_notifs',S.notifs);
+  }).catch(err=>{ _eskiBildirimTemizlendi=false; firestoreHataBildir(err); });
+}
+
+// Admin: herkesin 1 aydan eski bildirimlerini günde en fazla 1 kez temizler.
+// Sorgu yalnızca silinecek kayıtları okur (okuma = silinen sayısı).
+async function adminEskiBildirimTemizligi(){
+  if(S.me?.username!==ADMIN_USERNAME) return;
+  const son=Number(lsGet('yo_bildirimTemizlikTs',0))||0;
+  if(Date.now()-son < 24*60*60*1000) return;
+  try{
+    const sinir=Date.now()-BILDIRIM_OMUR_MS;
+    for(let tur=0; tur<5; tur++){
+      const snap=await db.collection('notifs').where('ts','<',sinir).limit(400).get();
+      if(!snap.docs.length) break;
+      await bildirimleriBatchSil(snap.docs.map(d=>d.ref));
+      if(snap.docs.length<400) break;
+    }
+    lsSet('yo_bildirimTemizlikTs',Date.now());
+  }catch(err){ firestoreHataBildir(err); }
+}
+
+// Admin düğmesi: birikmiş TÜM bildirimleri siler.
+A.tumBildirimleriSil = async function(){
+  if(S.me?.username!==ADMIN_USERNAME) return;
+  if(!confirm('Tüm kullanıcıların BİRİKMİŞ bildirimleri kalıcı olarak silinecek. Emin misiniz?')) return;
+  try{
+    let toplam=0;
+    for(let tur=0; tur<50; tur++){
+      const snap=await db.collection('notifs').limit(400).get();
+      if(!snap.docs.length) break;
+      await bildirimleriBatchSil(snap.docs.map(d=>d.ref));
+      toplam+=snap.docs.length;
+      if(snap.docs.length<400) break;
+    }
+    S.notifs=[]; lsSet('yo_notifs',[]);
+    toastGoster(`${toplam} bildirim silindi.`);
+    render();
+  }catch(err){
+    firestoreHataBildir(err);
+    toastGoster('Bildirimler silinemedi: '+(err?.message||err));
+  }
+};
+
 A.deleteUser = async function(userId){
   if(S.me?.username!==ADMIN_USERNAME) return;
   const hedef = S.users.find(u=>u.id===userId);
@@ -5777,6 +5875,11 @@ function Profile(){
     }},'✉️ Mesaj Gönder');
     card.appendChild(fb);
     card.appendChild(mb);
+  }
+  if(isAdminViewer && isMe){
+    card.appendChild(h('div',{style:{marginTop:'14px'}},[
+      h('button',{class:'btn',style:{background:'#2a0f14',color:'#fca5a5',border:'1px solid #7f1d1d',borderRadius:'999px',padding:'10px 22px',fontSize:'.95rem',fontFamily:"'Crimson Text',serif",fontWeight:'600'},onclick:()=>A.tumBildirimleriSil()},'🧹 Birikmiş Bildirimleri Sil')
+    ]));
   }
   // Admin, başka bir kullanıcının profilinde o kullanıcıyı tüm verileriyle silebilir.
   if(isAdminViewer && !isMe && user.username!==ADMIN_USERNAME){
