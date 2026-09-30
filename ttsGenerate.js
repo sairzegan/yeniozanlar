@@ -165,7 +165,35 @@ async function uploadWithFallback(buffer, key, contentType, commitMessage) {
 // ACE-Step (acemusic.ai)
 // ============================================================
 const ACE_ENDPOINT = "https://api.acemusic.ai/v1/chat/completions";
-const ACE_MAX_SIIR_KARAKTER = 1200;
+const ACE_PARCA_KARAKTER = 1000;
+const ACE_MAX_PARCA = 4;
+
+function siiriParcala(metin) {
+  const kuple = metin.replace(/\r/g, "").split(/\n{2,}/).map((k) => k.trim()).filter(Boolean);
+  const parcalar = [];
+  let simdiki = "";
+  const ekle = (blok) => {
+    if (simdiki && (simdiki.length + blok.length + 2) > ACE_PARCA_KARAKTER) {
+      parcalar.push(simdiki);
+      simdiki = "";
+    }
+    simdiki = simdiki ? simdiki + "\n\n" + blok : blok;
+  };
+  for (const k of kuple) {
+    if (k.length <= ACE_PARCA_KARAKTER) { ekle(k); continue; }
+    let satirBlok = "";
+    for (const satir of k.split("\n")) {
+      if (satirBlok && (satirBlok.length + satir.length + 1) > ACE_PARCA_KARAKTER) {
+        ekle(satirBlok);
+        satirBlok = "";
+      }
+      satirBlok = satirBlok ? satirBlok + "\n" + satir : satir;
+    }
+    if (satirBlok) ekle(satirBlok);
+  }
+  if (simdiki) parcalar.push(simdiki);
+  return parcalar;
+}
 
 const ACE_ORTAK =
   "spoken word poetry recitation, a single voice reading the poem aloud in Turkish, " +
@@ -183,7 +211,7 @@ const ACE_STIL = {
 function aceKullanilabilirMi(cleanText) {
   if (String(process.env.SES_MOTORU || "").trim().toLowerCase() === "edge") return false;
   if (!process.env.ACE_MUSIC_API_KEY) return false;
-  return cleanText.length <= ACE_MAX_SIIR_KARAKTER;
+  return siiriParcala(cleanText).length <= ACE_MAX_PARCA;
 }
 
 async function aceStepIleSesUret(title, cleanText, voiceKey, timeoutMs) {
@@ -251,7 +279,11 @@ export default async function handler(req, res) {
       try {
         const kalan = TOPLAM_BUTCE_MS - (Date.now() - baslangic) - EDGE_TIMEOUT_MS - 12000;
         const aceSure = Math.max(10000, Math.min(ACE_TIMEOUT_MS, kalan));
-        audioBuffer = await aceStepIleSesUret(title, cleanText, secilenAnahtar, aceSure);
+        const parcalar = siiriParcala(cleanText);
+        const sesler = await Promise.all(
+          parcalar.map((parca) => aceStepIleSesUret(title, parca, secilenAnahtar, aceSure))
+        );
+        audioBuffer = Buffer.concat(sesler);
         motor = "ace-step";
       } catch (aceErr) {
         aceHata = String(aceErr?.message || aceErr).slice(0, 300);
