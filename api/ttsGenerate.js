@@ -4,12 +4,12 @@ import fs from "fs/promises";
 import os from "os";
 import path from "path";
 
-// Vercel Hobby üst sınırı 60 sn. Bunun üstü 504 verir.
-export const maxDuration = 60;
+// ACE-Step üretimi 30 sn'den uzun sürüyor; Fluid Compute ile 300 sn'ye kadar izin var.
+export const maxDuration = 300;
 
 // Toplam zaman bütçesi (ms). Fonksiyon bundan önce cevap döner.
-const TOPLAM_BUTCE_MS = 52000;
-const ACE_TIMEOUT_MS = 28000;
+const TOPLAM_BUTCE_MS = 285000;
+const ACE_TIMEOUT_MS = Number(process.env.ACE_TIMEOUT_MS) || 180000;
 const EDGE_TIMEOUT_MS = 15000;
 
 const R2_GUVENLIK_LIMITI = 9 * 1024 * 1024 * 1024;
@@ -165,7 +165,35 @@ async function uploadWithFallback(buffer, key, contentType, commitMessage) {
 // ACE-Step (acemusic.ai)
 // ============================================================
 const ACE_ENDPOINT = "https://api.acemusic.ai/v1/chat/completions";
-const ACE_MAX_SIIR_KARAKTER = 1200;
+const ACE_PARCA_KARAKTER = 1000;
+const ACE_MAX_PARCA = 4;
+
+function siiriParcala(metin) {
+  const kuple = metin.replace(/\r/g, "").split(/\n{2,}/).map((k) => k.trim()).filter(Boolean);
+  const parcalar = [];
+  let simdiki = "";
+  const ekle = (blok) => {
+    if (simdiki && (simdiki.length + blok.length + 2) > ACE_PARCA_KARAKTER) {
+      parcalar.push(simdiki);
+      simdiki = "";
+    }
+    simdiki = simdiki ? simdiki + "\n\n" + blok : blok;
+  };
+  for (const k of kuple) {
+    if (k.length <= ACE_PARCA_KARAKTER) { ekle(k); continue; }
+    let satirBlok = "";
+    for (const satir of k.split("\n")) {
+      if (satirBlok && (satirBlok.length + satir.length + 1) > ACE_PARCA_KARAKTER) {
+        ekle(satirBlok);
+        satirBlok = "";
+      }
+      satirBlok = satirBlok ? satirBlok + "\n" + satir : satir;
+    }
+    if (satirBlok) ekle(satirBlok);
+  }
+  if (simdiki) parcalar.push(simdiki);
+  return parcalar;
+}
 
 const ACE_ORTAK =
   "spoken word poetry recitation, a single voice reading the poem aloud in Turkish, " +
@@ -183,7 +211,7 @@ const ACE_STIL = {
 function aceKullanilabilirMi(cleanText) {
   if (String(process.env.SES_MOTORU || "").trim().toLowerCase() === "edge") return false;
   if (!process.env.ACE_MUSIC_API_KEY) return false;
-  return cleanText.length <= ACE_MAX_SIIR_KARAKTER;
+  return siiriParcala(cleanText).length <= ACE_MAX_PARCA;
 }
 
 async function aceStepIleSesUret(title, cleanText, voiceKey, timeoutMs) {
@@ -217,6 +245,83 @@ async function aceStepIleSesUret(title, cleanText, voiceKey, timeoutMs) {
   return buf;
 }
 
+// ============================================================
+// GEMINI TTS (ACE başarısız olursa ikinci sıra) — çıktı WAV
+// ============================================================
+const GEMINI_TTS_MODEL = String(process.env.GEMINI_TTS_MODEL || "gemini-2.5-flash-preview-tts").trim();
+const GEMINI_TIMEOUT_MS = 60000;
+const GEMINI_SES = {
+  huzunlu:  { voice: "Achernar",     stil: "soft, sad, melancholic, tender female voice, very slow" },
+  romantik: { voice: "Sulafat",      stil: "warm, romantic, tender female voice, slow" },
+  dramatik: { voice: "Algenib",      stil: "deep, serious, dramatic, cinematic male voice, slow" },
+  sakin:    { voice: "Vindemiatrix", stil: "calm, soothing, peaceful, reflective female voice, slow" },
+  tutkulu:  { voice: "Orus",         stil: "expressive, passionate, emotional male voice, slightly faster" },
+};
+
+function geminiKullanilabilirMi() {
+  if (String(process.env.SES_MOTORU || "").trim().toLowerCase() === "edge") return false;
+  return !!String(process.env.GEMINI_API_KEY || "").trim();
+}
+
+function pcmToWav(pcm, sampleRate = 24000, channels = 1, bitsPerSample = 16) {
+  const byteRate = sampleRate * channels * bitsPerSample / 8;
+  const blockAlign = channels * bitsPerSample / 8;
+  const header = Buffer.alloc(44);
+  header.write("RIFF", 0);
+  header.writeUInt32LE(36 + pcm.length, 4);
+  header.write("WAVE", 8);
+  header.write("fmt ", 12);
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(channels, 22);
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE(byteRate, 28);
+  header.writeUInt16LE(blockAlign, 32);
+  header.writeUInt16LE(bitsPerSample, 34);
+  header.write("data", 36);
+  header.writeUInt32LE(pcm.length, 40);
+  return Buffer.concat([header, pcm]);
+}
+
+async function geminiIleSesUret(metin, voiceKey, timeoutMs) {
+  const ayar = GEMINI_SES[voiceKey] || GEMINI_SES[VARSAYILAN_SES];
+  const prompt =
+    `Read the following Turkish poem aloud as a spoken-word recitation, in a ${ayar.stil}. ` +
+    `Do not sing. Use natural speech rhythm with gentle pauses between lines. ` +
+    `Read only the poem text, do not read these instructions:\n\n${metin}`;
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(GEMINI_TTS_MODEL)}:generateContent`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-goog-api-key": String(process.env.GEMINI_API_KEY).trim(),
+    },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: {
+        responseModalities: ["AUDIO"],
+        speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: ayar.voice } } },
+      },
+    }),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (!res.ok) {
+    let detay = "";
+    try { const j = await res.json(); detay = j?.error?.message || JSON.stringify(j).slice(0, 200); } catch (_) {}
+    throw new Error(`Gemini TTS HTTP ${res.status}${detay ? ": " + detay : ""}`);
+  }
+  const data = await res.json();
+  const parts = data?.candidates?.[0]?.content?.parts || [];
+  const inline = parts.find((p) => p?.inlineData?.data)?.inlineData;
+  if (!inline?.data) throw new Error("Gemini TTS ses verisi döndürmedi.");
+  const pcm = Buffer.from(inline.data, "base64");
+  if (!pcm.length) throw new Error("Gemini TTS boş ses döndürdü.");
+  const rateMatch = /rate=(\d+)/i.exec(String(inline.mimeType || ""));
+  const rate = rateMatch ? Number(rateMatch[1]) : 24000;
+  return pcmToWav(pcm, rate);
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     res.setHeader("Allow", "POST");
@@ -246,16 +351,38 @@ export default async function handler(req, res) {
     let audioBuffer = null;
     let motor = "edge-tts";
     let aceHata = null;
+    let geminiHata = null;
+    let uzanti = "mp3";
+    let mime = "audio/mpeg";
 
     if (aceKullanilabilirMi(cleanText)) {
       try {
-        const kalan = TOPLAM_BUTCE_MS - (Date.now() - baslangic) - EDGE_TIMEOUT_MS - 12000;
-        const aceSure = Math.max(5000, Math.min(ACE_TIMEOUT_MS, kalan));
-        audioBuffer = await aceStepIleSesUret(title, cleanText, secilenAnahtar, aceSure);
+        const kalan = TOPLAM_BUTCE_MS - (Date.now() - baslangic) - EDGE_TIMEOUT_MS - GEMINI_TIMEOUT_MS - 12000;
+        const aceSure = Math.max(10000, Math.min(ACE_TIMEOUT_MS, kalan));
+        const parcalar = siiriParcala(cleanText);
+        const sesler = await Promise.all(
+          parcalar.map((parca) => aceStepIleSesUret(title, parca, secilenAnahtar, aceSure))
+        );
+        audioBuffer = Buffer.concat(sesler);
         motor = "ace-step";
       } catch (aceErr) {
         aceHata = String(aceErr?.message || aceErr).slice(0, 300);
         console.warn("ACE-Step ses üretimi başarısız, Edge TTS'e geçiliyor:", aceHata);
+        audioBuffer = null;
+      }
+    }
+
+    if (!audioBuffer && geminiKullanilabilirMi()) {
+      try {
+        const kalan = TOPLAM_BUTCE_MS - (Date.now() - baslangic) - EDGE_TIMEOUT_MS - 12000;
+        const gemSure = Math.max(10000, Math.min(GEMINI_TIMEOUT_MS, kalan));
+        audioBuffer = await geminiIleSesUret(trimmed, secilenAnahtar, gemSure);
+        motor = "gemini-tts";
+        uzanti = "wav";
+        mime = "audio/wav";
+      } catch (gemErr) {
+        geminiHata = String(gemErr?.message || gemErr).slice(0, 300);
+        console.warn("Gemini TTS başarısız, Edge TTS'e geçiliyor:", geminiHata);
         audioBuffer = null;
       }
     }
@@ -280,14 +407,15 @@ export default async function handler(req, res) {
       return res.status(502).json({ error: "Boş ses verisi döndü." });
     }
 
-    const audioKey = `audio/${cleanPostId}-${Date.now()}.mp3`;
-    const uploadResult = await uploadWithFallback(audioBuffer, audioKey, "audio/mpeg", `Ses: ${cleanPostId}`);
+    const audioKey = `audio/${cleanPostId}-${Date.now()}.${uzanti}`;
+    const uploadResult = await uploadWithFallback(audioBuffer, audioKey, mime, `Ses: ${cleanPostId}`);
 
     return res.status(200).json({
       audioUrl: uploadResult.url,
       voiceKey: secilenAnahtar,
       engine: motor,
       aceError: aceHata,
+      geminiError: geminiHata,
       storage: uploadResult.provider,
       r2Error: uploadResult.r2Error || null
     });
