@@ -1,4 +1,16 @@
 import { S3Client, PutObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
+import { EdgeTTS } from "node-edge-tts";
+import fs from "fs/promises";
+import os from "os";
+import path from "path";
+
+// Vercel Hobby üst sınırı 60 sn. Bunun üstü 504 verir.
+export const maxDuration = 60;
+
+// Toplam zaman bütçesi (ms). Fonksiyon bundan önce cevap döner.
+const TOPLAM_BUTCE_MS = 52000;
+const ACE_TIMEOUT_MS = 28000;
+const EDGE_TIMEOUT_MS = 15000;
 
 const R2_GUVENLIK_LIMITI = 9 * 1024 * 1024 * 1024;
 function r2AyAnahtari() {
@@ -7,24 +19,21 @@ function r2AyAnahtari() {
 }
 async function r2KullanimOku(client, bucket) {
   try {
-    const res = await client.send(new GetObjectCommand({ Bucket: bucket, Key: r2AyAnahtari() }));
+    const res = await client.send(
+      new GetObjectCommand({ Bucket: bucket, Key: r2AyAnahtari() }),
+      { abortSignal: AbortSignal.timeout(3000) }
+    );
     const text = await res.Body.transformToString();
     return Number(JSON.parse(text)?.bytes) || 0;
   } catch (_) { return 0; }
 }
 function r2KullanimYaz(client, bucket, bytes) {
-  client.send(new PutObjectCommand({ Bucket: bucket, Key: r2AyAnahtari(), Body: JSON.stringify({ bytes }), ContentType: "application/json" })).catch(() => {});
+  client.send(
+    new PutObjectCommand({ Bucket: bucket, Key: r2AyAnahtari(), Body: JSON.stringify({ bytes }), ContentType: "application/json" }),
+    { abortSignal: AbortSignal.timeout(3000) }
+  ).catch(() => {});
 }
-import { EdgeTTS } from "node-edge-tts";
-import fs from "fs/promises";
-import os from "os";
-import path from "path";
 
-// ElevenLabs'ten Microsoft Edge'in ücretsiz TTS motoruna geçildi: API anahtarı
-// GEREKTİRMEYEN, tamamen bedava serviste sadece 2 resmi Türkçe nöral ses var:
-// Emel (kadın) ve Ahmet (erkek). Groq'un seçtiği 5 "karakter"i bu iki sese,
-// farklı konuşma hızı (rate) ve perde (pitch) ayarlarıyla eşleyip tonlama
-// farkı yaratıyoruz.
 const VOICE_MAP = {
   huzunlu:  { voice: "tr-TR-EmelNeural",  pitch: "-8%", rate: "-12%" },
   romantik: { voice: "tr-TR-EmelNeural",  pitch: "+0%", rate: "-5%"  },
@@ -35,11 +44,8 @@ const VOICE_MAP = {
 const VARSAYILAN_SES = "sakin";
 
 // ============================================================
-// CLOUDFLARE R2 (S3 uyumlu API)
-// Gerekli ortam değişkenleri:
-//   R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME, R2_PUBLIC_URL
+// CLOUDFLARE R2
 // ============================================================
-
 function getR2Client() {
   const accountId = String(process.env.R2_ACCOUNT_ID || "").trim();
   const accessKeyId = String(process.env.R2_ACCESS_KEY_ID || "").trim();
@@ -53,6 +59,7 @@ function getR2Client() {
     endpoint: `https://${accountId}.r2.cloudflarestorage.com`,
     region: "auto",
     credentials: { accessKeyId, secretAccessKey },
+    maxAttempts: 1,
     requestChecksumCalculation: "WHEN_REQUIRED",
     requestChecksumValidation: "WHEN_REQUIRED",
     responseChecksumCalculation: "WHEN_REQUIRED",
@@ -73,7 +80,8 @@ async function uploadToR2(buffer, key, contentType) {
   }
 
   await client.send(
-    new PutObjectCommand({ Bucket: bucket, Key: key, Body: buffer, ContentType: contentType })
+    new PutObjectCommand({ Bucket: bucket, Key: key, Body: buffer, ContentType: contentType }),
+    { abortSignal: AbortSignal.timeout(10000) }
   );
   r2KullanimYaz(client, bucket, mevcutBayt + buffer.length);
 
@@ -91,9 +99,8 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 30000) {
 }
 
 // ============================================================
-// GITHUB + jsDelivr YEDEK DEPOLAMA (bkz. flux-image.js'teki aynı not)
+// GITHUB + jsDelivr YEDEK DEPOLAMA
 // ============================================================
-
 async function uploadToGithubFallback(buffer, key, commitMessage) {
   const owner = String(process.env.GITHUB_OWNER || "").trim();
   const repo = String(process.env.GITHUB_REPO || "").trim();
@@ -111,23 +118,7 @@ async function uploadToGithubFallback(buffer, key, commitMessage) {
     "X-GitHub-Api-Version": "2022-11-28"
   };
 
-  // Aynı key (audio/{postId}.mp3) tekrar yazılabiliyor — GitHub üzerine
-  // yazarken mevcut sürümün "sha" değerini istiyor, önce onu alıyoruz.
-  let sha;
-  try {
-    const getRes = await fetchWithTimeout(
-      `${apiUrl}?ref=${encodeURIComponent(branch)}`,
-      { headers: ghHeaders },
-      15000
-    );
-    if (getRes.ok) {
-      const fileData = await getRes.json();
-      sha = fileData?.sha;
-    }
-  } catch (_) {
-    // sha alınamadıysa yeni dosya varsayılarak devam ediyoruz.
-  }
-
+  // Key benzersiz (timestamp'li) olduğundan sha sorgusuna gerek yok.
   const response = await fetchWithTimeout(
     apiUrl,
     {
@@ -136,11 +127,10 @@ async function uploadToGithubFallback(buffer, key, commitMessage) {
       body: JSON.stringify({
         message: commitMessage || `Yedek yükleme: ${key}`,
         content: buffer.toString("base64"),
-        branch,
-        ...(sha ? { sha } : {})
+        branch
       })
     },
-    30000
+    15000
   );
 
   if (!response.ok) {
@@ -151,7 +141,6 @@ async function uploadToGithubFallback(buffer, key, commitMessage) {
   return `https://cdn.jsdelivr.net/gh/${owner}/${repo}@${branch}/${key}`;
 }
 
-// TEŞHİS: gerçek anahtarları loglamıyoruz, sadece uzunluk + ilk birkaç karakter.
 function r2TeshisBilgisi() {
   const maskele = (v) => {
     const s = String(v || "");
@@ -172,21 +161,12 @@ async function uploadWithFallback(buffer, key, contentType, commitMessage) {
   }
 }
 
-
 // ============================================================
-// ACE-Step (acemusic.ai, ÜCRETSİZ) — şiiri YAPAY ZEKA VOKALİYLE söyletir.
-// musicGenerate.js ile aynı uç nokta / aynı ACE_MUSIC_API_KEY. Fark: burada
-// enstrümantal DEĞİL, şiirin kendisi `lyrics` olarak gönderiliyor.
-// Başarısız olursa (kota, zaman aşımı, çok uzun şiir, boş cevap...) sessizce
-// Edge TTS (düz okuma) devreye girer, yani ses her koşulda üretilir.
-// Kapatmak için Vercel'de SES_MOTORU=edge tanımla.
+// ACE-Step (acemusic.ai)
 // ============================================================
 const ACE_ENDPOINT = "https://api.acemusic.ai/v1/chat/completions";
-const ACE_TIMEOUT_MS = 90000;
-const ACE_MAX_SIIR_KARAKTER = 1200; // daha uzun şiirler şarkıya sığmaz -> Edge TTS ile tam okunur
+const ACE_MAX_SIIR_KARAKTER = 1200;
 
-// ŞARKI DEĞİL, ŞİİR OKUMA: prompt "spoken word / poetry recitation" üzerine kurulu.
-// "ballad, vocal, melody" gibi şarkıyı çağrıştıran kelimeler bilerek kullanılmıyor.
 const ACE_ORTAK =
   "spoken word poetry recitation, a single voice reading the poem aloud in Turkish, " +
   "speaking not singing, no singing, no melody, no chorus, no rap, no autotune, " +
@@ -206,7 +186,7 @@ function aceKullanilabilirMi(cleanText) {
   return cleanText.length <= ACE_MAX_SIIR_KARAKTER;
 }
 
-async function aceStepIleSesUret(title, cleanText, voiceKey) {
+async function aceStepIleSesUret(title, cleanText, voiceKey, timeoutMs) {
   const stil = ACE_STIL[voiceKey] || ACE_STIL[VARSAYILAN_SES];
   const lyrics = "[Spoken Word]\n" + cleanText.replace(/\r/g, "").replace(/\n{3,}/g, "\n\n");
   const res = await fetch(ACE_ENDPOINT, {
@@ -220,7 +200,7 @@ async function aceStepIleSesUret(title, cleanText, voiceKey) {
       stream: false,
       audio_config: { format: "mp3", instrumental: false, vocal_language: "tr" },
     }),
-    signal: AbortSignal.timeout(ACE_TIMEOUT_MS),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   if (!res.ok) {
     let detay = "";
@@ -237,15 +217,13 @@ async function aceStepIleSesUret(title, cleanText, voiceKey) {
   return buf;
 }
 
-// Vercel varsayılan süre sınırı (10 sn) TTS + yükleme için yetmez.
-export const maxDuration = 180;
-
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     res.setHeader("Allow", "POST");
     return res.status(405).json({ error: "Sadece POST." });
   }
 
+  const baslangic = Date.now();
   let tmpPath = null;
   try {
     const { text, title, postId, voiceKey } = req.body || {};
@@ -271,7 +249,9 @@ export default async function handler(req, res) {
 
     if (aceKullanilabilirMi(cleanText)) {
       try {
-        audioBuffer = await aceStepIleSesUret(title, cleanText, secilenAnahtar);
+        const kalan = TOPLAM_BUTCE_MS - (Date.now() - baslangic) - EDGE_TIMEOUT_MS - 12000;
+        const aceSure = Math.max(5000, Math.min(ACE_TIMEOUT_MS, kalan));
+        audioBuffer = await aceStepIleSesUret(title, cleanText, secilenAnahtar, aceSure);
         motor = "ace-step";
       } catch (aceErr) {
         aceHata = String(aceErr?.message || aceErr).slice(0, 300);
@@ -288,7 +268,7 @@ export default async function handler(req, res) {
         pitch: secim.pitch,
         rate: secim.rate,
         volume: "default",
-        timeout: 20000,
+        timeout: EDGE_TIMEOUT_MS,
       });
 
       tmpPath = path.join(os.tmpdir(), `${cleanPostId}-${Date.now()}.mp3`);
@@ -300,8 +280,6 @@ export default async function handler(req, res) {
       return res.status(502).json({ error: "Boş ses verisi döndü." });
     }
 
-    // Her üretimde BENZERSİZ dosya adı: aynı adla üzerine yazınca tarayıcı/CDN eski sesi
-    // önbellekten vermeye devam ediyordu. (Eski dosyayı index.html eskiMedyaTemizle siler.)
     const audioKey = `audio/${cleanPostId}-${Date.now()}.mp3`;
     const uploadResult = await uploadWithFallback(audioBuffer, audioKey, "audio/mpeg", `Ses: ${cleanPostId}`);
 
