@@ -2833,9 +2833,46 @@ async function siirIcinOtomatikGifGetir(title, text){
 }
 // Bir paylaşımda ne görsel ne YouTube linki varsa arka planda otomatik GIF+alıntı uygular.
 // Kullanıcı bu sırada kendi görselini/linkini eklerse üzerine yazmaz (race-condition koruması).
+// Sıra: Hugging Face → Cloudflare FLUX → GIPHY (bir öncekinde hata olursa sonrakine geçer).
+async function otomatikAiGorselUret(title, text){
+  if(!String(text||'').trim()) return null;
+  const groqPrompt = await aiGorselPromptuGroqlaOlustur({title,text});
+  const sahne = groqPrompt || text;
+  const saglayicilar=[
+    { ad:'Hugging Face',    fn:huggingfaceGorselDene, sure:60000 },
+    { ad:'Cloudflare FLUX', fn:fluxGorselDene,        sure:90000 }
+  ];
+  for(const sg of saglayicilar){
+    const controller=new AbortController();
+    const zamanlayici=setTimeout(()=>controller.abort(), sg.sure);
+    try{
+      const r=await sg.fn(title||'', sahne, controller.signal);
+      clearTimeout(zamanlayici);
+      if(r?.imageUrl) return r;
+    }catch(err){
+      clearTimeout(zamanlayici);
+      console.warn(`${sg.ad} başarısız, sıradaki deneniyor:`, err?.message||err);
+    }
+  }
+  return null;
+}
 function otomatikGifUygulaGerekirse(postId, title, text, mevcutGorsel, mevcutYoutube){
   if(mevcutGorsel || ytId(mevcutYoutube)) return;
-  siirIcinOtomatikGifGetir(title, text).then(sonuc=>{
+  (async()=>{
+    const ai = await otomatikAiGorselUret(title, text).catch(()=>null);
+    if(ai?.imageUrl){
+      const idx = S.posts.findIndex(p=>p.id===postId);
+      if(idx<0) return;
+      if(S.posts[idx].image || ytId(S.posts[idx].youtube)) return;
+      const updates={ image:ai.imageUrl, autoGif:false, gifCaption:null, aiImage:true, aiImageUpdatedAt:Date.now(), aiImageProvider:ai.provider, aiImageModel:ai.model };
+      S.posts[idx] = {...S.posts[idx], ...updates};
+      save();
+      refreshCard(postId);
+      db.collection("posts").doc(postId).update(updates).catch(err=>console.error("AI görsel kaydetme hatası:",err));
+      return;
+    }
+    // Her iki AI sağlayıcısı da başarısız → GIPHY yedeği
+    siirIcinOtomatikGifGetir(title, text).then(sonuc=>{
     if(!sonuc?.gifUrl) return;
     const idx = S.posts.findIndex(p=>p.id===postId);
     if(idx<0) return;
@@ -2846,7 +2883,8 @@ function otomatikGifUygulaGerekirse(postId, title, text, mevcutGorsel, mevcutYou
     save();
     refreshCard(postId);
     db.collection("posts").doc(postId).update({ image: sonuc.gifUrl, autoGif: true, gifCaption: sonuc.caption || null }).catch(err=>console.error("Otomatik GIF kaydetme hatası:",err));
-  });
+    });
+  })();
 }
 // Bir şiir paylaşıldığında arka planda otomatik seslendirme (ElevenLabs)
 // oluşturup Firestore'a audioUrl olarak kaydeder. Hata olursa (ör. API key
@@ -3427,59 +3465,54 @@ const YORUM_ONERILERI = [
   'Bu dizeler sustuktan sonra bile konuşmaya devam ediyor.'
 ];
 
+// PROFİL / KAPAK / YORUM / SES YÜKLEMELERİ artık Cloudinary yerine kendi R2 depomuza
+// (/api/flux-image, action:'upload') gider — Cloudinary kotası doldu. Vercel gövde
+// sınırı yüzünden dosya en fazla ~3 MB olabilir.
+const YUKLEME_MAX_BAYT = 3*1024*1024;
+function blobDataUrlOku(blob){
+  return new Promise((resolve,reject)=>{
+    const fr=new FileReader();
+    fr.onload=()=>resolve(fr.result);
+    fr.onerror=()=>reject(new Error('Dosya okunamadı'));
+    fr.readAsDataURL(blob);
+  });
+}
+async function depoyaYukle(dataUrlOrBlob, klasor){
+  const dataUrl = typeof dataUrlOrBlob==='string' ? dataUrlOrBlob : await blobDataUrlOku(dataUrlOrBlob);
+  const res = await fetch('/api/flux-image',{
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ action:'upload', dataUrl, folder:klasor, userId:S.me?.id||'' })
+  });
+  const data = await res.json().catch(()=>({}));
+  if(!res.ok || !data.url) throw new Error(data?.error || `HTTP ${res.status}`);
+  if(data.storage && data.storage!=='r2') console.warn(`⚠️ Dosya R2'ye değil "${data.storage}" yedeğine yüklendi. R2 hatası: ${data.r2Error||'(bilinmiyor)'}`);
+  return data.url;
+}
+
 async function cloudinaryMedyaYukle(file, klasor='comments', maxImageSide=1280){
   if(!file || !S.me) return null;
   const isImage=file.type?.startsWith('image/');
   const isVideo=file.type?.startsWith('video/');
   if(!isImage && !isVideo){ toastGoster('Sadece resim veya video ekleyebilirsin.'); return null; }
   if(isImage && file.size>10*1024*1024){ toastGoster('Resim en fazla 10 MB olabilir.'); return null; }
-  if(isVideo && file.size>30*1024*1024){ toastGoster('Video en fazla 30 MB olabilir.'); return null; }
+  if(isVideo && file.size>YUKLEME_MAX_BAYT){ toastGoster('Video en fazla 3 MB olabilir.'); return null; }
 
   try{
-    let yuklenecek=file;
-    let mime=file.type || (isImage?'image/jpeg':'video/mp4');
-
-    // Resimleri küçültüp Blob'a çeviriyoruz. Böylece Cloudinary FormData'ya
-    // gerçek bir Blob gönderilir; base64 metni doğrudan dosya gibi gönderilmez.
+    let kaynak=file;
     if(isImage){
-      const dataUrl=await resimSikistir(file,maxImageSide,0.82);
-      if(!dataUrl || typeof dataUrl!=='string') throw new Error('Resim dönüştürülemedi');
-      const parcalar=dataUrl.split(',');
-      if(parcalar.length<2) throw new Error('Geçersiz görsel verisi');
-      const mm=parcalar[0].match(/data:([^;]+);base64/i);
-      mime=mm ? mm[1] : 'image/jpeg';
-      const binary=atob(parcalar[1]);
-      const bytes=new Uint8Array(binary.length);
-      for(let i=0;i<binary.length;i++) bytes[i]=binary.charCodeAt(i);
-      yuklenecek=new Blob([bytes],{type:mime});
+      kaynak=await resimSikistir(file,maxImageSide,0.8);
+      if(!kaynak || typeof kaynak!=='string') throw new Error('Resim dönüştürülemedi');
     }
-
-    const temizAd=(file.name||'medya').replace(/[^a-zA-Z0-9._-]/g,'_').slice(-80);
-    const form=new FormData();
-    form.append('file',yuklenecek,temizAd);
-    form.append('upload_preset',CLOUDINARY_PROFILE_PRESET);
-    form.append('folder',`${klasor}/${S.me.id}`);
-
-    const resourceType=isVideo?'video':'image';
-    const endpoint=`https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/${resourceType}/upload`;
-    const response=await fetch(endpoint,{method:'POST',body:form});
-    const data=await response.json().catch(()=>({}));
-
-    if(!response.ok || !data.secure_url){
-      console.error('Cloudinary medya yükleme hatası:',data);
-      const msg=data?.error?.message||`HTTP ${response.status}`;
-      toastGoster(`Medya yüklenemedi: ${msg}`);
-      return null;
-    }
-    return {type:isImage?'image':'video',url:data.secure_url,name:file.name};
+    const url=await depoyaYukle(kaynak,'comments');
+    return {type:isImage?'image':'video',url,name:file.name};
   }catch(err){
-    console.error('Cloudinary medya yükleme hatası:',err);
-    toastGoster('Medya yüklenemedi. Cloudinary bağlantısını kontrol edin.');
+    console.error('Medya yükleme hatası:',err);
+    toastGoster('Medya yüklenemedi: '+(err?.message||'bağlantıyı kontrol edin'));
     return null;
   }
 }
 
-// Yorum resmi/video artık Firebase Storage yerine Cloudinary'ye gider.
+// Yorum resmi/video R2 depoya gider (bkz. depoyaYukle).
 async function yorumDosyasiYukle(file){
   return cloudinaryMedyaYukle(file,'comments',1280);
 }
@@ -3621,38 +3654,13 @@ async function cloudinaryProfilYukle(file,tip){
   }
 
   try{
-    // resimSikistir() data:image/...;base64,... döndürüyor.
-    // FormData'nın 3. parametresi yalnızca Blob/File kabul ettiği için önce Blob'a çeviriyoruz.
-    const dataUrl=await resimSikistir(file,1200,0.82);
+    const maks = tip==='avatar' ? 640 : 1600;
+    const dataUrl=await resimSikistir(file,maks,0.82);
     if(!dataUrl || typeof dataUrl !== 'string') throw new Error('Resim dönüştürülemedi');
-    const parcalar=dataUrl.split(',');
-    if(parcalar.length<2) throw new Error('Geçersiz görsel verisi');
-    const mimeMatch=parcalar[0].match(/data:([^;]+);base64/i);
-    const mime=mimeMatch ? mimeMatch[1] : 'image/jpeg';
-    const binary=atob(parcalar[1]);
-    const bytes=new Uint8Array(binary.length);
-    for(let i=0;i<binary.length;i++) bytes[i]=binary.charCodeAt(i);
-    const yuklenecek=new Blob([bytes],{type:mime});
-    const form=new FormData();
-    const dosyaAdi=(file.name||'profil.jpg').replace(/[^a-zA-Z0-9._-]/g,'_').slice(-80);
-    form.append('file',yuklenecek,dosyaAdi);
-    form.append('upload_preset',CLOUDINARY_PROFILE_PRESET);
-    form.append('folder',`profiles/${tip}`);
-
-    const endpoint=`https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/image/upload`;
-    const response=await fetch(endpoint,{method:'POST',body:form});
-    const data=await response.json().catch(()=>({}));
-
-    if(!response.ok || !data.secure_url){
-      console.error('Cloudinary profil yükleme hatası:',data);
-      toastGoster(`Profil fotoğrafı yüklenemedi (${response.status}). Cloudinary upload presetini kontrol edin.`);
-      return null;
-    }
-
-    return data.secure_url;
+    return await depoyaYukle(dataUrl, tip==='avatar' ? 'profiles/avatar' : 'profiles/cover');
   }catch(err){
-    console.error('Cloudinary profil yükleme hatası:',err);
-    toastGoster('Profil fotoğrafı yüklenemedi. İnternet bağlantısını kontrol edin.');
+    console.error('Profil resmi yükleme hatası:',err);
+    toastGoster('Profil fotoğrafı yüklenemedi: '+(err?.message||'bağlantıyı kontrol edin'));
     return null;
   }
 }
@@ -5057,24 +5065,11 @@ function composeModal(onClose, existingPost=null){
   // Cloudinary'ye gider ve dönen kalıcı URL Firestore'daki audioUrl alanına kaydedilir.
   async function sesDosyasiniYukle(blob,mimeType){
     if(!blob || !blob.size){ sesUrlGuncelle(audioUrl,'❌ Ses dosyası boş.'); return; }
-    if(blob.size>50*1024*1024){ sesUrlGuncelle(audioUrl,'❌ Ses dosyası en fazla 50 MB olabilir.'); return; }
+    if(blob.size>YUKLEME_MAX_BAYT){ sesUrlGuncelle(audioUrl,'❌ Ses dosyası en fazla 3 MB olabilir.'); return; }
     sesUrlGuncelle(audioUrl,'⏳ Ses yükleniyor...');
     try{
-      const mime=mimeType||blob.type||'audio/mpeg';
-      const dosyaAdi=(blob.name||`ses-${Date.now()}.mp3`).replace(/[^a-zA-Z0-9._-]/g,'_').slice(-100);
-      const form=new FormData();
-      form.append('file',blob,dosyaAdi);
-      form.append('upload_preset',CLOUDINARY_PROFILE_PRESET);
-      form.append('folder',`audio/${S.me?.id||'kullanici'}`);
-      // Cloudinary'de ses dosyaları video resource type altında tutulur.
-      const endpoint=`https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/video/upload`;
-      const res=await fetch(endpoint,{method:'POST',body:form});
-      const data=await res.json().catch(()=>({}));
-      if(!res.ok || !data.secure_url){
-        console.error('Cloudinary ses yükleme hatası:',data);
-        throw new Error(data?.error?.message||`HTTP ${res.status}`);
-      }
-      sesUrlGuncelle(data.secure_url,'✅ Ses yüklendi ve kalıcı bağlantı oluşturuldu');
+      const url=await depoyaYukle(blob,'audio');
+      sesUrlGuncelle(url,'✅ Ses yüklendi ve kalıcı bağlantı oluşturuldu');
     }catch(err){
       console.error('Ses yükleme hatası:',err);
       sesUrlGuncelle(audioUrl,'❌ Ses yüklenemedi: '+(err?.message||'Bilinmeyen hata'));
