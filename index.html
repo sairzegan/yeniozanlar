@@ -2,7 +2,6 @@
 <html lang="tr">
 <head>
   <meta charset="UTF-8" />
-  <meta name="google-site-verification" content="vxmlVqeRSV80SeMMS5OvVcVL4eLlCIoUB5IIKYDKV3U" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Yeni Ozanlar | Şiir Sitesi: Amatör Şairler İçin Şiir Paylaş, Şiir Oku, Şiir Puanla</title>
   <meta name="description" content="Yeni Ozanlar, amatör şair ve ozanların şiir paylaştığı, şiir okuyup puanladığı ücretsiz şiir sitesi ve edebiyat topluluğu. Şiirini paylaş, yapay zeka ve okurlardan puan al, en iyi amatör şiirleri keşfet.">
@@ -247,19 +246,23 @@ function ayinSiirleriSorgusuBaslat(){
 }
 
 async function verileriYukle() {
-  const aySorgusu = ayinSiirleriSorgusuBaslat();
+  // KOTA TASARRUFU: önbellek yeterince tazeyse Firestore'a hiç gitme.
+  const _simdi = Date.now();
+  const postlarTaze = _cachePosts.length > 0 && (_simdi - (Number(lsGet('yo_postTs',0))||0) < 5*60*1000);
+  const kullanicilarTaze = _cacheUsers.length > 0 && (_simdi - (Number(lsGet('yo_usersTs',0))||0) < 30*60*1000);
+  const aySorgusu = postlarTaze ? Promise.resolve(null) : ayinSiirleriSorgusuBaslat();
   try {
     // 1. AŞAMA — HIZLI AÇILIŞ: kullanıcıları ve yalnızca EN YENİ ~30 şiiri çekiyoruz.
     // Önceden TÜM şiirler (içlerindeki tüm resimlerle birlikte) her açılışta tek seferde
     // indiriliyordu; paylaşım sayısı arttıkça bu süre giderek uzuyordu. Artık akış,
     // en güncel içerikle saniyeler içinde doluyor; eski şiirler arka planda gelir.
     const [usersSnapshot, sonPostsSnapshot] = await Promise.all([
-      db.collection("users").get().catch(err => { firestoreHataBildir(err); return { docs: [] }; }),
-      db.collection("posts").orderBy("ts","desc").limit(30).get().catch(() => null)
+      kullanicilarTaze ? Promise.resolve({ docs: [] }) : db.collection("users").get().catch(err => { firestoreHataBildir(err); return { docs: [] }; }),
+      postlarTaze ? Promise.resolve(null) : db.collection("posts").orderBy("ts","desc").limit(30).get().catch(() => null)
     ]);
 
     // Okuma başarısız olursa (kota/ağ) yerel önbellekteki kullanıcıları SİLME.
-    if(usersSnapshot.docs.length) S.users = usersSnapshot.docs.map(doc => doc.data());
+    if(usersSnapshot.docs.length){ S.users = usersSnapshot.docs.map(doc => doc.data()); lsSet('yo_usersTs', Date.now()); }
 
     if (!S.users.find(u => u.username === ADMIN_USERNAME)) {
       S.users.push(adminProfileObj);
@@ -274,6 +277,7 @@ async function verileriYukle() {
       sonPostsSnapshot.docs.forEach(doc => { const d = doc.data(); mevcut1.set(d.id, d); });
       S.posts = postSirala(Array.from(mevcut1.values()));
       postOnbellegeYaz(S.posts);
+      lsSet('yo_postTs', Date.now());
     }
 
     // AYIN ŞİİRLERİ için yalnızca en yeni 30 şiire güvenme.
@@ -351,10 +355,11 @@ async function verileriYukle() {
     render();
     bildirimDinleyiciBaslat();
     adminEskiBildirimTemizligi();
+    // (KOTA TASARRUFU) Tam senkron artık burada her açılışta değil, yalnızca sıralama/keşfet/profil
+    // ekranı açıldığında render() içinden başlatılır.
     // 2. AŞAMA — kullanıcı akışı görmeye başladıktan SONRA, arka planda geri kalan
     // (eski) şiirleri, mesajları ve bildirimleri sessizce tamamlıyoruz. Bu aşama
     // sıralama/keşfet gibi TÜM şiirlere ihtiyaç duyan ekranların doğruluğu içindir.
-    tumVeriyiArkaplandaTamamla();
   }
 }
 
@@ -364,7 +369,7 @@ async function tumVeriyiArkaplandaTamamla(){
     // hızla bitiriyordu (şiir sayısı kadar okuma × her açılış). Artık tam senkron
     // en fazla 30 dakikada bir yapılıyor; arada yalnızca son 30 şiir + bu ayın
     // şiirleri (1. aşama) yenileniyor.
-    const TAM_SENKRON_ARALIK = 30*60*1000;
+    const TAM_SENKRON_ARALIK = 12*60*60*1000;
     const sonTam = Number(lsGet('yo_tamSenkronTs', 0)) || 0;
     const tamSayi = Number(lsGet('yo_tamSayi', 0)) || 0;
     // Yalnızca önbellek GERÇEKTEN tam ise (son tam senkrondaki şiir sayısına ulaşıyorsa) atla.
@@ -6467,6 +6472,10 @@ function render(){
   AKTIF_YT.length=0;
   app.innerHTML='';
   
+  if(!S.loading && !S._tamBaslatildi && ['leaderboard','explore','profile'].includes(S.screen)){
+    S._tamBaslatildi = true;
+    setTimeout(tumVeriyiArkaplandaTamamla, 0);
+  }
   if (S.loading) {
     app.appendChild(h('div',{style:{minHeight:'100vh',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',background:'#0f0a1a'}},[
       h('div',{style:{fontSize:'32px'}},'🪶'),
