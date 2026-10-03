@@ -1,5 +1,6 @@
 {
   "rewrites": [
+    { "source": "/sitemap.xml", "destination": "/api/lib/sitemap" },
     { "source": "/post/:slug", "destination": "/api/postPreview" },
     { "source": "/(.*)", "destination": "/index.html" }
   ]
