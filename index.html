@@ -3,25 +3,40 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Yeni Ozanlar 🪶</title>
-
-  <!-- Varsayılan paylaşım kartı (Facebook/WhatsApp/Twitter/Discord vb.) —
-       bir şiire özel önizleme için bkz. functions/index.js ve DEPLOY_TALIMATLARI.md.
-       Bu etiketler, o Cloud Function devreye alınana kadar TÜM linkler için (site
-       linki dahil) gösterilecek genel/varsayılan kart bilgisidir. -->
+  <title>Yeni Ozanlar | Şiir Sitesi: Amatör Şairler İçin Şiir Paylaş, Şiir Oku, Şiir Puanla</title>
+  <meta name="description" content="Yeni Ozanlar, amatör şair ve ozanların şiir paylaştığı, şiir okuyup puanladığı ücretsiz şiir sitesi ve edebiyat topluluğu. Şiirini paylaş, yapay zeka ve okurlardan puan al, en iyi amatör şiirleri keşfet.">
+  <meta name="keywords" content="şiir, şair, amatör şiirler, amatör şairler, şiir paylaş, ozan, yeni ozanlar, edebiyat, şiir sitesi, amatör şiir sitesi, edebiyat sitesi, şiir oku, şiir puanla, şiir yaz, şiir yarışması, güzel şiirler, aşk şiirleri, hüzünlü şiirler, sesli şiir, şiir dinle, genç şairler, şiir topluluğu, serbest şiir, divan şiiri, halk şiiri, şiir değerlendirme, şiir analizi, edebiyat topluluğu">
+  <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1">
+  <meta name="author" content="Yeni Ozanlar">
+  <meta name="theme-color" content="#0f0a1a">
+  <meta name="language" content="Turkish">
+  <link rel="canonical" id="seo-canonical" href="https://yeniozanlar.vercel.app/">
   <meta property="og:type" content="website">
+  <meta property="og:locale" content="tr_TR">
   <meta property="og:site_name" content="Yeni Ozanlar">
-  <meta property="og:title" content="Yeni Ozanlar 🪶">
-  <meta property="og:description" content="Şiirlerini paylaş, oku, puanla.">
+  <meta property="og:title" content="Yeni Ozanlar | Amatör Şiir Sitesi: Şiir Paylaş, Şiir Oku, Şiir Puanla">
+  <meta property="og:description" content="Amatör şairler için şiir sitesi: şiirini paylaş, şiir oku, puanla, yorum yaz. Edebiyat ve ozanlar topluluğu.">
   <meta property="og:image" content="https://yeniozanlar-68b49.web.app/og-image.png">
-  <meta property="og:url" content="https://yeniozanlar-68b49.web.app/">
+  <meta property="og:url" content="https://yeniozanlar.vercel.app/">
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="Yeni Ozanlar 🪶">
-  <meta name="twitter:description" content="Şiirlerini paylaş, oku, puanla.">
+  <meta name="twitter:title" content="Yeni Ozanlar | Amatör Şiir Sitesi">
+  <meta name="twitter:description" content="Şiirini paylaş, şiir oku, şiir puanla. Amatör şairler ve edebiyat severler burada buluşuyor.">
   <meta name="twitter:image" content="https://yeniozanlar-68b49.web.app/og-image.png">
+  <script type="application/ld+json">
+  {"@context":"https://schema.org","@graph":[
+    {"@type":"WebSite","@id":"https://yeniozanlar.vercel.app/#website","url":"https://yeniozanlar.vercel.app/","name":"Yeni Ozanlar","alternateName":["Yeni Ozanlar Şiir Sitesi","Yeniozanlar"],"description":"Amatör şair ve ozanlar için şiir paylaşma, şiir okuma ve şiir puanlama sitesi.","inLanguage":"tr-TR","publisher":{"@id":"https://yeniozanlar.vercel.app/#org"}},
+    {"@type":"Organization","@id":"https://yeniozanlar.vercel.app/#org","name":"Yeni Ozanlar","url":"https://yeniozanlar.vercel.app/","logo":"https://yeniozanlar-68b49.web.app/og-image.png","description":"Amatör şiir sitesi ve edebiyat topluluğu."},
+    {"@type":"FAQPage","mainEntity":[
+      {"@type":"Question","name":"Yeni Ozanlar nedir?","acceptedAnswer":{"@type":"Answer","text":"Yeni Ozanlar, amatör şairlerin şiirlerini paylaştığı, okurların şiir okuyup puanladığı ücretsiz bir şiir sitesi ve edebiyat topluluğudur."}},
+      {"@type":"Question","name":"Şiir nasıl paylaşılır?","acceptedAnswer":{"@type":"Answer","text":"Ücretsiz üye olduktan sonra Ekle düğmesiyle şiirini yazıp paylaşabilir, istersen görsel veya ses ekleyebilirsin."}},
+      {"@type":"Question","name":"Şiirler nasıl puanlanıyor?","acceptedAnswer":{"@type":"Answer","text":"Her şiir hem yapay zeka eleştirmenlerinden hem de topluluk üyelerinden 10 üzerinden puan alır; en iyi şiirler ve ozanlar sıralamada görünür."}}
+    ]}
+  ]}
+  </script>
+
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght=0,400;0,700;1,400&family=Crimson+Text:ital,wght=0,400;0,600;1,400&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;1,400&family=Crimson+Text:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
   <style>
     *{box-sizing:border-box;margin:0;padding:0}
     html{font-size:24px}
@@ -106,10 +121,26 @@
 
 </head>
 <body>
-<div id="app"><div style="min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#0f0a1a">
+<div id="app"><div style="min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#0f0a1a;padding:24px;text-align:center">
   <div style="font-size:32px">🪶</div>
-  <p style="color:#a78bfa;margin-top:12px;font-style:italic;font-size:1rem;font-family:Georgia,serif">Ozanlar Meclisi Yükleniyor...</p>
+  <h1 style="color:#e9d5ff;font-family:Georgia,serif;font-size:1.5rem;margin:10px 0">Yeni Ozanlar: Amatör Şiir Sitesi</h1>
+  <p style="color:#a78bfa;font-style:italic;font-size:1rem;font-family:Georgia,serif;max-width:520px">Amatör şairler ve ozanlar için şiir paylaş, şiir oku, şiir puanla. Edebiyat severlerin buluşma noktası.</p>
+  <p style="color:#6b5b8a;margin-top:12px;font-style:italic;font-size:.9rem;font-family:Georgia,serif">Ozanlar Meclisi Yükleniyor...</p>
 </div></div>
+<noscript>
+  <main style="font-family:Georgia,serif;color:#f0e8ff;background:#0f0a1a;padding:24px;max-width:760px;margin:0 auto;line-height:1.7">
+    <h1>Yeni Ozanlar: Amatör Şiir Sitesi ve Edebiyat Topluluğu</h1>
+    <p>Yeni Ozanlar, <strong>amatör şairler</strong> ve <strong>ozanların</strong> <strong>şiir paylaştığı</strong>, okurların <strong>şiir okuyup şiir puanladığı</strong> ücretsiz bir <strong>şiir sitesidir</strong>. Aşk şiirleri, hüzünlü şiirler, serbest şiirler ve sesli şiirler burada.</p>
+    <h2>Neler yapabilirsin?</h2>
+    <ul>
+      <li>Kendi şiirini paylaş ve yapay zekadan değerlendirme al</li>
+      <li>Amatör şiirleri oku, puanla ve yorum yap</li>
+      <li>En iyi şiirleri ve en iyi ozanları sıralamada gör</li>
+      <li>Şiirleri sesli dinle</li>
+    </ul>
+    <p>Bu <strong>edebiyat sitesini</strong> kullanmak için tarayıcınızda JavaScript'i etkinleştirin.</p>
+  </main>
+</noscript>
 <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-storage-compat.js"></script>
@@ -854,6 +885,19 @@ async function ffmpegMp4Donustur(webmBlob, durum, progText){
   return mp4Blob;
 }
 
+// Ses dosyasını önce doğrudan, CORS yüzünden olmazsa aynı-origin proxy üzerinden getirir.
+async function sesDosyasiniGetir(url){
+  try{
+    const r=await fetch(url,{mode:'cors',cache:'no-store'});
+    if(r.ok) return r;
+  }catch(_){}
+  let r2;
+  try{ r2=await fetch('/api/ttsGenerate?proxy='+encodeURIComponent(url),{cache:'no-store'}); }
+  catch(e){ throw new Error('Ses dosyasına erişilemedi (ağ hatası). R2 bucket CORS ayarında bu sitenin adresine GET izni verin.'); }
+  if(!r2.ok) throw new Error('Ses dosyasına erişilemedi (HTTP '+r2.status+'). R2 bucket CORS ayarında bu sitenin adresine GET izni verin.');
+  return r2;
+}
+
 function sesPlatformBilgisiGlobal(url){
   const u=String(url||'').trim();
   if(!u) return {type:'none'};
@@ -917,7 +961,7 @@ async function siiriVideoOlarakKaydet(post){
     // Ses varsa indirip AudioBuffer'a çeviriyoruz. Ses yoksa süre sabit 20 sn.
     if(hasAudio){
       durum.textContent='⏳ Ses dosyası yükleniyor...';
-      const audioRes=await fetch(audioUrl,{mode:'cors',cache:'no-store'});
+      const audioRes=await sesDosyasiniGetir(audioUrl);
       if(!audioRes.ok) throw new Error('Ses dosyasına erişilemedi (HTTP '+audioRes.status+').');
       const audioBuf=await audioRes.arrayBuffer();
       audioCtx=new (window.AudioContext||window.webkitAudioContext)();
@@ -3043,7 +3087,7 @@ async function aiSesYonlendirmesiGroqlaOlustur(title, text){
   const VARSAYILAN={voiceKey:'sakin', stability:0.65, style:0.2};
   if(!siir) return VARSAYILAN;
   try{
-    const sonuc=await groqBotCall(
+    const sonuc=await botAICagir(
       'Sen şiirleri seslendirecek bir seslendirme yönetmenisin. YALNIZCA JSON döndür.',
       `ÖNCELİKLİ KURAL: Bu bir ŞİİR OKUMASI olacak, ŞARKI SÖYLEME/EZGİ DEĞİL. Ses asla melodik, tekrarlayan bir ritimle veya nakarat söyler gibi YÜKSELİP ALÇALMAMALI. Doğal, içten, bir insanın sevdiği bir şiiri sesli okuduğu gibi, konuşma diline yakın bir tempoda ve tonlamada okunmalı. Bu kural, aşağıdaki seçimlerden HER ZAMAN daha önceliklidir.
 
@@ -4457,7 +4501,7 @@ async function aiMuzikPromptuGroqlaOlustur(post){
   const siir=String(post?.text||'').trim().slice(0,2200);
   if(!siir) return '';
   try{
-    const sonuc=await groqBotCall(
+    const sonuc=await botAICagir(
       'Sen bir şiirin ruh haline uygun ENSTRÜMANTAL (sözsüz) arka plan/tema müziği tarif eden bir asistansın. Kullanılacak üretim modeli (MusicGen) ŞARKI SÖZÜ veya VOKAL ÜRETEMEZ, yalnızca enstrümantal müzik üretir. YALNIZCA JSON döndür.',
       `Bu şiiri analiz et ve enstrümantal müzik üretim modeli için türü, tempoyu, öne çıkan çalgıları ve duygusal atmosferi anlatan kısa, öz bir İngilizce prompt hazırla.
 
@@ -4475,11 +4519,26 @@ Kurallar:
 JSON: {"prompt":"..."}`
     );
     const prompt=String(sonuc?.prompt||'').trim();
-    return prompt.slice(0,400);
+    if(prompt) return prompt.slice(0,400);
+    return yerelMuzikPromptu(post);
   }catch(err){
-    console.warn('Groq müzik promptu oluşturamadı, varsayılan prompt kullanılacak:',err);
-    return '';
+    console.warn('AI müzik promptu oluşturamadı, yerel prompt kullanılacak:',err);
+    return yerelMuzikPromptu(post);
   }
+}
+
+// Tüm AI sağlayıcıları (Gemini, Groq: gpt-oss-120b, qwen, gpt-oss-20b) başarısız olursa
+// şiirdeki anahtar kelimelerden basit bir enstrümantal müzik promptu üretir.
+function yerelMuzikPromptu(post){
+  const t=((post?.title||'')+' '+(post?.text||'')).toLowerCase();
+  const var_=(...k)=>k.some(x=>t.includes(x));
+  let tarz='calm ambient, soft piano and warm strings, reflective and gentle';
+  if(var_('hüzün','keder','gözyaşı','ağla','ayrılık','yalnız','hasret','özlem','gurbet','yas')) tarz='melancholic solo piano with sad violin, slow tempo, tender and sorrowful';
+  else if(var_('aşk','sevda','sevgi','yürek','kalp','canan')) tarz='romantic acoustic guitar and soft strings, warm and tender, slow tempo';
+  else if(var_('isyan','öfke','savaş','kavga','zindan','kan')) tarz='dark cinematic orchestral, dramatic cellos and deep drums, intense';
+  else if(var_('umut','güneş','sabah','bahar','sevinç','özgür')) tarz='hopeful acoustic guitar and light piano, uplifting, gentle tempo';
+  else if(var_('deniz','dağ','orman','nehir','rüzgar','yağmur','doğa')) tarz='peaceful nature ambient, soft flute and pads, serene';
+  return tarz+', no vocals, no singing, no lyrics';
 }
 
 async function adminMuzikYenile(post){
@@ -4945,7 +5004,7 @@ function postCard(post, forceExpand=false, autoOpenComments=false, hedefYorumId=
         refreshCard(post.id);
         const newCard=document.querySelector('[data-pid="'+post.id+'"]');
         const newStatus=newCard?newCard.querySelector('.reval-status'):null;
-        if(newStatus){newStatus.style.display='block';newStatus.textContent='✅ Ses oluşturuldu! Motor: '+(window.__sonSesSonuc?.engine==='ace-step'?'ACE-Step (yapay zeka vokal)':'Edge TTS (düz okuma)')+(window.__sonSesSonuc?.aceError?' — ACE-Step hatası: '+window.__sonSesSonuc.aceError:'');newStatus.style.color='#34d399';}
+        if(newStatus){newStatus.style.display='block';newStatus.textContent='✅ Ses oluşturuldu! Motor: '+({'ace-step':'ACE-Step (yapay zeka vokal)','gemini-tts':'Gemini TTS (yapay zeka okuma)'}[window.__sonSesSonuc?.engine]||'Edge TTS (düz okuma)')+(window.__sonSesSonuc?.shortened?' · uzun şiir kısaltıldı':'')+(window.__sonSesSonuc?.aceError?' — ACE-Step: '+window.__sonSesSonuc.aceError:'')+(window.__sonSesSonuc?.geminiError?' — Gemini: '+window.__sonSesSonuc.geminiError:'');newStatus.style.color='#34d399';}
       }catch(err){
         revalStatus.textContent='❌ Ses hatası: '+err.message;
         revalStatus.style.color='#f87171';
@@ -6353,8 +6412,50 @@ function Notifs(){
   wrap.appendChild(page);return wrap;
 }
 
+// Ekrana göre başlık, açıklama ve canonical adresini günceller (arama motorları ve paylaşım için).
+function seoGuncelle(){
+  try{
+    const site=window.location.origin;
+    const SABIT={
+      feed:['Yeni Ozanlar | Şiir Sitesi: Amatör Şairler İçin Şiir Paylaş, Şiir Oku, Şiir Puanla','Amatör şair ve ozanların şiir paylaştığı, şiir okuyup puanladığı ücretsiz şiir sitesi ve edebiyat topluluğu.','/'],
+      leaderboard:['En İyi Şiirler ve Şairler Sıralaması | Yeni Ozanlar','Yeni Ozanlar şiir sitesinde en yüksek puanlı amatör şiirleri, ayın şiirlerini ve en iyi ozanları keşfet.','/#leaderboard'],
+      explore:['Amatör Şairleri ve Ozanları Keşfet | Yeni Ozanlar','Amatör şairleri ve ozanları ara, takip et, şiirlerini oku. Yeni Ozanlar edebiyat topluluğu.','/#explore'],
+      swipe:['Şiir Oku: Kaydırarak Şiir Okuma Modu | Yeni Ozanlar','Şiirleri kaydırarak oku, sesli dinle. Amatör şiirleri keşfetmenin en kolay yolu.','/#swipe'],
+      login:['Giriş Yap | Yeni Ozanlar Şiir Sitesi','Yeni Ozanlar şiir sitesine giriş yap, şiir paylaş ve puanla.','/#login'],
+      register:['Ücretsiz Üye Ol, Şiir Paylaş | Yeni Ozanlar','Yeni Ozanlar şiir sitesine ücretsiz üye ol, şiirini paylaş, şiir oku ve puanla.','/#register']
+    };
+    let baslik,aciklama,yol;
+    if(S.screen==='postdetail'){
+      const p=(S.posts||[]).find(x=>x.id===S.postId);
+      if(p && !p.hidden){
+        const yazar=byId(p.authorId);
+        const ad=p.title||((p.text||'').slice(0,40)+'…');
+        baslik=`"${ad}" Şiiri${yazar?' - '+yazar.name:''} | Yeni Ozanlar`;
+        aciklama=((p.text||'').replace(/\s+/g,' ').trim().slice(0,150)||'Yeni Ozanlar şiir sitesinde bu şiiri oku ve puanla.');
+        yol=postYolu(p.id);
+      }
+    } else if(S.screen==='profile'){
+      const u=S.users.find(x=>x.id===(S.profileId||S.me?.id));
+      if(u && u.username!==ADMIN_USERNAME){
+        baslik=`${u.name} Şiirleri | Yeni Ozanlar Şiir Sitesi`;
+        aciklama=(u.bio||`${u.name} adlı amatör şairin şiirlerini oku ve puanla.`).slice(0,150);
+        yol='/#profile';
+      }
+    }
+    if(!baslik){ const d=SABIT[S.screen]||SABIT.feed; baslik=d[0]; aciklama=d[1]; yol=d[2]; }
+    document.title=baslik;
+    const meta=document.querySelector('meta[name="description"]');
+    if(meta) meta.setAttribute('content',aciklama);
+    const can=document.getElementById('seo-canonical');
+    if(can) can.setAttribute('href',site+(yol==='/#profile'||yol.startsWith('/#')?'/':yol));
+    const ogt=document.querySelector('meta[property="og:title"]'); if(ogt) ogt.setAttribute('content',baslik);
+    const ogd=document.querySelector('meta[property="og:description"]'); if(ogd) ogd.setAttribute('content',aciklama);
+  }catch(_){}
+}
+
 function render(){
   const app=document.getElementById('app');
+  seoGuncelle();
   // Ekran tamamen yeniden çizilmeden ÖNCE önceki ekrandan kalan TÜM ses/müzik
   // oynatıcılarını durduruyoruz — aksi halde DOM'dan kaldırılan (artık ekranda
   // görünmeyen) audio nesneleri arka planda sessizce çalmaya devam edebiliyordu.
