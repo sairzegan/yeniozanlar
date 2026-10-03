@@ -3,13 +3,14 @@ import { EdgeTTS } from "node-edge-tts";
 import fs from "fs/promises";
 import os from "os";
 import path from "path";
+import { Readable } from "stream";
 
 // ACE-Step üretimi 30 sn'den uzun sürüyor; Fluid Compute ile 300 sn'ye kadar izin var.
 export const maxDuration = 300;
 
 // Toplam zaman bütçesi (ms). Fonksiyon bundan önce cevap döner.
 const TOPLAM_BUTCE_MS = 285000;
-const ACE_TIMEOUT_MS = Number(process.env.ACE_TIMEOUT_MS) || 180000;
+const ACE_TIMEOUT_MS = Number(process.env.ACE_TIMEOUT_MS) || 100000;
 const EDGE_TIMEOUT_MS = 15000;
 
 const R2_GUVENLIK_LIMITI = 9 * 1024 * 1024 * 1024;
@@ -166,7 +167,8 @@ async function uploadWithFallback(buffer, key, contentType, commitMessage) {
 // ============================================================
 const ACE_ENDPOINT = "https://api.acemusic.ai/v1/chat/completions";
 const ACE_PARCA_KARAKTER = 1000;
-const ACE_MAX_PARCA = 4;
+const ACE_MAX_PARCA = 2;           // ACE en fazla 2 parça (~2000 karakter) okur
+const GEMINI_MAX_KARAKTER = 3000;  // Gemini TTS için üst sınır (uzun metin 504 yapıyordu)
 
 function siiriParcala(metin) {
   const kuple = metin.replace(/\r/g, "").split(/\n{2,}/).map((k) => k.trim()).filter(Boolean);
@@ -195,6 +197,13 @@ function siiriParcala(metin) {
   return parcalar;
 }
 
+// Uzun şiirde ACE'e sadece baştan itibaren sığan kıtalar gönderilir (kıta sınırından keser).
+function aceIcinKisalt(metin) {
+  const tum = siiriParcala(metin);
+  if (tum.length <= ACE_MAX_PARCA) return { parcalar: tum, kisaltildi: false };
+  return { parcalar: tum.slice(0, ACE_MAX_PARCA), kisaltildi: true };
+}
+
 const ACE_ORTAK =
   "spoken word poetry recitation, a single voice reading the poem aloud in Turkish, " +
   "speaking not singing, no singing, no melody, no chorus, no rap, no autotune, " +
@@ -211,7 +220,7 @@ const ACE_STIL = {
 function aceKullanilabilirMi(cleanText) {
   if (String(process.env.SES_MOTORU || "").trim().toLowerCase() === "edge") return false;
   if (!process.env.ACE_MUSIC_API_KEY) return false;
-  return siiriParcala(cleanText).length <= ACE_MAX_PARCA;
+  return true;
 }
 
 async function aceStepIleSesUret(title, cleanText, voiceKey, timeoutMs) {
@@ -322,7 +331,30 @@ async function geminiIleSesUret(metin, voiceKey, timeoutMs) {
   return pcmToWav(pcm, rate);
 }
 
+// Video kaydı için: ses dosyası depodan CORS yüzünden tarayıcıda okunamazsa
+// aynı-origin üzerinden akıtılır. Yalnızca kendi depomuzun adreslerine izin verilir.
+async function sesProxy(req, res) {
+  try {
+    const url = String(req.query?.proxy || "");
+    const izinli = [
+      String(process.env.R2_PUBLIC_URL || "").trim().replace(/\/+$/, ""),
+      "https://cdn.jsdelivr.net/gh/",
+    ].filter(Boolean);
+    if (!izinli.some((b) => url.startsWith(b.endsWith("/") ? b : b + "/"))) {
+      return res.status(403).json({ error: "İzin verilmeyen adres." });
+    }
+    const up = await fetch(url, { signal: AbortSignal.timeout(30000) });
+    if (!up.ok || !up.body) return res.status(502).json({ error: "Kaynak okunamadı: HTTP " + up.status });
+    res.setHeader("Content-Type", up.headers.get("content-type") || "audio/mpeg");
+    res.setHeader("Cache-Control", "public, max-age=3600");
+    Readable.fromWeb(up.body).pipe(res);
+  } catch (e) {
+    if (!res.headersSent) res.status(502).json({ error: "Proxy hatası", detail: String(e?.message || e).slice(0, 200) });
+  }
+}
+
 export default async function handler(req, res) {
+  if (req.method === "GET" && req.query?.proxy) return sesProxy(req, res);
   if (req.method !== "POST") {
     res.setHeader("Allow", "POST");
     return res.status(405).json({ error: "Sadece POST." });
@@ -355,35 +387,56 @@ export default async function handler(req, res) {
     let uzanti = "mp3";
     let mime = "audio/mpeg";
 
-    if (aceKullanilabilirMi(cleanText)) {
+    const kalanMs = (sonrakiIcinAyir) => TOPLAM_BUTCE_MS - (Date.now() - baslangic) - sonrakiIcinAyir;
+    let kisaltildi = false;
+
+    // 1) ACE-Step
+    if (!aceKullanilabilirMi(cleanText)) {
+      aceHata = String(process.env.SES_MOTORU || "").trim().toLowerCase() === "edge"
+        ? "SES_MOTORU=edge olduğu için atlandı."
+        : "ACE_MUSIC_API_KEY tanımlı değil, atlandı.";
+    } else {
       try {
-        const kalan = TOPLAM_BUTCE_MS - (Date.now() - baslangic) - EDGE_TIMEOUT_MS - GEMINI_TIMEOUT_MS - 12000;
-        const aceSure = Math.max(10000, Math.min(ACE_TIMEOUT_MS, kalan));
-        const parcalar = siiriParcala(cleanText);
+        const aceSure = Math.max(10000, Math.min(ACE_TIMEOUT_MS, kalanMs(EDGE_TIMEOUT_MS + GEMINI_TIMEOUT_MS + 15000)));
+        const { parcalar, kisaltildi: k } = aceIcinKisalt(cleanText);
         const sesler = await Promise.all(
           parcalar.map((parca) => aceStepIleSesUret(title, parca, secilenAnahtar, aceSure))
         );
         audioBuffer = Buffer.concat(sesler);
         motor = "ace-step";
+        kisaltildi = k;
       } catch (aceErr) {
         aceHata = String(aceErr?.message || aceErr).slice(0, 300);
-        console.warn("ACE-Step ses üretimi başarısız, Edge TTS'e geçiliyor:", aceHata);
+        console.warn("ACE-Step ses üretimi başarısız, Gemini TTS'e geçiliyor:", aceHata);
         audioBuffer = null;
       }
     }
 
-    if (!audioBuffer && geminiKullanilabilirMi()) {
-      try {
-        const kalan = TOPLAM_BUTCE_MS - (Date.now() - baslangic) - EDGE_TIMEOUT_MS - 12000;
-        const gemSure = Math.max(10000, Math.min(GEMINI_TIMEOUT_MS, kalan));
-        audioBuffer = await geminiIleSesUret(trimmed, secilenAnahtar, gemSure);
-        motor = "gemini-tts";
-        uzanti = "wav";
-        mime = "audio/wav";
-      } catch (gemErr) {
-        geminiHata = String(gemErr?.message || gemErr).slice(0, 300);
-        console.warn("Gemini TTS başarısız, Edge TTS'e geçiliyor:", geminiHata);
-        audioBuffer = null;
+    // 2) Gemini TTS
+    if (!audioBuffer) {
+      if (!geminiKullanilabilirMi()) {
+        geminiHata = String(process.env.SES_MOTORU || "").trim().toLowerCase() === "edge"
+          ? "SES_MOTORU=edge olduğu için atlandı."
+          : "GEMINI_API_KEY bu sunucuda tanımlı değil, atlandı.";
+      } else {
+        try {
+          const gemSure = Math.max(10000, Math.min(GEMINI_TIMEOUT_MS, kalanMs(EDGE_TIMEOUT_MS + 15000)));
+          let gemMetin = trimmed;
+          if (gemMetin.length > GEMINI_MAX_KARAKTER) {
+            const kes = gemMetin.slice(0, GEMINI_MAX_KARAKTER);
+            const son = Math.max(kes.lastIndexOf("\n\n"), kes.lastIndexOf("\n"));
+            gemMetin = son > GEMINI_MAX_KARAKTER * 0.5 ? kes.slice(0, son) : kes;
+            kisaltildi = true;
+          }
+          audioBuffer = await geminiIleSesUret(gemMetin, secilenAnahtar, gemSure);
+          motor = "gemini-tts";
+          uzanti = "wav";
+          mime = "audio/wav";
+        } catch (gemErr) {
+          geminiHata = String(gemErr?.message || gemErr).slice(0, 300);
+          console.warn("Gemini TTS başarısız, Edge TTS'e geçiliyor:", geminiHata);
+          audioBuffer = null;
+        }
       }
     }
 
@@ -416,6 +469,7 @@ export default async function handler(req, res) {
       engine: motor,
       aceError: aceHata,
       geminiError: geminiHata,
+      shortened: kisaltildi,
       storage: uploadResult.provider,
       r2Error: uploadResult.r2Error || null
     });
