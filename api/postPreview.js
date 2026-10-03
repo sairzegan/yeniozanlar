@@ -67,7 +67,16 @@ function slugOlustur(metin) {
   return s || "siir";
 }
 
+let SITEMAP_ONBELLEK = { xml: null, zaman: 0 };
+const SITEMAP_SURE_MS = 6 * 60 * 60 * 1000; // 6 saat: Firestore okuma kotasını korumak için
+
 async function sitemapGonder(res) {
+  // Sunucu belleğinde taze bir kopya varsa Firestore'a hiç gitme.
+  if (SITEMAP_ONBELLEK.xml && Date.now() - SITEMAP_ONBELLEK.zaman < SITEMAP_SURE_MS) {
+    res.setHeader("Content-Type", "application/xml; charset=utf-8");
+    res.setHeader("Cache-Control", "s-maxage=21600, stale-while-revalidate=86400");
+    return res.status(200).send(SITEMAP_ONBELLEK.xml);
+  }
   const bugun = new Date().toISOString().slice(0, 10);
   let satirlar = `  <url>\n    <loc>${SITE}/</loc>\n    <lastmod>${bugun}</lastmod>\n  </url>\n`;
   try {
@@ -82,12 +91,21 @@ async function sitemapGonder(res) {
     });
   } catch (e) {
     console.error("sitemap HATASI:", e);
+    // Eski başarılı kopya varsa onu ver; yoksa 503 dön (Google sonra tekrar dener).
+    // Eksik/boş sitemap'i "başarılı" gibi 200 ile VERMİYORUZ ve önbelleğe almıyoruz.
+    res.setHeader("Cache-Control", "no-store");
+    if (SITEMAP_ONBELLEK.xml) {
+      res.setHeader("Content-Type", "application/xml; charset=utf-8");
+      return res.status(200).send(SITEMAP_ONBELLEK.xml);
+    }
+    res.setHeader("Retry-After", "3600");
+    return res.status(503).send("Sitemap gecici olarak olusturulamadi.");
   }
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${satirlar}</urlset>\n`;
+  SITEMAP_ONBELLEK = { xml, zaman: Date.now() };
   res.setHeader("Content-Type", "application/xml; charset=utf-8");
-  res.setHeader("Cache-Control", "s-maxage=3600, stale-while-revalidate=86400");
-  return res.status(200).send(
-    `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${satirlar}</urlset>\n`
-  );
+  res.setHeader("Cache-Control", "s-maxage=21600, stale-while-revalidate=86400");
+  return res.status(200).send(xml);
 }
 
 export default async function handler(req, res) {
