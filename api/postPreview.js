@@ -52,7 +52,50 @@ function isBot(ua) {
   return /(facebookexternalhit|meta-externalagent|meta-externalfetcher|twitterbot|linkedinbot|whatsapp|telegrambot|discordbot|slackbot|skypeuripreview|pinterest|applebot|google-inspectiontool|bingbot)/i.test(String(ua || ""));
 }
 
+
+// ---- SITEMAP (/sitemap.xml -> /api/postPreview?sitemap=1) ----
+const SITE = "https://yeniozanlar.vercel.app";
+
+function slugOlustur(metin) {
+  const trMap = { "ç":"c","Ç":"c","ğ":"g","Ğ":"g","ı":"i","İ":"i","ö":"o","Ö":"o","ş":"s","Ş":"s","ü":"u","Ü":"u" };
+  let s = (metin || "").toString().trim();
+  s = s.replace(/[çÇğĞıİöÖşŞüÜ]/g, (ch) => trMap[ch]);
+  s = s.toLowerCase();
+  s = s.replace(/[^a-z0-9\s-]/g, "");
+  s = s.trim().replace(/\s+/g, "-").replace(/-+/g, "-").replace(/^-+|-+$/g, "");
+  if (s.length > 60) s = s.slice(0, 60).replace(/-+$/, "");
+  return s || "siir";
+}
+
+async function sitemapGonder(res) {
+  const bugun = new Date().toISOString().slice(0, 10);
+  let satirlar = `  <url>\n    <loc>${SITE}/</loc>\n    <lastmod>${bugun}</lastmod>\n  </url>\n`;
+  try {
+    const snap = await getDb().collection("posts").select("title", "text", "hidden", "ts").get();
+    snap.forEach((d) => {
+      const p = d.data() || {};
+      if (p.hidden === true) return;
+      const loc = `${SITE}/post/${slugOlustur(p.title || p.text || "")}-${d.id}`;
+      const ts = Number(p.ts) || 0;
+      const lastmod = ts > 0 ? new Date(ts).toISOString().slice(0, 10) : bugun;
+      satirlar += `  <url>\n    <loc>${esc(loc)}</loc>\n    <lastmod>${lastmod}</lastmod>\n  </url>\n`;
+    });
+  } catch (e) {
+    console.error("sitemap HATASI:", e);
+  }
+  res.setHeader("Content-Type", "application/xml; charset=utf-8");
+  res.setHeader("Cache-Control", "s-maxage=3600, stale-while-revalidate=86400");
+  return res.status(200).send(
+    `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${satirlar}</urlset>\n`
+  );
+}
+
 export default async function handler(req, res) {
+  // /sitemap.xml isteği (vercel.json rewrite ile buraya yönlenir)
+  if ((req.url || "").split("?")[0] === "/sitemap.xml" || (req.query && req.query.sitemap)) {
+    return sitemapGonder(res);
+  }
+
   const host = req.headers.host;
   const fullUrl = req.url || "";
   const pathWithoutQuery = fullUrl.split("?")[0];
