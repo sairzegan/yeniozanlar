@@ -913,6 +913,41 @@ function sesPlatformBilgisiGlobal(url){
   return {type:'direct'};
 }
 
+// Video arka planı için resmi canvas'a GÜVENLİ çizilebilir biçimde yükler.
+// Sırayla: doğrudan (CORS) → fetch ile blob → aynı-origin proxy → /api/postImage.
+// Blob/proxy yoluyla gelen resim aynı-origin sayıldığı için canvas "tainted" olmaz.
+async function videoGorselYukle(url, postId){
+  const yukle=(src,cors)=>new Promise((resolve,reject)=>{
+    const im=new Image();
+    if(cors) im.crossOrigin='anonymous';
+    im.onload=()=>im.naturalWidth?resolve(im):reject(new Error('bos resim'));
+    im.onerror=()=>reject(new Error('resim yuklenemedi'));
+    im.src=src;
+  });
+  const blobtan=async(adres)=>{
+    const r=await fetch(adres,{cache:'no-store'});
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const b=await r.blob();
+    if(b.type && !/^image\//i.test(b.type)) throw new Error('resim degil');
+    return await yukle(URL.createObjectURL(b),false);
+  };
+  const denemeler=[];
+  const u=String(url||'');
+  if(u){
+    if(/^(data|blob):/i.test(u)) denemeler.push(()=>yukle(u,false));
+    else{
+      denemeler.push(()=>yukle(u,true));
+      denemeler.push(()=>blobtan(u));
+      denemeler.push(()=>blobtan('/api/ttsGenerate?proxy='+encodeURIComponent(u)));
+    }
+  }
+  if(postId) denemeler.push(()=>yukle('/api/postImage?id='+encodeURIComponent(postId),false));
+  for(const dene of denemeler){
+    try{ return await dene(); }catch(_){}
+  }
+  return null;
+}
+
 async function siiriVideoOlarakKaydet(post){
   const rawAudioUrl = post?.audioUrl || post?.musicUrl || '';
   const audioPlatform = sesPlatformBilgisiGlobal(rawAudioUrl);
@@ -983,18 +1018,11 @@ async function siiriVideoOlarakKaydet(post){
 
     // Arka plan: önce şiirin kendi resmi; resim yoksa YouTube kapak görseli.
     let bgImg=null;
-    if(post.image){
-      try{
-        bgImg=await new Promise((resolve,reject)=>{
-          const im=new Image();
-          im.crossOrigin='anonymous';
-          im.onload=()=>resolve(im);
-          im.onerror=reject;
-          im.src=post.image;
-        });
-      }catch{
-        bgImg=null;
-      }
+    if(post.image || post.id){
+      // Resim farklı bir alan adındaysa (R2 vb.) CORS izni yoksa canvas'a çizilemez ve
+      // arka plan siyah kalır. Bu yüzden sırayla birkaç yol deneniyor.
+      bgImg=await videoGorselYukle(post.image, post.id);
+      if(!bgImg && post.image) console.warn('Video arka plan resmi yüklenemedi:', String(post.image).slice(0,120));
     }
     if(!bgImg && youtubeId){
       try{
