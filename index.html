@@ -837,7 +837,7 @@ async function igHikayeCanvasOlustur(post, author){
 // arka plan + şiir metni + ses. Video süresi doğrudan audioUrl'un süresidir.
 // Tarayıcıların yerleşik MediaRecorder'ı nedeniyle çıktı WebM'dir.
 
-async function ffmpegMp4Donustur(webmBlob, durum, progText){
+async function ffmpegMp4Donustur(kayitBlob, durum, progText, sure, sesVar, girisUzanti){
   if(!window.FFmpeg){
     durum.textContent='⏳ MP4 dönüştürücü yükleniyor...';
     await new Promise((resolve,reject)=>{
@@ -855,27 +855,43 @@ async function ffmpegMp4Donustur(webmBlob, durum, progText){
     log:false,
     corePath:'https://unpkg.com/@ffmpeg/core@0.11.5/dist/ffmpeg-core.js'
   });
+  try{
+    ffmpeg.setProgress(({ratio})=>{
+      if(ratio>=0 && ratio<=1) progText.textContent='MP4 hazırlanıyor: %'+Math.round(ratio*100);
+    });
+  }catch(_){}
 
   durum.textContent='⏳ MP4 motoru hazırlanıyor...';
   await ffmpeg.load();
 
-  durum.textContent='⏳ Video MP4 formatına dönüştürülüyor...';
-  progText.textContent='MP4 dönüştürme başladı...';
+  durum.textContent='⏳ Video düzenleniyor (ileri-geri sarma için)...';
+  progText.textContent='MP4 düzenleme başladı...';
 
-  ffmpeg.FS('writeFile','input.webm',await fetchFile(webmBlob));
+  const girisAd = girisUzanti==='mp4' ? 'input.mp4' : 'input.webm';
+  ffmpeg.FS('writeFile',girisAd,await fetchFile(kayitBlob));
+
+  // MediaRecorder çıktısı değişken kare hızlıdır ve süre/indeks bilgisi içermez; bu yüzden
+  // oynatıcılar ileri-geri saramaz. Burada: sabit 30 kare/sn (CFR), her 1 sn'de bir anahtar kare
+  // (anında sarma), tam seslendirme süresi (-t) ve dosya başında indeks (faststart).
   const ffArgs=[
     '-fflags','+genpts',
     '-analyzeduration','2147483647',
     '-probesize','2147483647',
-    '-i','input.webm',
+    '-i',girisAd,
+    '-t',String(Number(sure).toFixed(3)),
+    '-vf','fps=30,scale=trunc(iw/2)*2:trunc(ih/2)*2',
     '-c:v','libx264',
     '-preset','veryfast',
     '-crf','22',
-    '-pix_fmt','yuv420p'
+    '-pix_fmt','yuv420p',
+    '-g','30',
+    '-keyint_min','30',
+    '-sc_threshold','0'
   ];
-  // Sessiz videoda ses akışı olmadığı için AAC parametreleri eklenmez.
-  if(webmBlob.type.includes('audio') || webmBlob.type.includes('opus')){
-    ffArgs.push('-c:a','aac','-b:a','192k');
+  if(sesVar){
+    ffArgs.push('-af','aresample=async=1:first_pts=0','-c:a','aac','-b:a','192k','-ar','44100','-ac','2');
+  }else{
+    ffArgs.push('-an');
   }
   ffArgs.push('-movflags','+faststart','output.mp4');
   await ffmpeg.run(...ffArgs);
@@ -883,7 +899,7 @@ async function ffmpegMp4Donustur(webmBlob, durum, progText){
   const data=ffmpeg.FS('readFile','output.mp4');
   const mp4Blob=new Blob([data.buffer],{type:'video/mp4'});
 
-  try{ffmpeg.FS('unlink','input.webm');}catch{}
+  try{ffmpeg.FS('unlink',girisAd);}catch{}
   try{ffmpeg.FS('unlink','output.mp4');}catch{}
   try{ffmpeg.exit();}catch{}
 
@@ -949,11 +965,14 @@ async function videoGorselYukle(url, postId){
 }
 
 async function siiriVideoOlarakKaydet(post){
-  const rawAudioUrl = post?.audioUrl || post?.musicUrl || '';
-  const audioPlatform = sesPlatformBilgisiGlobal(rawAudioUrl);
-  const audioUrl = audioPlatform.type==='direct' ? rawAudioUrl : '';
+  // Video SESLENDİRME (audioUrl) uzunluğunda olur; AI müzik (musicUrl) varsa onun altına karıştırılır.
+  // Seslendirme yoksa video müziğin uzunluğunda olur.
+  const audioUrl = sesPlatformBilgisiGlobal(post?.audioUrl||'').type==='direct' ? post.audioUrl : '';
+  const musicUrl = sesPlatformBilgisiGlobal(post?.musicUrl||'').type==='direct' ? post.musicUrl : '';
   const youtubeId = ytId(post?.youtube);
-  const hasAudio = !!audioUrl;
+  const hasNarration = !!audioUrl;
+  const hasMusic = !!musicUrl;
+  const hasAudio = hasNarration || hasMusic;
   // YouTube iframe'i canvas/MediaRecorder içine güvenilir biçimde aktarılamaz
   // (cross-origin). Bu nedenle YouTube bağlantısı varsa, video alanında kapak
   // görselini kullanıyoruz. Kendi ses dosyası varsa yine ses kayda eklenir.
@@ -971,7 +990,7 @@ async function siiriVideoOlarakKaydet(post){
   modal.appendChild(baslik);
   const bilgi=h('p',{style:{color:'#a78bfa',fontSize:'.76rem',lineHeight:'1.45',marginBottom:'10px'}},
     hasAudio
-      ? 'Şiirin resmi arka plan olur; YouTube varsa video kapak görseli kullanılır. Yazılar kaydırma modundaki gibi akar. Video, ses dosyasının tamamı kadar sürer ve MP4 olarak indirilir.'
+      ? 'Şiirin resmi arka plan olur; YouTube varsa video kapak görseli kullanılır. Yazılar kaydırma modundaki gibi akar. Video, seslendirmenin süresi kadar sürer; müzik varsa seslendirmenin altına karıştırılır. MP4 olarak indirilir.'
       : 'Ses dosyası yok. Video 20 saniye sessiz olarak hazırlanır. YouTube varsa video kapak görseli kullanılır. MP4 olarak indirilir.');
   modal.appendChild(bilgi);
 
@@ -990,24 +1009,37 @@ async function siiriVideoOlarakKaydet(post){
   bg.appendChild(modal);
   document.body.appendChild(bg);
 
-  let animId=0, mediaRecorder=null, chunks=[], audioCtx=null, audioSource=null, stream=null;
+  let animId=0, mediaRecorder=null, chunks=[], audioCtx=null, audioSources=[], stream=null;
   let running=false;
 
   try{
     await igFontlariHazirla();
 
-    let decoded=null;
+    let decoded=null, musicDecoded=null;
     let duration=20;
 
     // Ses varsa indirip AudioBuffer'a çeviriyoruz. Ses yoksa süre sabit 20 sn.
     if(hasAudio){
-      durum.textContent='⏳ Ses dosyası yükleniyor...';
-      const audioRes=await sesDosyasiniGetir(audioUrl);
-      if(!audioRes.ok) throw new Error('Ses dosyasına erişilemedi (HTTP '+audioRes.status+').');
-      const audioBuf=await audioRes.arrayBuffer();
       audioCtx=new (window.AudioContext||window.webkitAudioContext)();
-      decoded=await audioCtx.decodeAudioData(audioBuf.slice(0));
-      duration=Math.max(1,decoded.duration);
+      const sesYukle=async(u)=>{
+        const r=await sesDosyasiniGetir(u);
+        if(!r.ok) throw new Error('Ses dosyasına erişilemedi (HTTP '+r.status+').');
+        const buf=await r.arrayBuffer();
+        return await audioCtx.decodeAudioData(buf.slice(0));
+      };
+      if(hasNarration){
+        durum.textContent='⏳ Seslendirme yükleniyor...';
+        decoded=await sesYukle(audioUrl);
+      }
+      if(hasMusic){
+        durum.textContent='⏳ Müzik yükleniyor...';
+        try{ musicDecoded=await sesYukle(musicUrl); }
+        catch(e){
+          if(!decoded) throw e;
+          console.warn('Müzik yüklenemedi, yalnızca seslendirme ile devam ediliyor:',e);
+        }
+      }
+      duration=Math.max(1,(decoded||musicDecoded).duration);
     }
 
     const W=1080,H=1920;
@@ -1140,7 +1172,7 @@ async function siiriVideoOlarakKaydet(post){
 
     frame(0);
     durum.textContent=hasAudio
-      ? `✅ Ses hazır · ${Math.round(duration)} saniye`
+      ? `✅ ${decoded?'Seslendirme':'Müzik'}${(decoded&&musicDecoded)?' + müzik':''} hazır · ${Math.round(duration)} saniye`
       : '✅ Ses yok · 20 saniyelik sessiz video hazır';
     kaydetBtn.disabled=false;
 
@@ -1153,10 +1185,29 @@ async function siiriVideoOlarakKaydet(post){
       const canvasStream=hiddenCanvas.captureStream(30);
       if(hasAudio){
         const dest=audioCtx.createMediaStreamDestination();
-        audioSource=audioCtx.createBufferSource();
-        audioSource.buffer=decoded;
-        audioSource.connect(dest);
-        audioSource.connect(audioCtx.destination);
+        audioSources=[];
+        const t0=audioCtx.currentTime;
+        if(decoded){
+          const src=audioCtx.createBufferSource();
+          src.buffer=decoded;
+          const g=audioCtx.createGain(); g.gain.value=1;
+          src.connect(g); g.connect(dest); g.connect(audioCtx.destination);
+          audioSources.push(src);
+        }
+        if(musicDecoded){
+          const src=audioCtx.createBufferSource();
+          src.buffer=musicDecoded;
+          src.loop=true; // müzik seslendirmeden kısaysa baştan döner
+          const g=audioCtx.createGain();
+          const seviye=decoded?0.22:1; // seslendirme varsa müzik alttan eşlik eder
+          g.gain.setValueAtTime(seviye,t0);
+          if(duration>3){ // son 2 saniyede yumuşak kapanış
+            g.gain.setValueAtTime(seviye,t0+duration-2);
+            g.gain.linearRampToValueAtTime(0.0001,t0+duration);
+          }
+          src.connect(g); g.connect(dest); g.connect(audioCtx.destination);
+          audioSources.push(src);
+        }
         stream=new MediaStream([
           ...canvasStream.getVideoTracks(),
           ...dest.stream.getAudioTracks()
@@ -1194,7 +1245,7 @@ async function siiriVideoOlarakKaydet(post){
 
       if(hasAudio){
         await audioCtx.resume();
-        audioSource.start(0);
+        audioSources.forEach(x=>x.start(0));
       }
       mediaRecorder.start(250);
 
@@ -1210,36 +1261,41 @@ async function siiriVideoOlarakKaydet(post){
       animId=requestAnimationFrame(animate);
 
       setTimeout(()=>{
-        if(hasAudio){try{audioSource.stop();}catch{}}
+        if(hasAudio){audioSources.forEach(x=>{try{x.stop();}catch{}});}
         try{mediaRecorder.stop();}catch{}
       },Math.ceil(duration*1000)+250);
 
       await bitti;
       running=false;
       stream.getTracks().forEach(t=>t.stop());
-      if(hasAudio){try{audioSource.disconnect();}catch{}}
+      if(hasAudio){audioSources.forEach(x=>{try{x.disconnect();}catch{}});}
       const recordedBlob=new Blob(chunks,{type:mime});
       if(!recordedBlob.size) throw new Error('Boş video oluştu.');
 
-      // Çıktı her durumda MP4 olacak.
-      let mp4Blob=recordedBlob;
-      if(!directMp4Mime){
-        mp4Blob=await ffmpegMp4Donustur(recordedBlob,durum,progText);
-      }else{
-        // Tarayıcı doğrudan MP4 verdiyse dönüştürme gerekmez.
-        durum.textContent='⏳ MP4 dosyası hazırlanıyor...';
+      // Tarayıcının ham kaydı (özellikle doğrudan MP4/WebM) süre ve indeks bilgisi içermez; bu
+      // yüzden her durumda ffmpeg'den geçirip ileri-geri sarılabilir, tam süreli MP4 üretiyoruz.
+      let cikti=recordedBlob;
+      let uzanti=directMp4Mime?'mp4':'webm';
+      let duzenlendi=false;
+      try{
+        cikti=await ffmpegMp4Donustur(recordedBlob,durum,progText,duration,hasAudio,directMp4Mime?'mp4':'webm');
+        uzanti='mp4'; duzenlendi=true;
+      }catch(e){
+        console.error('Video düzenleme hatası:',e);
       }
 
-      const url=URL.createObjectURL(mp4Blob);
+      const url=URL.createObjectURL(cikti);
       const a=document.createElement('a');
       a.href=url;
-      a.download=`siir-${post.id}.mp4`;
+      a.download=`siir-${post.id}.${uzanti}`;
       document.body.appendChild(a);a.click();a.remove();
       setTimeout(()=>URL.revokeObjectURL(url),10000);
 
       prog.firstChild.style.width='100%';
-      progText.textContent='%100 · MP4 hazır';
-      durum.textContent='✅ MP4 video indirildi.';
+      progText.textContent=duzenlendi?'%100 · MP4 hazır':'%100 · ham kayıt indirildi';
+      durum.textContent=duzenlendi
+        ? '✅ MP4 video indirildi.'
+        : '⚠️ Video düzenlenemedi; ham kayıt indirildi (ileri-geri sarma çalışmayabilir). İnternet bağlantısını kontrol edip tekrar deneyin.';
       kaydetBtn.disabled=false; iptalBtn.disabled=false;
       kaydetBtn.textContent='🔄 MP4 Videoyu Yeniden Oluştur';
     };
