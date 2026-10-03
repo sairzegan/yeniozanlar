@@ -144,6 +144,13 @@
 <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-storage-compat.js"></script>
+<script>/* mp4-muxer 5.2.2 (MIT) */
+"use strict";var Mp4Muxer=(()=>{var we=Object.defineProperty,at=Object.getOwnPropertyDescriptor,nt=Object.getOwnPropertyNames,ot=Object.prototype.hasOwnProperty,ht=(e,t)=>{for(var s in t)we(e,s,{get:t[s],enumerable:!0})},lt=(e,t,s,r)=>{if(t&&typeof t=="object"||typeof t=="function")for(let a of nt(t))!ot.call(e,a)&&a!==s&&we(e,a,{get:()=>t[a],enumerable:!(r=at(t,a))||r.enumerable});return e},ft=e=>lt(we({},"__esModule",{value:!0}),e),ve=(e,t,s)=>{if(!t.has(e))throw TypeError("Cannot "+s)},i=(e,t,s)=>(ve(e,t,"read from private field"),s?s.call(e):t.get(e)),d=(e,t,s)=>{if(t.has(e))throw TypeError("Cannot add the same private member more than once");t instanceof WeakSet?t.add(e):t.set(e,s)},C=(e,t,s,r)=>(ve(e,t,"write to private field"),r?r.call(e,s):t.set(e,s),s),ut=(e,t,s,r)=>({set _(a){C(e,t,a,s)},get _(){return i(e,t,r)}}),m=(e,t,s)=>(ve(e,t,"access private method"),s),Re={};ht(Re,{ArrayBufferTarget:()=>qe,FileSystemWritableFileStreamTarget:()=>Xe,Muxer:()=>vi,StreamTarget:()=>Te});var p=new Uint8Array(8),z=new DataView(p.buffer),y=e=>[(e%256+256)%256],c=e=>(z.setUint16(0,e,!1),[p[0],p[1]]),dt=e=>(z.setInt16(0,e,!1),[p[0],p[1]]),Pe=e=>(z.setUint32(0,e,!1),[p[1],p[2],p[3]]),n=e=>(z.setUint32(0,e,!1),[p[0],p[1],p[2],p[3]]),mt=e=>(z.setInt32(0,e,!1),[p[0],p[1],p[2],p[3]]),x=e=>(z.setUint32(0,Math.floor(e/2**32),!1),z.setUint32(4,e,!1),[p[0],p[1],p[2],p[3],p[4],p[5],p[6],p[7]]),ge=e=>(z.setInt16(0,2**8*e,!1),[p[0],p[1]]),A=e=>(z.setInt32(0,2**16*e,!1),[p[0],p[1],p[2],p[3]]),ye=e=>(z.setInt32(0,2**30*e,!1),[p[0],p[1],p[2],p[3]]),E=(e,t=!1)=>{let s=Array(e.length).fill(null).map((r,a)=>e.charCodeAt(a));return t&&s.push(0),s},se=e=>e&&e[e.length-1],Ce=e=>{let t;for(let s of e)(!t||s.presentationTimestamp>t.presentationTimestamp)&&(t=s);return t},O=(e,t,s=!0)=>{let r=e*t;return s?Math.round(r):r},Le=e=>{let t=e*(Math.PI/180),s=Math.cos(t),r=Math.sin(t);return[s,r,0,-r,s,0,0,0,1]},Ve=Le(0),je=e=>[A(e[0]),A(e[1]),ye(e[2]),A(e[3]),A(e[4]),ye(e[5]),A(e[6]),A(e[7]),ye(e[8])],X=e=>!e||typeof e!="object"?e:Array.isArray(e)?e.map(X):Object.fromEntries(Object.entries(e).map(([t,s])=>[t,X(s)])),V=e=>e>=0&&e<2**32,v=(e,t,s)=>({type:e,contents:t&&new Uint8Array(t.flat(10)),children:s}),w=(e,t,s,r,a)=>v(e,[y(t),Pe(s),r??[]],a),pt=e=>{let t=512;return e.fragmented?v("ftyp",[E("iso5"),n(t),E("iso5"),E("iso6"),E("mp41")]):v("ftyp",[E("isom"),n(t),E("isom"),e.holdsAvc?E("avc1"):[],E("mp41")])},Se=e=>({type:"mdat",largeSize:e}),ct=e=>({type:"free",size:e}),re=(e,t,s=!1)=>v("moov",null,[wt(t,e),...e.map(r=>vt(r,t)),s?Gt(e):null]),wt=(e,t)=>{let s=O(Math.max(0,...t.filter(l=>l.samples.length>0).map(l=>{const u=Ce(l.samples);return u.presentationTimestamp+u.duration})),Ae),r=Math.max(...t.map(l=>l.id))+1,a=!V(e)||!V(s),o=a?x:n;return w("mvhd",+a,0,[o(e),o(e),n(Ae),o(s),A(1),ge(1),Array(10).fill(0),je(Ve),Array(24).fill(0),n(r)])},vt=(e,t)=>v("trak",null,[gt(e,t),yt(e,t)]),gt=(e,t)=>{let s=Ce(e.samples),r=O(s?s.presentationTimestamp+s.duration:0,Ae),a=!V(t)||!V(r),o=a?x:n,l;return e.info.type==="video"?l=typeof e.info.rotation=="number"?Le(e.info.rotation):e.info.rotation:l=Ve,w("tkhd",+a,3,[o(t),o(t),n(e.id),n(0),o(r),Array(8).fill(0),c(0),c(0),ge(e.info.type==="audio"?1:0),c(0),je(l),A(e.info.type==="video"?e.info.width:0),A(e.info.type==="video"?e.info.height:0)])},yt=(e,t)=>v("mdia",null,[Ct(e,t),St(e.info.type==="video"?"vide":"soun"),Tt(e)]),Ct=(e,t)=>{let s=Ce(e.samples),r=O(s?s.presentationTimestamp+s.duration:0,e.timescale),a=!V(t)||!V(r),o=a?x:n;return w("mdhd",+a,0,[o(t),o(t),n(e.timescale),o(r),c(21956),c(0)])},St=e=>w("hdlr",0,0,[E("mhlr"),E(e),n(0),n(0),n(0),E("mp4-muxer-hdlr",!0)]),Tt=e=>v("minf",null,[e.info.type==="video"?bt():_t(),kt(),At(e)]),bt=()=>w("vmhd",0,1,[c(0),c(0),c(0),c(0)]),_t=()=>w("smhd",0,0,[c(0),c(0)]),kt=()=>v("dinf",null,[Et()]),Et=()=>w("dref",0,0,[n(1)],[zt()]),zt=()=>w("url ",0,1),At=e=>{const t=e.compositionTimeOffsetTable.length>1||e.compositionTimeOffsetTable.some(s=>s.sampleCompositionTimeOffset!==0);return v("stbl",null,[Ot(e),Vt(e),jt(e),$t(e),Ht(e),qt(e),t?Xt(e):null])},Ot=e=>w("stsd",0,0,[n(1)],[e.info.type==="video"?Mt(ri[e.info.codec],e):Rt(ni[e.info.codec],e)]),Mt=(e,t)=>v(e,[Array(6).fill(0),c(1),c(0),c(0),Array(12).fill(0),c(t.info.width),c(t.info.height),n(4718592),n(4718592),n(0),c(1),Array(32).fill(0),c(24),dt(65535)],[ai[t.info.codec](t),t.info.decoderConfig.colorSpace?Ut(t):null]),Bt={bt709:1,bt470bg:5,smpte170m:6},It={bt709:1,smpte170m:6,"iec61966-2-1":13},Dt={rgb:0,bt709:1,bt470bg:5,smpte170m:6},Ut=e=>v("colr",[E("nclx"),c(Bt[e.info.decoderConfig.colorSpace.primaries]),c(It[e.info.decoderConfig.colorSpace.transfer]),c(Dt[e.info.decoderConfig.colorSpace.matrix]),y((e.info.decoderConfig.colorSpace.fullRange?1:0)<<7)]),xt=e=>e.info.decoderConfig&&v("avcC",[...new Uint8Array(e.info.decoderConfig.description)]),Wt=e=>e.info.decoderConfig&&v("hvcC",[...new Uint8Array(e.info.decoderConfig.description)]),Ft=e=>{if(!e.info.decoderConfig)return null;let t=e.info.decoderConfig;if(!t.colorSpace)throw new Error("'colorSpace' is required in the decoder config for VP9.");let s=t.codec.split("."),r=Number(s[1]),a=Number(s[2]),u=(Number(s[3])<<4)+(0<<1)+Number(t.colorSpace.fullRange);return w("vpcC",1,0,[y(r),y(a),y(u),y(2),y(2),y(2),c(0)])},Nt=()=>{let s=(1<<7)+1;return v("av1C",[s,0,0,0])},Rt=(e,t)=>v(e,[Array(6).fill(0),c(1),c(0),c(0),n(0),c(t.info.numberOfChannels),c(16),c(0),c(0),A(t.info.sampleRate)],[oi[t.info.codec](t)]),Pt=e=>{let t=new Uint8Array(e.info.decoderConfig.description);return w("esds",0,0,[n(58753152),y(32+t.byteLength),c(1),y(0),n(75530368),y(18+t.byteLength),y(64),y(21),Pe(0),n(130071),n(130071),n(92307584),y(t.byteLength),...t,n(109084800),y(1),y(2)])},Lt=e=>{let t=3840,s=0;const r=e.info.decoderConfig?.description;if(r){if(r.byteLength<18)throw new TypeError("Invalid decoder description provided for Opus; must be at least 18 bytes long.");const a=ArrayBuffer.isView(r)?new DataView(r.buffer,r.byteOffset,r.byteLength):new DataView(r);t=a.getUint16(10,!0),s=a.getInt16(14,!0)}return v("dOps",[y(0),y(e.info.numberOfChannels),c(t),n(e.info.sampleRate),ge(s),y(0)])},Vt=e=>w("stts",0,0,[n(e.timeToSampleTable.length),e.timeToSampleTable.map(t=>[n(t.sampleCount),n(t.sampleDelta)])]),jt=e=>{if(e.samples.every(s=>s.type==="key"))return null;let t=[...e.samples.entries()].filter(([,s])=>s.type==="key");return w("stss",0,0,[n(t.length),t.map(([s])=>n(s+1))])},$t=e=>w("stsc",0,0,[n(e.compactlyCodedChunkTable.length),e.compactlyCodedChunkTable.map(t=>[n(t.firstChunk),n(t.samplesPerChunk),n(1)])]),Ht=e=>w("stsz",0,0,[n(0),n(e.samples.length),e.samples.map(t=>n(t.size))]),qt=e=>e.finalizedChunks.length>0&&se(e.finalizedChunks).offset>=2**32?w("co64",0,0,[n(e.finalizedChunks.length),e.finalizedChunks.map(t=>x(t.offset))]):w("stco",0,0,[n(e.finalizedChunks.length),e.finalizedChunks.map(t=>n(t.offset))]),Xt=e=>w("ctts",0,0,[n(e.compositionTimeOffsetTable.length),e.compositionTimeOffsetTable.map(t=>[n(t.sampleCount),n(t.sampleCompositionTimeOffset)])]),Gt=e=>v("mvex",null,e.map(Zt)),Zt=e=>w("trex",0,0,[n(e.id),n(1),n(0),n(0),n(0)]),$e=(e,t)=>v("moof",null,[Kt(e),...t.map(Qt)]),Kt=e=>w("mfhd",0,0,[n(e)]),He=e=>{let t=0,s=0,r=0,a=0,o=e.type==="delta";return s|=+o,o?t|=1:t|=2,t<<24|s<<16|r<<8|a},Qt=e=>v("traf",null,[Jt(e),Yt(e),ei(e)]),Jt=e=>{let t=0;t|=8,t|=16,t|=32,t|=131072;let s=e.currentChunk.samples[1]??e.currentChunk.samples[0],r={duration:s.timescaleUnitsToNextSample,size:s.size,flags:He(s)};return w("tfhd",0,t,[n(e.id),n(r.duration),n(r.size),n(r.flags)])},Yt=e=>w("tfdt",1,0,[x(O(e.currentChunk.startTimestamp,e.timescale))]),ei=e=>{let t=e.currentChunk.samples.map(D=>D.timescaleUnitsToNextSample),s=e.currentChunk.samples.map(D=>D.size),r=e.currentChunk.samples.map(He),a=e.currentChunk.samples.map(D=>O(D.presentationTimestamp-D.decodeTimestamp,e.timescale)),o=new Set(t),l=new Set(s),u=new Set(r),g=new Set(a),b=u.size===2&&r[0]!==r[1],U=o.size>1,ie=l.size>1,st=!b&&u.size>1,rt=g.size>1||[...g].some(D=>D!==0),L=0;return L|=1,L|=4*+b,L|=256*+U,L|=512*+ie,L|=1024*+st,L|=2048*+rt,w("trun",1,L,[n(e.currentChunk.samples.length),n(e.currentChunk.offset-e.currentChunk.moofOffset||0),b?n(r[0]):[],e.currentChunk.samples.map((D,ce)=>[U?n(t[ce]):[],ie?n(s[ce]):[],st?n(r[ce]):[],rt?mt(a[ce]):[]])])},ti=e=>v("mfra",null,[...e.map(ii),si()]),ii=(e,t)=>w("tfra",1,0,[n(e.id),n(63),n(e.finalizedChunks.length),e.finalizedChunks.map(r=>[x(O(r.startTimestamp,e.timescale)),x(r.moofOffset),n(t+1),n(1),n(1)])]),si=()=>w("mfro",0,0,[n(0)]),ri={avc:"avc1",hevc:"hvc1",vp9:"vp09",av1:"av01"},ai={avc:xt,hevc:Wt,vp9:Ft,av1:Nt},ni={aac:"mp4a",opus:"Opus"},oi={aac:Pt,opus:Lt},hi=Symbol("isTarget"),ae=class{},qe=class extends ae{constructor(){super(...arguments),this.buffer=null}},Te=class extends ae{constructor(e){if(super(),this.options=e,typeof e!="object")throw new TypeError("StreamTarget requires an options object to be passed to its constructor.");if(e.onData){if(typeof e.onData!="function")throw new TypeError("options.onData, when provided, must be a function.");if(e.onData.length<2)throw new TypeError("options.onData, when provided, must be a function that takes in at least two arguments (data and position). Ignoring the position argument, which specifies the byte offset at which the data is to be written, can lead to broken outputs.")}if(e.chunked!==void 0&&typeof e.chunked!="boolean")throw new TypeError("options.chunked, when provided, must be a boolean.");if(e.chunkSize!==void 0&&(!Number.isInteger(e.chunkSize)||e.chunkSize<1024))throw new TypeError("options.chunkSize, when provided, must be an integer and not smaller than 1024.")}},Xe=class extends ae{constructor(e,t){if(super(),this.stream=e,this.options=t,!(e instanceof FileSystemWritableFileStream))throw new TypeError("FileSystemWritableFileStreamTarget requires a FileSystemWritableFileStream instance.");if(t!==void 0&&typeof t!="object")throw new TypeError("FileSystemWritableFileStreamTarget's options, when provided, must be an object.");if(t&&t.chunkSize!==void 0&&(!Number.isInteger(t.chunkSize)||t.chunkSize<=0))throw new TypeError("options.chunkSize, when provided, must be a positive integer")}},W,j,Ge=class{constructor(){this.pos=0,d(this,W,new Uint8Array(8)),d(this,j,new DataView(i(this,W).buffer)),this.offsets=new WeakMap}seek(e){this.pos=e}writeU32(e){i(this,j).setUint32(0,e,!1),this.write(i(this,W).subarray(0,4))}writeU64(e){i(this,j).setUint32(0,Math.floor(e/2**32),!1),i(this,j).setUint32(4,e,!1),this.write(i(this,W).subarray(0,8))}writeAscii(e){for(let t=0;t<e.length;t++)i(this,j).setUint8(t%8,e.charCodeAt(t)),t%8===7&&this.write(i(this,W));e.length%8!==0&&this.write(i(this,W).subarray(0,e.length%8))}writeBox(e){if(this.offsets.set(e,this.pos),e.contents&&!e.children)this.writeBoxHeader(e,e.size??e.contents.byteLength+8),this.write(e.contents);else{let t=this.pos;if(this.writeBoxHeader(e,0),e.contents&&this.write(e.contents),e.children)for(let a of e.children)a&&this.writeBox(a);let s=this.pos,r=e.size??s-t;this.seek(t),this.writeBoxHeader(e,r),this.seek(s)}}writeBoxHeader(e,t){this.writeU32(e.largeSize?1:t),this.writeAscii(e.type),e.largeSize&&this.writeU64(t)}measureBoxHeader(e){return 8+(e.largeSize?8:0)}patchBox(e){let t=this.pos;this.seek(this.offsets.get(e)),this.writeBox(e),this.seek(t)}measureBox(e){if(e.contents&&!e.children)return this.measureBoxHeader(e)+e.contents.byteLength;{let t=this.measureBoxHeader(e);if(e.contents&&(t+=e.contents.byteLength),e.children)for(let s of e.children)s&&(t+=this.measureBox(s));return t}}};W=new WeakMap,j=new WeakMap;var ne,F,G,Z,oe,be,li=class extends Ge{constructor(e){super(),d(this,oe),d(this,ne,void 0),d(this,F,new ArrayBuffer(2**16)),d(this,G,new Uint8Array(i(this,F))),d(this,Z,0),C(this,ne,e)}write(e){m(this,oe,be).call(this,this.pos+e.byteLength),i(this,G).set(e,this.pos),this.pos+=e.byteLength,C(this,Z,Math.max(i(this,Z),this.pos))}finalize(){m(this,oe,be).call(this,this.pos),i(this,ne).buffer=i(this,F).slice(0,Math.max(i(this,Z),this.pos))}};ne=new WeakMap,F=new WeakMap,G=new WeakMap,Z=new WeakMap,oe=new WeakSet,be=function(e){let t=i(this,F).byteLength;for(;t<e;)t*=2;if(t===i(this,F).byteLength)return;let s=new ArrayBuffer(t),r=new Uint8Array(s);r.set(i(this,G),0),C(this,F,s),C(this,G,r)};var fi=2**24,ui=2,K,N,Q,B,_,he,_e,ke,Ze,Ee,Ke,J,le,ze=class extends Ge{constructor(e){super(),d(this,he),d(this,ke),d(this,Ee),d(this,J),d(this,K,void 0),d(this,N,[]),d(this,Q,void 0),d(this,B,void 0),d(this,_,[]),C(this,K,e),C(this,Q,e.options?.chunked??!1),C(this,B,e.options?.chunkSize??fi)}write(e){i(this,N).push({data:e.slice(),start:this.pos}),this.pos+=e.byteLength}flush(){if(i(this,N).length===0)return;let e=[],t=[...i(this,N)].sort((s,r)=>s.start-r.start);e.push({start:t[0].start,size:t[0].data.byteLength});for(let s=1;s<t.length;s++){let r=e[e.length-1],a=t[s];a.start<=r.start+r.size?r.size=Math.max(r.size,a.start+a.data.byteLength-r.start):e.push({start:a.start,size:a.data.byteLength})}for(let s of e){s.data=new Uint8Array(s.size);for(let r of i(this,N))s.start<=r.start&&r.start<s.start+s.size&&s.data.set(r.data,r.start-s.start);i(this,Q)?(m(this,he,_e).call(this,s.data,s.start),m(this,J,le).call(this)):i(this,K).options.onData?.(s.data,s.start)}i(this,N).length=0}finalize(){i(this,Q)&&m(this,J,le).call(this,!0)}};K=new WeakMap,N=new WeakMap,Q=new WeakMap,B=new WeakMap,_=new WeakMap,he=new WeakSet,_e=function(e,t){let s=i(this,_).findIndex(u=>u.start<=t&&t<u.start+i(this,B));s===-1&&(s=m(this,Ee,Ke).call(this,t));let r=i(this,_)[s],a=t-r.start,o=e.subarray(0,Math.min(i(this,B)-a,e.byteLength));r.data.set(o,a);let l={start:a,end:a+o.byteLength};if(m(this,ke,Ze).call(this,r,l),r.written[0].start===0&&r.written[0].end===i(this,B)&&(r.shouldFlush=!0),i(this,_).length>ui){for(let u=0;u<i(this,_).length-1;u++)i(this,_)[u].shouldFlush=!0;m(this,J,le).call(this)}o.byteLength<e.byteLength&&m(this,he,_e).call(this,e.subarray(o.byteLength),t+o.byteLength)},ke=new WeakSet,Ze=function(e,t){let s=0,r=e.written.length-1,a=-1;for(;s<=r;){let o=Math.floor(s+(r-s+1)/2);e.written[o].start<=t.start?(s=o+1,a=o):r=o-1}for(e.written.splice(a+1,0,t),(a===-1||e.written[a].end<t.start)&&a++;a<e.written.length-1&&e.written[a].end>=e.written[a+1].start;)e.written[a].end=Math.max(e.written[a].end,e.written[a+1].end),e.written.splice(a+1,1)},Ee=new WeakSet,Ke=function(e){let s={start:Math.floor(e/i(this,B))*i(this,B),data:new Uint8Array(i(this,B)),written:[],shouldFlush:!1};return i(this,_).push(s),i(this,_).sort((r,a)=>r.start-a.start),i(this,_).indexOf(s)},J=new WeakSet,le=function(e=!1){for(let t=0;t<i(this,_).length;t++){let s=i(this,_)[t];if(!(!s.shouldFlush&&!e)){for(let r of s.written)i(this,K).options.onData?.(s.data.subarray(r.start,r.end),s.start+r.start);i(this,_).splice(t--,1)}}};var di=class extends ze{constructor(e){super(new Te({onData:(t,s)=>e.stream.write({type:"write",data:t,position:s}),chunked:!0,chunkSize:e.options?.chunkSize}))}},Ae=1e3,mi=["avc","hevc","vp9","av1"],pi=["aac","opus"],ci=2082844800,wi=["strict","offset","cross-track-offset"],h,f,fe,k,T,S,$,H,Oe,R,P,Y,Me,Qe,Be,Je,Ie,Ye,De,et,Ue,tt,ue,xe,M,I,We,it,ee,de,me,Fe,q,te,pe,Ne,vi=class{constructor(e){if(d(this,Me),d(this,Be),d(this,Ie),d(this,De),d(this,Ue),d(this,ue),d(this,M),d(this,We),d(this,ee),d(this,me),d(this,q),d(this,pe),d(this,h,void 0),d(this,f,void 0),d(this,fe,void 0),d(this,k,void 0),d(this,T,null),d(this,S,null),d(this,$,Math.floor(Date.now()/1e3)+ci),d(this,H,[]),d(this,Oe,1),d(this,R,[]),d(this,P,[]),d(this,Y,!1),m(this,Me,Qe).call(this,e),e.video=X(e.video),e.audio=X(e.audio),e.fastStart=X(e.fastStart),this.target=e.target,C(this,h,{firstTimestampBehavior:"strict",...e}),e.target instanceof qe)C(this,f,new li(e.target));else if(e.target instanceof Te)C(this,f,new ze(e.target));else if(e.target instanceof Xe)C(this,f,new di(e.target));else throw new Error(`Invalid target: ${e.target}`);m(this,De,et).call(this),m(this,Be,Je).call(this)}addVideoChunk(e,t,s,r){if(!(e instanceof EncodedVideoChunk))throw new TypeError("addVideoChunk's first argument (sample) must be of type EncodedVideoChunk.");if(t&&typeof t!="object")throw new TypeError("addVideoChunk's second argument (meta), when provided, must be an object.");if(s!==void 0&&(!Number.isFinite(s)||s<0))throw new TypeError("addVideoChunk's third argument (timestamp), when provided, must be a non-negative real number.");if(r!==void 0&&!Number.isFinite(r))throw new TypeError("addVideoChunk's fourth argument (compositionTimeOffset), when provided, must be a real number.");let a=new Uint8Array(e.byteLength);e.copyTo(a),this.addVideoChunkRaw(a,e.type,s??e.timestamp,e.duration,t,r)}addVideoChunkRaw(e,t,s,r,a,o){if(!(e instanceof Uint8Array))throw new TypeError("addVideoChunkRaw's first argument (data) must be an instance of Uint8Array.");if(t!=="key"&&t!=="delta")throw new TypeError("addVideoChunkRaw's second argument (type) must be either 'key' or 'delta'.");if(!Number.isFinite(s)||s<0)throw new TypeError("addVideoChunkRaw's third argument (timestamp) must be a non-negative real number.");if(!Number.isFinite(r)||r<0)throw new TypeError("addVideoChunkRaw's fourth argument (duration) must be a non-negative real number.");if(a&&typeof a!="object")throw new TypeError("addVideoChunkRaw's fifth argument (meta), when provided, must be an object.");if(o!==void 0&&!Number.isFinite(o))throw new TypeError("addVideoChunkRaw's sixth argument (compositionTimeOffset), when provided, must be a real number.");if(m(this,pe,Ne).call(this),!i(this,h).video)throw new Error("No video track declared.");if(typeof i(this,h).fastStart=="object"&&i(this,T).samples.length===i(this,h).fastStart.expectedVideoChunks)throw new Error(`Cannot add more video chunks than specified in 'fastStart' (${i(this,h).fastStart.expectedVideoChunks}).`);let l=m(this,ue,xe).call(this,i(this,T),e,t,s,r,a,o);if(i(this,h).fastStart==="fragmented"&&i(this,S)){for(;i(this,P).length>0&&i(this,P)[0].decodeTimestamp<=l.decodeTimestamp;){let u=i(this,P).shift();m(this,M,I).call(this,i(this,S),u)}l.decodeTimestamp<=i(this,S).lastDecodeTimestamp?m(this,M,I).call(this,i(this,T),l):i(this,R).push(l)}else m(this,M,I).call(this,i(this,T),l)}addAudioChunk(e,t,s){if(!(e instanceof EncodedAudioChunk))throw new TypeError("addAudioChunk's first argument (sample) must be of type EncodedAudioChunk.");if(t&&typeof t!="object")throw new TypeError("addAudioChunk's second argument (meta), when provided, must be an object.");if(s!==void 0&&(!Number.isFinite(s)||s<0))throw new TypeError("addAudioChunk's third argument (timestamp), when provided, must be a non-negative real number.");let r=new Uint8Array(e.byteLength);e.copyTo(r),this.addAudioChunkRaw(r,e.type,s??e.timestamp,e.duration,t)}addAudioChunkRaw(e,t,s,r,a){if(!(e instanceof Uint8Array))throw new TypeError("addAudioChunkRaw's first argument (data) must be an instance of Uint8Array.");if(t!=="key"&&t!=="delta")throw new TypeError("addAudioChunkRaw's second argument (type) must be either 'key' or 'delta'.");if(!Number.isFinite(s)||s<0)throw new TypeError("addAudioChunkRaw's third argument (timestamp) must be a non-negative real number.");if(!Number.isFinite(r)||r<0)throw new TypeError("addAudioChunkRaw's fourth argument (duration) must be a non-negative real number.");if(a&&typeof a!="object")throw new TypeError("addAudioChunkRaw's fifth argument (meta), when provided, must be an object.");if(m(this,pe,Ne).call(this),!i(this,h).audio)throw new Error("No audio track declared.");if(typeof i(this,h).fastStart=="object"&&i(this,S).samples.length===i(this,h).fastStart.expectedAudioChunks)throw new Error(`Cannot add more audio chunks than specified in 'fastStart' (${i(this,h).fastStart.expectedAudioChunks}).`);let o=m(this,ue,xe).call(this,i(this,S),e,t,s,r,a);if(i(this,h).fastStart==="fragmented"&&i(this,T)){for(;i(this,R).length>0&&i(this,R)[0].decodeTimestamp<=o.decodeTimestamp;){let l=i(this,R).shift();m(this,M,I).call(this,i(this,T),l)}o.decodeTimestamp<=i(this,T).lastDecodeTimestamp?m(this,M,I).call(this,i(this,S),o):i(this,P).push(o)}else m(this,M,I).call(this,i(this,S),o)}finalize(){if(i(this,Y))throw new Error("Cannot finalize a muxer more than once.");if(i(this,h).fastStart==="fragmented"){for(let t of i(this,R))m(this,M,I).call(this,i(this,T),t);for(let t of i(this,P))m(this,M,I).call(this,i(this,S),t);m(this,me,Fe).call(this,!1)}else i(this,T)&&m(this,ee,de).call(this,i(this,T)),i(this,S)&&m(this,ee,de).call(this,i(this,S));let e=[i(this,T),i(this,S)].filter(Boolean);if(i(this,h).fastStart==="in-memory"){let t;for(let r=0;r<2;r++){let a=re(e,i(this,$)),o=i(this,f).measureBox(a);t=i(this,f).measureBox(i(this,k));let l=i(this,f).pos+o+t;for(let u of i(this,H)){u.offset=l;for(let{data:g}of u.samples)l+=g.byteLength,t+=g.byteLength}if(l<2**32)break;t>=2**32&&(i(this,k).largeSize=!0)}let s=re(e,i(this,$));i(this,f).writeBox(s),i(this,k).size=t,i(this,f).writeBox(i(this,k));for(let r of i(this,H))for(let a of r.samples)i(this,f).write(a.data),a.data=null}else if(i(this,h).fastStart==="fragmented"){let t=i(this,f).pos,s=ti(e);i(this,f).writeBox(s);let r=i(this,f).pos-t;i(this,f).seek(i(this,f).pos-4),i(this,f).writeU32(r)}else{let t=i(this,f).offsets.get(i(this,k)),s=i(this,f).pos-t;i(this,k).size=s,i(this,k).largeSize=s>=2**32,i(this,f).patchBox(i(this,k));let r=re(e,i(this,$));if(typeof i(this,h).fastStart=="object"){i(this,f).seek(i(this,fe)),i(this,f).writeBox(r);let a=t-i(this,f).pos;i(this,f).writeBox(ct(a))}else i(this,f).writeBox(r)}m(this,q,te).call(this),i(this,f).finalize(),C(this,Y,!0)}};return h=new WeakMap,f=new WeakMap,fe=new WeakMap,k=new WeakMap,T=new WeakMap,S=new WeakMap,$=new WeakMap,H=new WeakMap,Oe=new WeakMap,R=new WeakMap,P=new WeakMap,Y=new WeakMap,Me=new WeakSet,Qe=function(e){if(typeof e!="object")throw new TypeError("The muxer requires an options object to be passed to its constructor.");if(!(e.target instanceof ae))throw new TypeError("The target must be provided and an instance of Target.");if(e.video){if(!mi.includes(e.video.codec))throw new TypeError(`Unsupported video codec: ${e.video.codec}`);if(!Number.isInteger(e.video.width)||e.video.width<=0)throw new TypeError(`Invalid video width: ${e.video.width}. Must be a positive integer.`);if(!Number.isInteger(e.video.height)||e.video.height<=0)throw new TypeError(`Invalid video height: ${e.video.height}. Must be a positive integer.`);const t=e.video.rotation;if(typeof t=="number"&&![0,90,180,270].includes(t))throw new TypeError(`Invalid video rotation: ${t}. Has to be 0, 90, 180 or 270.`);if(Array.isArray(t)&&(t.length!==9||t.some(s=>typeof s!="number")))throw new TypeError(`Invalid video transformation matrix: ${t.join()}`);if(e.video.frameRate!==void 0&&(!Number.isInteger(e.video.frameRate)||e.video.frameRate<=0))throw new TypeError(`Invalid video frame rate: ${e.video.frameRate}. Must be a positive integer.`)}if(e.audio){if(!pi.includes(e.audio.codec))throw new TypeError(`Unsupported audio codec: ${e.audio.codec}`);if(!Number.isInteger(e.audio.numberOfChannels)||e.audio.numberOfChannels<=0)throw new TypeError(`Invalid number of audio channels: ${e.audio.numberOfChannels}. Must be a positive integer.`);if(!Number.isInteger(e.audio.sampleRate)||e.audio.sampleRate<=0)throw new TypeError(`Invalid audio sample rate: ${e.audio.sampleRate}. Must be a positive integer.`)}if(e.firstTimestampBehavior&&!wi.includes(e.firstTimestampBehavior))throw new TypeError(`Invalid first timestamp behavior: ${e.firstTimestampBehavior}`);if(typeof e.fastStart=="object"){if(e.video){if(e.fastStart.expectedVideoChunks===void 0)throw new TypeError("'fastStart' is an object but is missing property 'expectedVideoChunks'.");if(!Number.isInteger(e.fastStart.expectedVideoChunks)||e.fastStart.expectedVideoChunks<0)throw new TypeError("'expectedVideoChunks' must be a non-negative integer.")}if(e.audio){if(e.fastStart.expectedAudioChunks===void 0)throw new TypeError("'fastStart' is an object but is missing property 'expectedAudioChunks'.");if(!Number.isInteger(e.fastStart.expectedAudioChunks)||e.fastStart.expectedAudioChunks<0)throw new TypeError("'expectedAudioChunks' must be a non-negative integer.")}}else if(![!1,"in-memory","fragmented"].includes(e.fastStart))throw new TypeError("'fastStart' option must be false, 'in-memory', 'fragmented' or an object.");if(e.minFragmentDuration!==void 0&&(!Number.isFinite(e.minFragmentDuration)||e.minFragmentDuration<0))throw new TypeError("'minFragmentDuration' must be a non-negative number.")},Be=new WeakSet,Je=function(){if(i(this,f).writeBox(pt({holdsAvc:i(this,h).video?.codec==="avc",fragmented:i(this,h).fastStart==="fragmented"})),C(this,fe,i(this,f).pos),i(this,h).fastStart==="in-memory")C(this,k,Se(!1));else if(i(this,h).fastStart!=="fragmented"){if(typeof i(this,h).fastStart=="object"){let e=m(this,Ie,Ye).call(this);i(this,f).seek(i(this,f).pos+e)}C(this,k,Se(!0)),i(this,f).writeBox(i(this,k))}m(this,q,te).call(this)},Ie=new WeakSet,Ye=function(){if(typeof i(this,h).fastStart!="object")return;let e=0,t=[i(this,h).fastStart.expectedVideoChunks,i(this,h).fastStart.expectedAudioChunks];for(let s of t)s&&(e+=8*Math.ceil(.6666666666666666*s),e+=4*s,e+=12*Math.ceil(.6666666666666666*s),e+=4*s,e+=8*s);return e+=4096,e},De=new WeakSet,et=function(){if(i(this,h).video&&C(this,T,{id:1,info:{type:"video",codec:i(this,h).video.codec,width:i(this,h).video.width,height:i(this,h).video.height,rotation:i(this,h).video.rotation??0,decoderConfig:null},timescale:i(this,h).video.frameRate??57600,samples:[],finalizedChunks:[],currentChunk:null,firstDecodeTimestamp:void 0,lastDecodeTimestamp:-1,timeToSampleTable:[],compositionTimeOffsetTable:[],lastTimescaleUnits:null,lastSample:null,compactlyCodedChunkTable:[]}),i(this,h).audio&&(C(this,S,{id:i(this,h).video?2:1,info:{type:"audio",codec:i(this,h).audio.codec,numberOfChannels:i(this,h).audio.numberOfChannels,sampleRate:i(this,h).audio.sampleRate,decoderConfig:null},timescale:i(this,h).audio.sampleRate,samples:[],finalizedChunks:[],currentChunk:null,firstDecodeTimestamp:void 0,lastDecodeTimestamp:-1,timeToSampleTable:[],compositionTimeOffsetTable:[],lastTimescaleUnits:null,lastSample:null,compactlyCodedChunkTable:[]}),i(this,h).audio.codec==="aac")){let e=m(this,Ue,tt).call(this,2,i(this,h).audio.sampleRate,i(this,h).audio.numberOfChannels);i(this,S).info.decoderConfig={codec:i(this,h).audio.codec,description:e,numberOfChannels:i(this,h).audio.numberOfChannels,sampleRate:i(this,h).audio.sampleRate}}},Ue=new WeakSet,tt=function(e,t,s){let a=[96e3,88200,64e3,48e3,44100,32e3,24e3,22050,16e3,12e3,11025,8e3,7350].indexOf(t),o=s,l="";l+=e.toString(2).padStart(5,"0"),l+=a.toString(2).padStart(4,"0"),a===15&&(l+=t.toString(2).padStart(24,"0")),l+=o.toString(2).padStart(4,"0");let u=Math.ceil(l.length/8)*8;l=l.padEnd(u,"0");let g=new Uint8Array(l.length/8);for(let b=0;b<l.length;b+=8)g[b/8]=parseInt(l.slice(b,b+8),2);return g},ue=new WeakSet,xe=function(e,t,s,r,a,o,l){let u=r/1e6,g=(r-(l??0))/1e6,b=a/1e6,U=m(this,We,it).call(this,u,g,e);return u=U.presentationTimestamp,g=U.decodeTimestamp,o?.decoderConfig&&(e.info.decoderConfig===null?e.info.decoderConfig=o.decoderConfig:Object.assign(e.info.decoderConfig,o.decoderConfig)),{presentationTimestamp:u,decodeTimestamp:g,duration:b,data:t,size:t.byteLength,type:s,timescaleUnitsToNextSample:O(b,e.timescale)}},M=new WeakSet,I=function(e,t){i(this,h).fastStart!=="fragmented"&&e.samples.push(t);const s=O(t.presentationTimestamp-t.decodeTimestamp,e.timescale);if(e.lastTimescaleUnits!==null){let a=O(t.decodeTimestamp,e.timescale,!1),o=Math.round(a-e.lastTimescaleUnits);if(e.lastTimescaleUnits+=o,e.lastSample.timescaleUnitsToNextSample=o,i(this,h).fastStart!=="fragmented"){let l=se(e.timeToSampleTable);l.sampleCount===1?(l.sampleDelta=o,l.sampleCount++):l.sampleDelta===o?l.sampleCount++:(l.sampleCount--,e.timeToSampleTable.push({sampleCount:2,sampleDelta:o}));const u=se(e.compositionTimeOffsetTable);u.sampleCompositionTimeOffset===s?u.sampleCount++:e.compositionTimeOffsetTable.push({sampleCount:1,sampleCompositionTimeOffset:s})}}else e.lastTimescaleUnits=0,i(this,h).fastStart!=="fragmented"&&(e.timeToSampleTable.push({sampleCount:1,sampleDelta:O(t.duration,e.timescale)}),e.compositionTimeOffsetTable.push({sampleCount:1,sampleCompositionTimeOffset:s}));e.lastSample=t;let r=!1;if(!e.currentChunk)r=!0;else{let a=t.presentationTimestamp-e.currentChunk.startTimestamp;if(i(this,h).fastStart==="fragmented"){let o=i(this,T)??i(this,S);const l=i(this,h).minFragmentDuration??1;e===o&&t.type==="key"&&a>=l&&(r=!0,m(this,me,Fe).call(this))}else r=a>=.5}r&&(e.currentChunk&&m(this,ee,de).call(this,e),e.currentChunk={startTimestamp:t.presentationTimestamp,samples:[]}),e.currentChunk.samples.push(t)},We=new WeakSet,it=function(e,t,s){const r=i(this,h).firstTimestampBehavior==="strict",a=s.lastDecodeTimestamp===-1;if(r&&a&&t!==0)throw new Error(`The first chunk for your media track must have a timestamp of 0 (received DTS=${t}).Non-zero first timestamps are often caused by directly piping frames or audio data from a MediaStreamTrack into the encoder. Their timestamps are typically relative to the age of thedocument, which is probably what you want.
+
+If you want to offset all timestamps of a track such that the first one is zero, set firstTimestampBehavior: 'offset' in the options.
+`);if(i(this,h).firstTimestampBehavior==="offset"||i(this,h).firstTimestampBehavior==="cross-track-offset"){s.firstDecodeTimestamp===void 0&&(s.firstDecodeTimestamp=t);let l;i(this,h).firstTimestampBehavior==="offset"?l=s.firstDecodeTimestamp:l=Math.min(i(this,T)?.firstDecodeTimestamp??1/0,i(this,S)?.firstDecodeTimestamp??1/0),t-=l,e-=l}if(t<s.lastDecodeTimestamp)throw new Error(`Timestamps must be monotonically increasing (DTS went from ${s.lastDecodeTimestamp*1e6} to ${t*1e6}).`);return s.lastDecodeTimestamp=t,{presentationTimestamp:e,decodeTimestamp:t}},ee=new WeakSet,de=function(e){if(i(this,h).fastStart==="fragmented")throw new Error("Can't finalize individual chunks if 'fastStart' is set to 'fragmented'.");if(e.currentChunk){if(e.finalizedChunks.push(e.currentChunk),i(this,H).push(e.currentChunk),(e.compactlyCodedChunkTable.length===0||se(e.compactlyCodedChunkTable).samplesPerChunk!==e.currentChunk.samples.length)&&e.compactlyCodedChunkTable.push({firstChunk:e.finalizedChunks.length,samplesPerChunk:e.currentChunk.samples.length}),i(this,h).fastStart==="in-memory"){e.currentChunk.offset=0;return}e.currentChunk.offset=i(this,f).pos;for(let t of e.currentChunk.samples)i(this,f).write(t.data),t.data=null;m(this,q,te).call(this)}},me=new WeakSet,Fe=function(e=!0){if(i(this,h).fastStart!=="fragmented")throw new Error("Can't finalize a fragment unless 'fastStart' is set to 'fragmented'.");let t=[i(this,T),i(this,S)].filter(u=>u&&u.currentChunk);if(t.length===0)return;let s=ut(this,Oe)._++;if(s===1){let u=re(t,i(this,$),!0);i(this,f).writeBox(u)}let r=i(this,f).pos,a=$e(s,t);i(this,f).writeBox(a);{let u=Se(!1),g=0;for(let U of t)for(let ie of U.currentChunk.samples)g+=ie.size;let b=i(this,f).measureBox(u)+g;b>=4294967296&&(u.largeSize=!0,b=i(this,f).measureBox(u)+g),u.size=b,i(this,f).writeBox(u)}for(let u of t){u.currentChunk.offset=i(this,f).pos,u.currentChunk.moofOffset=r;for(let g of u.currentChunk.samples)i(this,f).write(g.data),g.data=null}let o=i(this,f).pos;i(this,f).seek(i(this,f).offsets.get(a));let l=$e(s,t);i(this,f).writeBox(l),i(this,f).seek(o);for(let u of t)u.finalizedChunks.push(u.currentChunk),i(this,H).push(u.currentChunk),u.currentChunk=null;e&&m(this,q,te).call(this)},q=new WeakSet,te=function(){i(this,f)instanceof ze&&i(this,f).flush()},pe=new WeakSet,Ne=function(){if(i(this,Y))throw new Error("Cannot add new video or audio chunks after the file has been finalized.")},ft(Re)})();typeof module=="object"&&typeof module.exports=="object"&&Object.assign(module.exports,Mp4Muxer);
+
+</script>
 <script>
 // Firebase Ayarları
 const firebaseConfig = {
@@ -964,7 +971,19 @@ async function videoGorselYukle(url, postId){
   return null;
 }
 
-async function siiriVideoOlarakKaydet(post){
+// ── Video olarak kaydet (YouTube Shorts 9:16 / YouTube 16:9) ──────────────────────────
+// ÖNCELİKLİ YOL: WebCodecs + mp4-muxer. Kare kare (gerçek zamanlıdan hızlı) üretir ve
+// doğru süre/indeks (moov) bilgisi olan, ileri-geri sarılabilir gerçek bir MP4 yazar.
+// YEDEK YOL: tarayıcı WebCodecs'i desteklemiyorsa MediaRecorder + ffmpeg (eski yöntem).
+const VIDEO_FORMATLARI={
+  shorts:{ad:'YouTube Shorts',W:1080,H:1920,onW:270,onH:480},
+  youtube:{ad:'YouTube',W:1920,H:1080,onW:400,onH:225}
+};
+
+async function siiriVideoOlarakKaydet(post, format){
+  const FMT=VIDEO_FORMATLARI[format]||VIDEO_FORMATLARI.shorts;
+  const W=FMT.W, H=FMT.H, dikey=H>W, FPS=30, SR=48000;
+
   // Video SESLENDİRME (audioUrl) uzunluğunda olur; AI müzik (musicUrl) varsa onun altına karıştırılır.
   // Seslendirme yoksa video müziğin uzunluğunda olur.
   const audioUrl = sesPlatformBilgisiGlobal(post?.audioUrl||'').type==='direct' ? post.audioUrl : '';
@@ -973,28 +992,27 @@ async function siiriVideoOlarakKaydet(post){
   const hasNarration = !!audioUrl;
   const hasMusic = !!musicUrl;
   const hasAudio = hasNarration || hasMusic;
-  // YouTube iframe'i canvas/MediaRecorder içine güvenilir biçimde aktarılamaz
-  // (cross-origin). Bu nedenle YouTube bağlantısı varsa, video alanında kapak
-  // görselini kullanıyoruz. Kendi ses dosyası varsa yine ses kayda eklenir.
 
   const author=byId(post.authorId);
+  let animId=0, iptalEdildi=false, running=false;
+  let audioCtx=null, audioSources=[], mediaRecorder=null, chunks=[], stream=null;
   const bg=h('div',{class:'modal-bg'});
-  const kapat=()=>{ try{cancelAnimationFrame(animId);}catch{}; bg.remove(); };
+  const kapat=()=>{ iptalEdildi=true; try{cancelAnimationFrame(animId);}catch{}; bg.remove(); };
   bg.onclick=e=>{if(e.target===bg)kapat();};
 
-  const modal=h('div',{class:'modal',style:{maxWidth:'420px'}});
-  const baslik=h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'8px'}},[
-    h('h3',{style:{fontFamily:"'Playfair Display',serif",color:'#e9d5ff',fontSize:'1.05rem'}},'🎬 Video Olarak Kaydet'),
+  const modal=h('div',{class:'modal',style:{maxWidth:dikey?'420px':'460px'}});
+  modal.appendChild(h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'8px'}},[
+    h('h3',{style:{fontFamily:"'Playfair Display',serif",color:'#e9d5ff',fontSize:'1.05rem'}},'🎬 '+FMT.ad+' Videosu'),
     h('button',{class:'btn',style:{background:'none',color:'#6b5b8a',fontSize:'1.4rem'},onclick:kapat},'✕')
-  ]);
-  modal.appendChild(baslik);
-  const bilgi=h('p',{style:{color:'#a78bfa',fontSize:'.76rem',lineHeight:'1.45',marginBottom:'10px'}},
-    hasAudio
-      ? 'Şiirin resmi arka plan olur; YouTube varsa video kapak görseli kullanılır. Yazılar kaydırma modundaki gibi akar. Video, seslendirmenin süresi kadar sürer; müzik varsa seslendirmenin altına karıştırılır. MP4 olarak indirilir.'
-      : 'Ses dosyası yok. Video 20 saniye sessiz olarak hazırlanır. YouTube varsa video kapak görseli kullanılır. MP4 olarak indirilir.');
-  modal.appendChild(bilgi);
+  ]));
+  const olcuMetni=dikey?'1080×1920 (9:16, dikey)':'1920×1080 (16:9, yatay)';
+  modal.appendChild(h('p',{style:{color:'#a78bfa',fontSize:'.76rem',lineHeight:'1.45',marginBottom:'10px'}},
+    (hasAudio
+      ? 'Şiirin resmi arka plan olur; YouTube varsa video kapak görseli kullanılır. Yazılar kaydırma modundaki gibi akar. Video, seslendirmenin süresi kadar sürer; müzik varsa seslendirmenin altına karıştırılır.'
+      : 'Ses dosyası yok. Video 20 saniye sessiz olarak hazırlanır. YouTube varsa video kapak görseli kullanılır.')
+    + ' Çıktı: '+olcuMetni+' MP4.'));
 
-  const preview=h('canvas',{width:'540',height:'960',style:{width:'270px',height:'480px',display:'block',margin:'8px auto',borderRadius:'14px',background:'#0a0718',border:'1px solid #3d1f6e'}});
+  const preview=h('canvas',{width:String(dikey?540:960),height:String(dikey?960:540),style:{width:FMT.onW+'px',height:FMT.onH+'px',maxWidth:'100%',display:'block',margin:'8px auto',borderRadius:'14px',background:'#0a0718',border:'1px solid #3d1f6e'}});
   modal.appendChild(preview);
   const durum=h('p',{style:{textAlign:'center',color:'#a78bfa',fontSize:'.78rem',margin:'8px 0'}},'⏳ Ses ve görsel hazırlanıyor...');
   modal.appendChild(durum);
@@ -1009,8 +1027,7 @@ async function siiriVideoOlarakKaydet(post){
   bg.appendChild(modal);
   document.body.appendChild(bg);
 
-  let animId=0, mediaRecorder=null, chunks=[], audioCtx=null, audioSources=[], stream=null;
-  let running=false;
+  const bosver=()=>new Promise(r=>{ const ch=new MessageChannel(); ch.port1.onmessage=()=>r(); ch.port2.postMessage(0); });
 
   try{
     await igFontlariHazirla();
@@ -1042,7 +1059,6 @@ async function siiriVideoOlarakKaydet(post){
       duration=Math.max(1,(decoded||musicDecoded).duration);
     }
 
-    const W=1080,H=1920;
     const ctx=preview.getContext('2d');
     const hiddenCanvas=document.createElement('canvas');
     hiddenCanvas.width=W; hiddenCanvas.height=H;
@@ -1051,14 +1067,11 @@ async function siiriVideoOlarakKaydet(post){
     // Arka plan: önce şiirin kendi resmi; resim yoksa YouTube kapak görseli.
     let bgImg=null;
     if(post.image || post.id){
-      // Resim farklı bir alan adındaysa (R2 vb.) CORS izni yoksa canvas'a çizilemez ve
-      // arka plan siyah kalır. Bu yüzden sırayla birkaç yol deneniyor.
       bgImg=await videoGorselYukle(post.image, post.id);
       if(!bgImg && post.image) console.warn('Video arka plan resmi yüklenemedi:', String(post.image).slice(0,120));
     }
     if(!bgImg && youtubeId){
       try{
-        // Aynı-origin API kullanılırsa canvas'a güvenli biçimde çizilebilir.
         bgImg=await new Promise((resolve,reject)=>{
           const im=new Image();
           im.onload=()=>resolve(im);
@@ -1066,8 +1079,6 @@ async function siiriVideoOlarakKaydet(post){
           im.src=`/api/ytThumb?vid=${youtubeId}`;
         });
       }catch{
-        // API yoksa doğrudan YouTube küçük resmi denenir; canvas CORS izin
-        // vermiyorsa aşağıdaki gradient yedeği kullanılır.
         try{
           bgImg=await new Promise((resolve,reject)=>{
             const im=new Image();
@@ -1080,8 +1091,26 @@ async function siiriVideoOlarakKaydet(post){
       }
     }
 
+    // Biçime göre yerleşim
+    const L=dikey ? {
+      textX:92, textW:W-184, headX:92,
+      brandY:72, brandF:"600 34px 'Crimson Text'",
+      authY:132, authF:"700 42px 'Playfair Display'",
+      titY:174, titF:"30px 'Crimson Text'",
+      wrapTitle:"700 62px 'Playfair Display'", wrapBody:"52px 'Crimson Text'",
+      drawTitle:"italic 700 58px 'Playfair Display'", drawBody:"52px 'Crimson Text'",
+      lineH:76, top:220, bottom:150, footF:"26px 'Crimson Text'", footY:H-70
+    } : {
+      textX:(W-1100)/2, textW:1100, headX:80,
+      brandY:64, brandF:"600 30px 'Crimson Text'",
+      authY:112, authF:"700 38px 'Playfair Display'",
+      titY:152, titF:"28px 'Crimson Text'",
+      wrapTitle:"700 56px 'Playfair Display'", wrapBody:"46px 'Crimson Text'",
+      drawTitle:"italic 700 52px 'Playfair Display'", drawBody:"46px 'Crimson Text'",
+      lineH:66, top:190, bottom:110, footF:"24px 'Crimson Text'", footY:H-44
+    };
+
     // Metin alanını hazırla
-    const PAD=92, textW=W-PAD*2;
     const lines=[];
     const wrap=(font,text)=>{
       c.font=font;
@@ -1090,22 +1119,20 @@ async function siiriVideoOlarakKaydet(post){
         let line='';
         for(const word of par.split(/\s+/)){
           const test=line?line+' '+word:word;
-          if(c.measureText(test).width>textW && line){lines.push(line);line=word;}
+          if(c.measureText(test).width>L.textW && line){lines.push(line);line=word;}
           else line=test;
         }
         lines.push(line);
       });
     };
-    wrap("700 62px 'Playfair Display'", post.title ? `"${post.title}"` : '');
+    wrap(L.wrapTitle, post.title ? `"${post.title}"` : '');
+    const baslikSatir=lines.length;
     if(post.title) lines.push('');
-    wrap("52px 'Crimson Text'", post.text||'');
-    const lineH=76;
+    wrap(L.wrapBody, post.text||'');
+    const lineH=L.lineH;
     const contentH=lines.length*lineH;
-    const topFixed=220;
-    const bottomFixed=150;
-    const viewTop=topFixed;
-    const viewBottom=H-bottomFixed;
-    const viewH=viewBottom-viewTop;
+    const viewTop=L.top;
+    const viewH=H-L.bottom-viewTop;
     const maxScroll=Math.max(0,contentH-viewH);
 
     function cover(img,x,y,w,h){
@@ -1116,9 +1143,10 @@ async function siiriVideoOlarakKaydet(post){
       c.drawImage(img,sx,sy,sw,sh,x,y,w,h);
     }
 
-    function frame(t){
+    function frame(t, onizle=true){
       const p=Math.min(1,t/duration);
       c.clearRect(0,0,W,H);
+      c.textAlign='left';
       if(bgImg) cover(bgImg,0,0,W,H);
       else {
         const g=c.createLinearGradient(0,0,W,H);
@@ -1135,16 +1163,17 @@ async function siiriVideoOlarakKaydet(post){
       vg.addColorStop(1,'rgba(5,2,12,.82)');
       c.fillStyle=vg;c.fillRect(0,0,W,H);
 
+      c.shadowBlur=0;
       c.fillStyle='rgba(255,255,255,.9)';
-      c.font="600 34px 'Crimson Text'";
-      c.fillText('🪶 Yeni Ozanlar',PAD,72);
+      c.font=L.brandF;
+      c.fillText('🪶 Yeni Ozanlar',L.headX,L.brandY);
 
       c.fillStyle='#fff';
-      c.font="700 42px 'Playfair Display'";
-      c.fillText(author?.name||'',PAD,132);
+      c.font=L.authF;
+      c.fillText(author?.name||'',L.headX,L.authY);
       c.fillStyle='rgba(255,255,255,.72)';
-      c.font="30px 'Crimson Text'";
-      c.fillText(post.title?`"${post.title}"`:'Şiir',PAD,174);
+      c.font=L.titF;
+      c.fillText(post.title?`"${post.title}"`:'Şiir',L.headX,L.titY);
 
       c.save();
       c.beginPath();c.rect(0,viewTop,W,viewH);c.clip();
@@ -1152,22 +1181,25 @@ async function siiriVideoOlarakKaydet(post){
       let y=viewTop-scroll+lineH;
       lines.forEach((line,i)=>{
         if(!line){y+=lineH*.55;return;}
-        c.font=i===0&&post.title?"italic 700 58px 'Playfair Display'":"52px 'Crimson Text'";
+        c.font=(post.title && i<baslikSatir)?L.drawTitle:L.drawBody;
         c.fillStyle='rgba(255,255,255,.96)';
         c.shadowColor='rgba(0,0,0,.8)';c.shadowBlur=12;
-        c.fillText(line,PAD,y);
+        c.fillText(line,L.textX,y);
         y+=lineH;
       });
       c.restore();
 
+      c.shadowBlur=0;
       c.fillStyle='rgba(255,255,255,.72)';
-      c.font="26px 'Crimson Text'";
+      c.font=L.footF;
       c.textAlign='center';
-      c.fillText('yeniozanlar.vercel.app',W/2,H-70);
+      c.fillText('yeniozanlar.vercel.app',W/2,L.footY);
       c.textAlign='left';
 
-      ctx.clearRect(0,0,preview.width,preview.height);
-      ctx.drawImage(hiddenCanvas,0,0,preview.width,preview.height);
+      if(onizle){
+        ctx.clearRect(0,0,preview.width,preview.height);
+        ctx.drawImage(hiddenCanvas,0,0,preview.width,preview.height);
+      }
     }
 
     frame(0);
@@ -1176,14 +1208,129 @@ async function siiriVideoOlarakKaydet(post){
       : '✅ Ses yok · 20 saniyelik sessiz video hazır';
     kaydetBtn.disabled=false;
 
-    kaydetBtn.onclick=async()=>{
-      if(running)return;
-      running=true; kaydetBtn.disabled=true; iptalBtn.disabled=true;
-      durum.textContent='🎥 Video oluşturuluyor...';
-      progText.textContent='0%';
+    // Seslendirme + müziği tek bir ses dosyasına karıştırır (çevrimdışı, gerçek zamanlı beklemeden).
+    async function sesiKaristir(){
+      const ofs=new OfflineAudioContext(2, Math.ceil(duration*SR), SR);
+      if(decoded){
+        const src=ofs.createBufferSource(); src.buffer=decoded;
+        const g=ofs.createGain(); g.gain.value=1;
+        src.connect(g); g.connect(ofs.destination); src.start(0);
+      }
+      if(musicDecoded){
+        const src=ofs.createBufferSource(); src.buffer=musicDecoded; src.loop=true;
+        const g=ofs.createGain();
+        const seviye=decoded?0.22:1; // seslendirme varsa müzik alttan eşlik eder
+        g.gain.setValueAtTime(seviye,0);
+        if(duration>3){ // son 2 saniyede yumuşak kapanış
+          g.gain.setValueAtTime(seviye,duration-2);
+          g.gain.linearRampToValueAtTime(0.0001,duration);
+        }
+        src.connect(g); g.connect(ofs.destination); src.start(0); src.stop(duration);
+      }
+      return await ofs.startRendering();
+    }
 
+    // ── ÖNCELİKLİ YOL: WebCodecs ile gerçek MP4 ──
+    async function webcodecsMp4Uret(){
+      if(!(window.VideoEncoder && window.VideoFrame && window.Mp4Muxer && (!hasAudio || (window.AudioEncoder && window.AudioData && window.OfflineAudioContext)))){
+        throw new Error('webcodecs-yok');
+      }
+      // Video kodlayıcı ayarı (cihazın desteklediği ilk H.264 seviyesi)
+      let vCfg=null;
+      for(const codec of ['avc1.640028','avc1.4d0028','avc1.42E028','avc1.64002A','avc1.640033']){
+        const cfg={codec,width:W,height:H,bitrate:8000000,framerate:FPS,avc:{format:'avc'},latencyMode:'quality'};
+        try{ const r=await VideoEncoder.isConfigSupported(cfg); if(r&&r.supported){ vCfg=cfg; break; } }catch(_){}
+      }
+      if(!vCfg) throw new Error('webcodecs-h264-yok');
+      // Ses kodlayıcı: önce AAC, olmazsa Opus (MP4 içinde)
+      let aSec=null;
+      if(hasAudio){
+        for(const ad of [{codec:'mp4a.40.2',mux:'aac',extra:{aac:{format:'aac'}}},{codec:'opus',mux:'opus',extra:{}}]){
+          const cfg=Object.assign({codec:ad.codec,sampleRate:SR,numberOfChannels:2,bitrate:160000},ad.extra);
+          try{ const r=await AudioEncoder.isConfigSupported(cfg); if(r&&r.supported){ aSec={cfg,mux:ad.mux}; break; } }catch(_){}
+        }
+        if(!aSec) throw new Error('webcodecs-ses-yok');
+      }
+
+      let kodHata=null;
+      const muxer=new Mp4Muxer.Muxer({
+        target:new Mp4Muxer.ArrayBufferTarget(),
+        video:{codec:'avc',width:W,height:H,frameRate:FPS},
+        audio:aSec?{codec:aSec.mux,numberOfChannels:2,sampleRate:SR}:undefined,
+        fastStart:'in-memory',            // moov (süre + indeks) dosyanın BAŞINA yazılır → sarılabilir MP4
+        firstTimestampBehavior:'offset'
+      });
+      const venc=new VideoEncoder({
+        output:(chunk,meta)=>muxer.addVideoChunk(chunk,meta),
+        error:e=>{kodHata=e;}
+      });
+      venc.configure(vCfg);
+      let aenc=null;
+      if(aSec){
+        aenc=new AudioEncoder({
+          output:(chunk,meta)=>muxer.addAudioChunk(chunk,meta),
+          error:e=>{kodHata=e;}
+        });
+        aenc.configure(aSec.cfg);
+      }
+
+      try{
+        // 1) Sesi hazırla ve kodla
+        if(aenc){
+          durum.textContent='🎧 Ses karıştırılıyor...';
+          const mixed=await sesiKaristir();
+          const ch0=mixed.getChannelData(0);
+          const ch1=mixed.numberOfChannels>1?mixed.getChannelData(1):ch0;
+          const CH=4800;
+          for(let o=0;o<mixed.length;o+=CH){
+            if(iptalEdildi) throw new Error('iptal');
+            if(kodHata) throw kodHata;
+            const n=Math.min(CH,mixed.length-o);
+            const data=new Float32Array(n*2);
+            data.set(ch0.subarray(o,o+n),0);
+            data.set(ch1.subarray(o,o+n),n);
+            const ad=new AudioData({format:'f32-planar',sampleRate:SR,numberOfFrames:n,numberOfChannels:2,timestamp:Math.round(o*1e6/SR),data});
+            aenc.encode(ad); ad.close();
+            while(aenc.encodeQueueSize>24){ await bosver(); }
+          }
+        }
+        // 2) Kareleri üret ve kodla
+        durum.textContent='🎥 Video oluşturuluyor...';
+        const toplam=Math.ceil(duration*FPS);
+        for(let i=0;i<toplam;i++){
+          if(iptalEdildi) throw new Error('iptal');
+          if(kodHata) throw kodHata;
+          frame(i/FPS, i%5===0);
+          const vf=new VideoFrame(hiddenCanvas,{timestamp:Math.round(i*1e6/FPS),duration:Math.round(1e6/FPS)});
+          venc.encode(vf,{keyFrame:i%FPS===0}); // her 1 saniyede bir anahtar kare → anında sarma
+          vf.close();
+          while(venc.encodeQueueSize>6){ await bosver(); }
+          if(i%6===0){
+            const yuzde=Math.round(i/toplam*100);
+            prog.firstChild.style.width=yuzde+'%';
+            progText.textContent=`%${yuzde} · ${(i/FPS).toFixed(1)} / ${duration.toFixed(1)} sn`;
+            await bosver();
+          }
+        }
+        durum.textContent='⏳ MP4 dosyası tamamlanıyor...';
+        await venc.flush();
+        if(aenc) await aenc.flush();
+        if(kodHata) throw kodHata;
+        muxer.finalize();
+        const blob=new Blob([muxer.target.buffer],{type:'video/mp4'});
+        if(!blob.size) throw new Error('Boş video oluştu.');
+        return blob;
+      }finally{
+        try{ venc.close(); }catch(_){}
+        try{ aenc&&aenc.close(); }catch(_){}
+      }
+    }
+
+    // ── YEDEK YOL: gerçek zamanlı MediaRecorder + ffmpeg ──
+    async function gercekZamanliKayit(){
       const canvasStream=hiddenCanvas.captureStream(30);
       if(hasAudio){
+        if(!audioCtx) audioCtx=new (window.AudioContext||window.webkitAudioContext)();
         const dest=audioCtx.createMediaStreamDestination();
         audioSources=[];
         const t0=audioCtx.currentTime;
@@ -1197,38 +1344,24 @@ async function siiriVideoOlarakKaydet(post){
         if(musicDecoded){
           const src=audioCtx.createBufferSource();
           src.buffer=musicDecoded;
-          src.loop=true; // müzik seslendirmeden kısaysa baştan döner
+          src.loop=true;
           const g=audioCtx.createGain();
-          const seviye=decoded?0.22:1; // seslendirme varsa müzik alttan eşlik eder
+          const seviye=decoded?0.22:1;
           g.gain.setValueAtTime(seviye,t0);
-          if(duration>3){ // son 2 saniyede yumuşak kapanış
+          if(duration>3){
             g.gain.setValueAtTime(seviye,t0+duration-2);
             g.gain.linearRampToValueAtTime(0.0001,t0+duration);
           }
           src.connect(g); g.connect(dest); g.connect(audioCtx.destination);
           audioSources.push(src);
         }
-        stream=new MediaStream([
-          ...canvasStream.getVideoTracks(),
-          ...dest.stream.getAudioTracks()
-        ]);
+        stream=new MediaStream([...canvasStream.getVideoTracks(),...dest.stream.getAudioTracks()]);
       }else{
-        // Ses yoksa yalnızca görüntü kaydı yapılır: tam 20 saniye.
         stream=new MediaStream([...canvasStream.getVideoTracks()]);
       }
 
-      // Önce tarayıcının doğrudan MP4 kaydını dene. Desteklenmiyorsa
-      // WebM ara dosyası oluşturup hemen ardından FFmpeg ile MP4'e çeviriyoruz.
-      const mp4MimeCandidates=[
-        'video/mp4;codecs="avc1.42E01E,mp4a.40.2"',
-        'video/mp4;codecs="avc1.4D401F,mp4a.40.2"',
-        'video/mp4'
-      ];
-      const webmMimeCandidates=[
-        'video/webm;codecs=vp9,opus',
-        'video/webm;codecs=vp8,opus',
-        'video/webm'
-      ];
+      const mp4MimeCandidates=['video/mp4;codecs="avc1.42E01E,mp4a.40.2"','video/mp4;codecs="avc1.4D401F,mp4a.40.2"','video/mp4'];
+      const webmMimeCandidates=['video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','video/webm'];
       const directMp4Mime=mp4MimeCandidates.find(x=>window.MediaRecorder?.isTypeSupported?.(x))||'';
       const webmMime=webmMimeCandidates.find(x=>window.MediaRecorder?.isTypeSupported?.(x))||'';
       const mime=directMp4Mime||webmMime;
@@ -1237,7 +1370,6 @@ async function siiriVideoOlarakKaydet(post){
       chunks=[];
       mediaRecorder=new MediaRecorder(stream,{mimeType:mime,videoBitsPerSecond:7000000});
       mediaRecorder.ondataavailable=e=>{if(e.data?.size)chunks.push(e.data);};
-
       const bitti=new Promise((resolve,reject)=>{
         mediaRecorder.onstop=resolve;
         mediaRecorder.onerror=e=>reject(e.error||new Error('Video kaydı başarısız.'));
@@ -1256,7 +1388,7 @@ async function siiriVideoOlarakKaydet(post){
         const percent=Math.min(100,Math.round(elapsed/duration*100));
         prog.firstChild.style.width=percent+'%';
         progText.textContent=`%${percent} · ${elapsed.toFixed(1)} / ${duration.toFixed(1)} sn`;
-        if(elapsed<duration && running) animId=requestAnimationFrame(animate);
+        if(elapsed<duration && running && !iptalEdildi) animId=requestAnimationFrame(animate);
       }
       animId=requestAnimationFrame(animate);
 
@@ -1266,38 +1398,58 @@ async function siiriVideoOlarakKaydet(post){
       },Math.ceil(duration*1000)+250);
 
       await bitti;
-      running=false;
       stream.getTracks().forEach(t=>t.stop());
       if(hasAudio){audioSources.forEach(x=>{try{x.disconnect();}catch{}});}
       const recordedBlob=new Blob(chunks,{type:mime});
       if(!recordedBlob.size) throw new Error('Boş video oluştu.');
 
-      // Tarayıcının ham kaydı (özellikle doğrudan MP4/WebM) süre ve indeks bilgisi içermez; bu
-      // yüzden her durumda ffmpeg'den geçirip ileri-geri sarılabilir, tam süreli MP4 üretiyoruz.
-      let cikti=recordedBlob;
-      let uzanti=directMp4Mime?'mp4':'webm';
-      let duzenlendi=false;
       try{
-        cikti=await ffmpegMp4Donustur(recordedBlob,durum,progText,duration,hasAudio,directMp4Mime?'mp4':'webm');
-        uzanti='mp4'; duzenlendi=true;
+        const mp4=await ffmpegMp4Donustur(recordedBlob,durum,progText,duration,hasAudio,directMp4Mime?'mp4':'webm');
+        return {blob:mp4,uzanti:'mp4',duzenlendi:true};
       }catch(e){
         console.error('Video düzenleme hatası:',e);
+        return {blob:recordedBlob,uzanti:directMp4Mime?'mp4':'webm',duzenlendi:false};
       }
+    }
 
-      const url=URL.createObjectURL(cikti);
-      const a=document.createElement('a');
-      a.href=url;
-      a.download=`siir-${post.id}.${uzanti}`;
-      document.body.appendChild(a);a.click();a.remove();
-      setTimeout(()=>URL.revokeObjectURL(url),10000);
+    kaydetBtn.onclick=async()=>{
+      if(running)return;
+      running=true; kaydetBtn.disabled=true; iptalBtn.disabled=true;
+      progText.textContent='0%'; prog.firstChild.style.width='0%';
+      try{
+        let sonuc;
+        try{
+          const blob=await webcodecsMp4Uret();
+          sonuc={blob,uzanti:'mp4',duzenlendi:true};
+        }catch(e){
+          if(iptalEdildi||e?.message==='iptal') return;
+          console.warn('WebCodecs yolu kullanılamadı, gerçek zamanlı kayda geçiliyor:',e);
+          durum.textContent='🎥 Video gerçek zamanlı kaydediliyor (sekmeyi kapatmayın)...';
+          sonuc=await gercekZamanliKayit();
+        }
+        if(iptalEdildi) return;
 
-      prog.firstChild.style.width='100%';
-      progText.textContent=duzenlendi?'%100 · MP4 hazır':'%100 · ham kayıt indirildi';
-      durum.textContent=duzenlendi
-        ? '✅ MP4 video indirildi.'
-        : '⚠️ Video düzenlenemedi; ham kayıt indirildi (ileri-geri sarma çalışmayabilir). İnternet bağlantısını kontrol edip tekrar deneyin.';
-      kaydetBtn.disabled=false; iptalBtn.disabled=false;
-      kaydetBtn.textContent='🔄 MP4 Videoyu Yeniden Oluştur';
+        const url=URL.createObjectURL(sonuc.blob);
+        const a=document.createElement('a');
+        a.href=url;
+        a.download=`siir-${post.id}-${format==='youtube'?'youtube':'shorts'}.${sonuc.uzanti}`;
+        document.body.appendChild(a);a.click();a.remove();
+        setTimeout(()=>URL.revokeObjectURL(url),10000);
+
+        prog.firstChild.style.width='100%';
+        progText.textContent=sonuc.duzenlendi?'%100 · MP4 hazır':'%100 · ham kayıt indirildi';
+        durum.textContent=sonuc.duzenlendi
+          ? `✅ ${FMT.ad} MP4 videosu indirildi.`
+          : '⚠️ Video düzenlenemedi; ham kayıt indirildi (ileri-geri sarma çalışmayabilir). Tekrar deneyin.';
+      }catch(err){
+        console.error('Şiir video oluşturma hatası:',err);
+        durum.textContent='❌ '+(err?.message||'Video oluşturulamadı.');
+        progText.textContent='Tarayıcı video kaydına izin vermiyor olabilir.';
+      }finally{
+        running=false;
+        kaydetBtn.disabled=false; iptalBtn.disabled=false;
+        kaydetBtn.textContent='🔄 Videoyu Yeniden Oluştur';
+      }
     };
   }catch(err){
     console.error('Şiir video oluşturma hatası:',err);
@@ -4883,8 +5035,10 @@ function postCard(post, forceExpand=false, autoOpenComments=false, hedefYorumId=
 
   // Şiiri, ses dosyasının tamamı boyunca kaydırmalı 9:16 video olarak kaydet.
   // Çıktı tarayıcı desteklediği WebM formatında indirilir.
-  const videoFullBtn=h('button',{class:'btn video-save-btn',onclick:(e)=>{e.stopPropagation();siiriVideoOlarakKaydet(post);}},'🎬 Video Olarak Kaydet');
-  full.appendChild(videoFullBtn);
+  const videoBtnStil={margin:'0',flex:'1',fontSize:'.82rem',padding:'11px 6px'};
+  const shortsBtn=h('button',{class:'btn video-save-btn',style:videoBtnStil,onclick:(e)=>{e.stopPropagation();siiriVideoOlarakKaydet(post,'shorts');}},'📱 Shorts (9:16)');
+  const youtubeBtn=h('button',{class:'btn video-save-btn',style:videoBtnStil,onclick:(e)=>{e.stopPropagation();siiriVideoOlarakKaydet(post,'youtube');}},'🖥️ YouTube (16:9)');
+  full.appendChild(h('div',{style:{display:'flex',gap:'8px',marginBottom:'14px'}},[shortsBtn,youtubeBtn]));
 
   // AI
   if(post.aiScore!==null&&post.aiScore!==undefined){
